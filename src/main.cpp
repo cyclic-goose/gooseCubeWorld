@@ -34,9 +34,10 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     // create a window
-    GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor();
-    const GLFWvidmode* mode = glfwGetVideoMode(primaryMonitor);
-    GLFWwindow* window = glfwCreateWindow(mode->width, mode->height, "Goose Voxels", primaryMonitor, NULL);
+    //GLFWmonitor* primaryMonitor = glfwGetPrimaryMonitor(); // might need this if we wanted to go fullscreen at start
+    //const GLFWvidmode* mode = glfwGetVideoMode(primaryMonitor);
+    // GLFWwindow* window = glfwCreateWindow(mode->width, mode->height, "Goose Voxels", primaryMonitor, NULL);
+    GLFWwindow* window = glfwCreateWindow(generalSettings.START_WINDOW_WIDTH, generalSettings.START_WINDOW_HEIGHT, "Goose Voxels", NULL, NULL);
 
     glfwMakeContextCurrent(window);
     
@@ -66,7 +67,8 @@ int main()
         while (!glfwWindowShouldClose(window))
             {
                 processInput(window);// process user input 
-
+                glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
 
 
                 glfwSwapBuffers(window);
