@@ -15,7 +15,7 @@ jobs:
     - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev xorg-dev libglfw3-dev
+        sudo apt-get install -y libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev xorg-dev libglfw3-dev libglm-dev
 
     # 3. Create Build Directories (Just like your setup task)
     - name: Prepare Directories
