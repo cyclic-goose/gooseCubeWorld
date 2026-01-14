@@ -1,0 +1,33 @@
+name: C++ Build & Test
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # 1. Get your code
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # 2. Install Graphics Libraries (Crucial for your project)
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev xorg-dev
+        # If you don't vendor GLFW (include it in your files), install it here too:
+        # sudo apt-get install -y libglfw3-dev
+
+    # 3. Configure (The "Setup" phase)
+    - name: Configure CMake
+      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+
+    # 4. Build (The "Compile" phase)
+    - name: Build
+      run: cmake --build build
+
+    # 5. Test (Running your game/engine)
+    - name: Run Tests
+      # xvfb-run creates a fake screen so your OpenGL context doesn't crash
+      run: xvfb-run ./build/engineVirtualScreen
