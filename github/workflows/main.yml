@@ -1,0 +1,16 @@
+name: CI Setup
+
+# Triggers: When should this run?
+on: [push]
+
+# Jobs: What should the computer do?
+jobs:
+  build-test:
+    runs-on: ubuntu-latest  # The OS the server uses
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4 # Downloads your code to the runner
+
+    - name: Run a script
+      run: echo "How does github work"
