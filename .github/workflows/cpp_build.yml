@@ -29,7 +29,8 @@ jobs:
         src/*.cpp \
         src/vendor/glad.c \
         src/vendor/imgui/*.cpp \
-        src/vendor/imgui/backends/*.cpp \
+        src/vendor/imgui/backends/imgui_impl_glfw.cpp \
+        src/vendor/imgui/backends/imgui_impl_opengl3.cpp \
         -Isrc/vendor/imgui \
         -Isrc/vendor/imgui/backends \
         -I/usr/include \
