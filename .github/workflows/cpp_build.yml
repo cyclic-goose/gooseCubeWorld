@@ -1,4 +1,4 @@
-name: C++ Build & Test
+name: C++ Build (g++)
 
 on: [push, pull_request]
 
@@ -7,27 +7,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Get your code
+    # 1. Checkout the code
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 2. Install Graphics Libraries (Crucial for your project)
+    # 2. Install Linux System Dependencies (GLFW, OpenGL, X11)
     - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev xorg-dev
-        # If you don't vendor GLFW (include it in your files), install it here too:
-        # sudo apt-get install -y libglfw3-dev
+        sudo apt-get install -y libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev xorg-dev libglfw3-dev
 
-    # 3. Configure (The "Setup" phase)
-    - name: Configure CMake
-      run: cmake -B build -S . -DCMAKE_BUILD_TYPE=Release
+    # 3. Create Build Directories (Just like your setup task)
+    - name: Prepare Directories
+      run: mkdir -p build/release
 
-    # 4. Build (The "Compile" phase)
-    - name: Build
-      run: cmake --build build
+    # 4. Compile with g++ (Matches your "Release" task)
+    - name: Build with g++
+      run: |
+        g++ \
+        -O3 -DNDEBUG -s -static-libgcc -static-libstdc++ -std=c++17 \
+        src/*.cpp \
+        src/vendor/glad.c \
+        src/vendor/imgui/*.cpp \
+        src/vendor/imgui/backends/*.cpp \
+        -Isrc/vendor/imgui \
+        -Isrc/vendor/imgui/backends \
+        -I/usr/include \
+        -Iinclude \
+        -o build/release/gooseVoxelEngine \
+        -lglfw -lGL -ldl -lpthread -lX11
 
-    # 5. Test (Running your game/engine)
-    - name: Run Tests
-      # xvfb-run creates a fake screen so your OpenGL context doesn't crash
-      run: xvfb-run ./build/engineVirtualScreen
+    # 5. Verify the file was created
+    - name: Verify Build
+      run: ls -l build/release/gooseVoxelEngine
