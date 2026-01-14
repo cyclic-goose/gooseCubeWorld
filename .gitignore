@@ -1,0 +1,22 @@
+# --- Build & Output Folders ---
+# Ignores the entire 'build' folder and everything inside it
+build/
+bin/
+out/
+
+# --- Compiled Files (just in case they end up elsewhere) ---
+*.o
+*.exe
+*.out
+*.app
+
+# --- VS Code Settings ---
+# Ignore personal workspace settings, but KEEP the build tasks/launch config
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# --- OS Junk Files ---
+.DS_Store
+Thumbs.db
