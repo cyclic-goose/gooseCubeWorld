@@ -104,7 +104,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Voxel Engine", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels", NULL, NULL);
     if (window == NULL) {
         std::cout << "Failed to create GLFW window" << std::endl;
         glfwTerminate();
@@ -121,10 +121,12 @@ int main() {
     }
 
     // DEBUG STEP 1: Disable Culling to ensure we aren't accidentally hiding our own triangles
-    // glEnable(GL_CULL_FACE); 
-    glDisable(GL_CULL_FACE); 
-    
+    glEnable(GL_CULL_FACE); 
+    //glDisable(GL_CULL_FACE); 
+    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); 
     glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_GEQUAL); // Reverse-Z
+    glClearDepth(0.0f);
 
 
     // VBO/VAO Init
