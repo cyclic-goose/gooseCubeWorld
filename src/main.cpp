@@ -16,8 +16,12 @@
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
-// Camera Position: Back and Up
-Camera camera(glm::vec3(40.0f, 40.0f, 40.0f)); 
+// Camera Position: (40,40,40)
+// Target: (16,16,16) -> Direction is (-1, -1, -1)
+// Yaw: -135.0f (Looking South-West)
+// Pitch: -35.0f (Looking Down)
+Camera camera(glm::vec3(40.0f, 40.0f, 40.0f), glm::vec3(0.0f, 1.0f, 0.0f), -135.0f, -35.0f);
+
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -111,30 +115,17 @@ int main() {
 
     // --- SCOPED BLOCK START ---
     {
-        // --- REVERSE-Z DEPTH SETUP ---
-        // 1. Map NDC Depth to [0, 1] instead of [-1, 1]. Crucial for Infinite Far Plane.
         glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
-        
         glEnable(GL_DEPTH_TEST);
-        
-        // 2. Reverse-Z Logic: Near is 1.0, Far is 0.0.
-        // We pass if Fragment Z >= Buffer Z.
         glDepthFunc(GL_GEQUAL); 
-        
-        // 3. Clear the buffer to the "Farthest" point, which is now 0.0.
         glClearDepth(0.0f);
 
-        // --- WINDING ORDER ---
-        // My MeshChunk logic generates standard CCW triangles.
-        // If your camera mirrors the world, this might need to change, but usually
-        // Reverse-Z does NOT affect winding. I'll stick to CCW.
         glFrontFace(GL_CCW); 
         glEnable(GL_CULL_FACE); 
         glCullFace(GL_BACK);
 
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
 
-        // Texture Settings
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -154,7 +145,6 @@ int main() {
             lastFrame = currentFrame;
             processInput(window);
 
-            // IMPORTANT: Clear Depth to 0.0 for Reverse-Z
             glClearDepth(0.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -267,7 +257,6 @@ void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, boo
                         allocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f));
                     };
 
-                    // FIXED WINDING: CCW
                     if (direction == 1) {
                         PushVert(0, 0); PushVert(w, 0); PushVert(w, h);
                         PushVert(0, 0); PushVert(w, h); PushVert(0, h);
