@@ -6,10 +6,12 @@
 #include "persistentSSBO.h"
 #include <vector>
 #include <iostream>
+#include <cassert>
 
 class RingBufferSSBO {
+    size_t m_segmentSize; // size of one segment in bytes (aligned)
+    size_t m_vertexStride; // size of ONE vertex in bytes
     PersistentSSBO m_SSBO;
-    size_t m_segmentSize;
     int m_bufferCount = 3;
     int m_head = 0; // current write segment
     // We use a glFenceSync to place a marker in the command stream after a draw call, before writing to a segment we verify that the fence associated with that segments last use has been passed
@@ -19,21 +21,36 @@ class RingBufferSSBO {
     // static helper that runs before members are init
     // this will help ensure alignment to 256 for segments inside the ring buffer
     static size_t GetAlignedSize(size_t originalSize) {
-        GLint alignment;
+        GLint alignment = 256;
         glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &alignment);
+
+        if (alignment <= 0) {
+            alignment = 256;
+        }
 
         // Bitwise math to round up to the next multiple of 'alignment'
         // Example: If alignment is 256 and size is 300, this returns 512
-        return (originalSize + alignment -1) & ~(alignment-1); 
+        size_t finalSize = (originalSize + alignment - 1) & ~(alignment - 1);
+        
+        // DEBUG PRINT: This will appear in your console
+        std::cout << "[RingBuffer Debug] Req: " << originalSize 
+                  << " | Alignment: " << alignment 
+                  << " | Final Segment Size: " << finalSize << std::endl;
+
+        return finalSize;
     }
 
 public:
-    RingBufferSSBO(size_t rawSegmentSize) : m_segmentSize(GetAlignedSize(rawSegmentSize)), m_SSBO(m_segmentSize * 3) {
+    RingBufferSSBO(size_t rawSegmentSize, size_t stride) :  m_vertexStride(stride), 
+                                                            m_segmentSize(GetAlignedSize(rawSegmentSize)),
+                                                            m_SSBO(m_segmentSize * 3) 
+    {
         m_fences.resize(m_bufferCount, 0); 
         glGenVertexArrays(1, &m_vao); 
 
         std::cout << "RingBuffer: Requested " << rawSegmentSize  << " bytes, aligned to " << m_segmentSize << " bytes." << std::endl;
     }
+
     // destructor to clean things up 
     ~RingBufferSSBO() {
         glDeleteVertexArrays(1, &m_vao); 
@@ -72,9 +89,23 @@ public:
     // }
 
     void UnlockAndDraw(int vertexCount) {
+        // safety check, ensure we arent drawing more data than fits into the segment
+        size_t requiredBytes = vertexCount * m_vertexStride;
+        if (requiredBytes > m_segmentSize)
+        {
+            std::cerr << "[RingBuffer Overflow] Attempted to draw " << requiredBytes << " bytes, but segment is only " << m_segmentSize << " bytes. Clamping Vertices." << std::endl;
+            // clamp to prevent crashing and memory tearing, could also abort here
+            vertexCount = m_segmentSize / m_vertexStride;
+
+        }
+
+
+
         // bind only current segment range so that the shader things the segment starts at index 0
+        glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 0, m_SSBO.GetID(), m_head * m_segmentSize, m_segmentSize);
         // segmentSize must be aligned to GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT (usually 256 bytes)
         glBindVertexArray(m_vao); 
+         
         glDrawArrays(GL_TRIANGLES, 0, vertexCount); 
         glBindVertexArray(0); 
 

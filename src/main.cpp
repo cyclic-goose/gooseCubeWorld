@@ -221,19 +221,25 @@ int main() {
         //std::cout << "VRAM Used:      " << (vertices.size() * sizeof(PackedVertex)) << " bytes" << std::endl;
         // Render Loop
 
+        // A simple test manual Scaling Matrix (Scale = 1/40)
+        // This makes coordinate "40" appear at edge of screen "1.0"
+        float s = 1.0f / 40.0f; 
+        float scalingMatrix[16] = {
+            s,  0,  0,  0,
+            0,  s,  0,  0,
+            0,  0,  s,  0,
+            -0.5, -0.5, 0,  1  // Simple translation to center (optional)
+        };
 
-         std::vector<PackedVertex> vertices;
-        vertices.emplace_back(0, 0, 0, 4, 1); // add a vertex at (0, 0, 0) facing up with texture 1
-        vertices.emplace_back(0, 2, 0, 4, 1);
-        vertices.emplace_back(4, 2, 0, 4, 1);
-        // max amount of vertices per frame
-        size_t maxVertices = 10000;
-        size_t segmentSize = maxVertices * sizeof(vertices);
-        
-        // instantiate ring buffer
-        RingBufferSSBO renderer(segmentSize); 
+        // **************************** RING BUFFER SETUP ************************** //
+        const int MAX_VERTS = 1000;
+        RingBufferSSBO renderer(MAX_VERTS, sizeof(PackedVertex)); // packed vertex is the stride
+        Shader worldRingBufferShader("./resources/basicPackedVertexUnwrap.glsl", "./resources/basicSSBOFragTester.glsl");
+        // **************************** RING BUFFER SETUP ************************** //
 
         while (!glfwWindowShouldClose(window)) {
+
+            // ********* Loop Maintainence ********** //
             float currentFrame = (float)glfwGetTime();
             deltaTime = currentFrame - lastFrame;
             lastFrame = currentFrame;
@@ -243,16 +249,46 @@ int main() {
             glClearColor(0.4f, 0.3f, 0.5f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+            // ********* End Loop Maintainence ********** //
     
-            // Update Matrix
+            // LOCK
+            PackedVertex* ptr = (PackedVertex*)renderer.LockNextSegment();
+
+
+            int width, height;
+            glfwGetFramebufferSize(window, &width, &height);
+            glViewport(0, 0, width, height);
+            glLineWidth(20); // make the lines painfully obvious for debugging
+            
+            // ****************  World and camera Update Matrix
             //glm::mat4 projection = glm::perspective(glm::radians(65.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 1000.0f);
             glm::mat4 projection = camera.GetProjectionMatrix(SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 model = glm::mat4(1.0f);
+            
+            // ************ End World and Camera Updates ********* // 
+            
+            // SET VERTEX DATA TO SIMPLE TRIANGLE FOR NOW
+            ptr[0] = PackedVertex(0, 0, 0, 4, 1);
+            ptr[1] = PackedVertex(0, 2, 0, 4, 1);
+            ptr[2] = PackedVertex(4, 2, 0, 4, 1);
+            
+            
+            worldRingBufferShader.use();
+            // Send view projections Matrix
+            GLint locVP = glGetUniformLocation(worldRingBufferShader.ID, "u_ViewProjection");
+            glUniformMatrix4fv(locVP, 1, GL_FALSE, glm::value_ptr(projection * view));
 
+            // Send Chunk Position (Start at 0,0,0)
+            GLint locChunk = glGetUniformLocation(worldRingBufferShader.ID, "u_ChunkOffset");
+            glUniform3f(locChunk, 0.0f, 0.0f, 0.0f); // offset fixed to zero for now
 
-
-
+            
+            renderer.UnlockAndDraw(3); // draw the amount of vertices we have 
+            
+            
+            
+            
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
