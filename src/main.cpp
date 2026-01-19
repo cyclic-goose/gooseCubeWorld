@@ -10,6 +10,7 @@
 //#include "persistentSSBO.h"
 #include "ringBufferSSBO.h"
 #include "packedVertex.h"
+#include "linearAllocator.h"
 
 // Screen settings
 const unsigned int SCR_WIDTH = 1920;
@@ -99,8 +100,8 @@ void processInput(GLFWwindow *window) {
     }
 }
 
-
-
+// prototype 
+void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator);
 
 
 int main() {
@@ -236,6 +237,12 @@ int main() {
         const int MAX_VERTS = 100000;
         RingBufferSSBO renderer(MAX_VERTS, sizeof(PackedVertex)); // packed vertex is the stride
         Shader worldRingBufferShader("./resources/basicPackedVertexUnwrap.glsl", "./resources/basicSSBOFragTester.glsl");
+
+
+        LinearAllocator<PackedVertex> scratch(1024 * 1024); // 1 million verts space
+
+        Chunk myChunk;
+        FillChunk(myChunk); // Generate noise
         // **************************** RING BUFFER SETUP ************************** //
 
         while (!glfwWindowShouldClose(window)) {
@@ -252,8 +259,16 @@ int main() {
 
             // ********* End Loop Maintainence ********** //
     
-            // LOCK
-            PackedVertex* ptr = (PackedVertex*)renderer.LockNextSegment();
+            scratch.Reset(); 
+
+            MeshChunk(myChunk, scratch); 
+
+            //size_t currentOffset = renderer.m_head;
+
+
+
+            void* gpuPtr = renderer.LockNextSegment();
+            memcpy(gpuPtr, scratch.Data(), scratch.SizeBytes());
 
 
             int width, height;
@@ -269,12 +284,7 @@ int main() {
             
             // ************ End World and Camera Updates ********* // 
             
-            // SET VERTEX DATA TO SIMPLE TRIANGLE FOR NOW
-            ptr[0] = PackedVertex(0, 0, 0, 4, 1);
-            ptr[1] = PackedVertex(0, 2, 0, 4, 1);
-            ptr[2] = PackedVertex(4, 2, 0, 4, 1);
-            
-            
+            // ******** Set Shader ********* //
             worldRingBufferShader.use();
             // Send view projections Matrix
             GLint locVP = glGetUniformLocation(worldRingBufferShader.ID, "u_ViewProjection");
@@ -283,9 +293,9 @@ int main() {
             // Send Chunk Position (Start at 0,0,0)
             GLint locChunk = glGetUniformLocation(worldRingBufferShader.ID, "u_ChunkOffset");
             glUniform3f(locChunk, 0.0f, 0.0f, 0.0f); // offset fixed to zero for now
-
+            // ******** Set Shader ********* //
             
-            renderer.UnlockAndDraw(3); // draw the amount of vertices we have 
+            renderer.UnlockAndDraw(scratch.Count()); // draw the amount of vertices we have 
             
             
             
@@ -300,4 +310,109 @@ int main() {
     //glDeleteBuffers(1, &emptyVAO);
     glfwTerminate();
     return 0;
+}
+
+
+
+// Using bit manipulation to count trailing zeros
+inline uint32_t ctz(uint64_t x) {
+#if defined(_MSC_VER)
+    return _tzcnt_u64(x);
+#else
+    return __builtin_ctzll(x);
+#endif
+}
+
+void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator) {
+    // 1. Column-major conversion
+    // We need to access columns of voxels as uint64_t.
+    // Since chunk is 32 high, one uint64_t covers 2 columns of height? 
+    // No, standard Binary Greedy works best on 32x32 planes.
+    // We iterate 6 faces.
+    
+    // Axis definitions for the 6 faces
+    // 0: +X (Right), 1: -X (Left), 2: +Y (Top), 3: -Y (Bottom), 4: +Z (Front), 5: -Z (Back)
+    for (int face = 0; face < 6; face++) {
+        int axis = face / 2;
+        int direction = (face % 2) == 0? 1 : -1;
+        
+        // We sweep along the main axis of the face (e.g. if Top face, we sweep Y)
+        for (int slice = 1; slice <= CHUNK_SIZE; slice++) {
+            
+            // Step 2: Generate Face Masks for this slice
+            // We pack a 32x32 plane of boolean visibility into an array of uint32s/uint64s
+            // Since chunk is 32 wide, a single uint32_t represents a ROW.
+            uint32_t colMasks[1]; 
+
+            for (int row = 0; row < 32; row++) {
+                uint32_t mask = 0;
+                for (int col = 0; col < 32; col++) {
+                    // Coordinates depend on axis rotation
+                    int x, y, z;
+                    
+                    // Simple coordinate mapping logic (U, V, Slice)
+                    if (axis == 0)      { x = slice; y = col + 1; z = row + 1; } // X-sweep
+                    else if (axis == 1) { x = row + 1; y = slice; z = col + 1; } // Y-sweep
+                    else                { x = col + 1; y = row + 1; z = slice; } // Z-sweep
+
+                    // Check voxel and neighbor
+                    // Note: In a real engine, we pre-convert the whole chunk to bitmasks to avoid this get loop.
+                    uint8_t current = chunk.Get(x, y, z);
+                    uint8_t neighbor = chunk.Get(x + (axis==0?direction:0), 
+                                                 y + (axis==1?direction:0), 
+                                                 z + (axis==2?direction:0));
+                    
+                    if (current!= 0 && neighbor == 0) {
+                        mask |= (1u << col);
+                    }
+                }
+                colMasks[row] = mask;
+            }
+
+            // Step 3: Greedy Merging
+            // Iterate rows of the mask
+            for (int i = 0; i < 32; i++) {
+                uint32_t mask = colMasks[i];
+                
+                while (mask!= 0) {
+                    // Find start of a run
+                    int widthStart = ctz(mask); // count trailing zeros
+                    
+                    // Find end of run (first zero after start)
+                    // We can shift out the start zeros, flip bits, and find next trailing zero
+                    int widthEnd = widthStart;
+                    while (widthEnd < 32 && (mask & (1u << widthEnd))) widthEnd++;
+                    int width = widthEnd - widthStart;
+
+                    // Compute height (check subsequent rows for same mask)
+                    int height = 1;
+                    for (int j = i + 1; j < 32; j++) {
+                        // Check if the next row has the same bits set in this range
+                        uint32_t nextRow = colMasks[j];
+                        uint32_t runMask = ((1u << width) - 1u) << widthStart;
+                        
+                        if ((nextRow & runMask) == runMask) {
+                            height++;
+                            // Remove used bits from next row
+                            colMasks[j] &= ~runMask;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    // Remove used bits from current row
+                    uint32_t runMask = ((1u << width) - 1u) << widthStart;
+                    mask &= ~runMask;
+
+                    // Emit Quad
+                    // You need to map (i, widthStart) back to (x, y, z) based on axis
+                    // Output 4 vertices (for IBO) or 6 (for raw triangles)
+                    // Let's assume we output 6 vertices to LinearAllocator
+                    
+                    //... (Vertex Packing Logic from Report 1)...
+                    // allocator.Push(PackedVertex(...));
+                }
+            }
+        }
+    }
 }

@@ -9,7 +9,7 @@ template<typename T>
 class LinearAllocator {
 public:
     LinearAllocator(size_t maxElements) {
-        m_start = (T*)malloc(maxElements * sizeof(T)); 
+        m_Start = (T*)malloc(maxElements * sizeof(T)); 
         m_Current = m_Start;
         m_End = m_Start + maxElements;
     }
