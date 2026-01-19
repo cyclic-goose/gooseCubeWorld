@@ -110,24 +110,31 @@ int main() {
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
     // --- SCOPED BLOCK START ---
-    // Critical: Everything that uses OpenGL (Shaders, Buffers) must be destroyed 
-    // BEFORE glfwTerminate is called at the end of main.
     {
-        // Global GL State
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LESS);
-        glClearDepth(1.0f);
+        // --- REVERSE-Z DEPTH SETUP ---
+        // 1. Map NDC Depth to [0, 1] instead of [-1, 1]. Crucial for Infinite Far Plane.
+        glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
         
-        // FIXED: Standard CCW Winding. 
-        // If your faces are inside-out, this (plus the mesh fix below) solves it.
+        glEnable(GL_DEPTH_TEST);
+        
+        // 2. Reverse-Z Logic: Near is 1.0, Far is 0.0.
+        // We pass if Fragment Z >= Buffer Z.
+        glDepthFunc(GL_GEQUAL); 
+        
+        // 3. Clear the buffer to the "Farthest" point, which is now 0.0.
+        glClearDepth(0.0f);
+
+        // --- WINDING ORDER ---
+        // My MeshChunk logic generates standard CCW triangles.
+        // If your camera mirrors the world, this might need to change, but usually
+        // Reverse-Z does NOT affect winding. I'll stick to CCW.
         glFrontFace(GL_CCW); 
         glEnable(GL_CULL_FACE); 
         glCullFace(GL_BACK);
 
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
 
-        // TEXTURE FIX: Prevent "Lines" by repeating texture
-        // This applies to whatever texture unit 0 is bound to (even if none)
+        // Texture Settings
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -147,6 +154,8 @@ int main() {
             lastFrame = currentFrame;
             processInput(window);
 
+            // IMPORTANT: Clear Depth to 0.0 for Reverse-Z
+            glClearDepth(0.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             if (enableMeshing || triggerDebugPrint) {
@@ -177,7 +186,6 @@ int main() {
         }
     } 
     // --- SCOPED BLOCK END ---
-    // Destructors for 'renderer', 'shader', etc run here, safely before Terminate.
 
     glfwTerminate();
     return 0;
@@ -242,8 +250,6 @@ void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, boo
                     int h = height;
                     quadCount++;
 
-                    if (debug) std::cout << "Quad: Face=" << face << " Slice=" << slice << " U=" << u << " V=" << v << " W=" << w << " H=" << h << std::endl;
-
                     auto PushVert = [&](int du, int dv) {
                         float vx, vy, vz;
                         int r_row = v + dv; 
@@ -261,17 +267,11 @@ void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, boo
                         allocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f));
                     };
 
-                    // FIXED WINDING:
-                    // If direction is POSITIVE (1), Normal matches Axis. CCW.
-                    // If direction is NEGATIVE (-1), Normal opposes Axis. 
-                    // To face OUTWARD, we must flip winding for NEGATIVE faces.
+                    // FIXED WINDING: CCW
                     if (direction == 1) {
-                         // (0,0)->(w,0)->(w,h)
                         PushVert(0, 0); PushVert(w, 0); PushVert(w, h);
                         PushVert(0, 0); PushVert(w, h); PushVert(0, h);
                     } else {
-                        // Flip for negative faces so they point OUT
-                         // (0,0)->(w,h)->(w,0)
                         PushVert(0, 0); PushVert(w, h); PushVert(w, 0);
                         PushVert(0, 0); PushVert(0, h); PushVert(w, h);
                     }
