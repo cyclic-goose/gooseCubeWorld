@@ -39,7 +39,7 @@ public:
         // map the entire buffer. The returned pointer is valid until the buffer is deleted
         // the access flags must match the storage flags
         m_mappedPtr = glMapNamedBufferRange(m_rendererID, 0, m_capacity, flags);
-        std::cout << "Persistent Buffer Created. Capacity: " << 4 * size <<  " bytes of VRAM" << std::endl;
+        std::cout << "Persistent Buffer Created. Capacity: " << 4 * size <<  " bytes (" << (4.0f * (float)size / 1000000.0f) << "MB) of VRAM"<< std::endl;
         // check if any failures
         if (!m_mappedPtr) {
             std::cerr << "[CRITICAL ERROR: Failed to map persistent SSBO. VRAM not initialized]" << std::endl;

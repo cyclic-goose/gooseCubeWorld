@@ -169,11 +169,11 @@ int main() {
 
     //glEnable(GL_CULL_FACE);
     //glCullFace(GL_FRONT);
-    // glFrontFace(GL_CW); 
-    // glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); 
-    // glEnable(GL_DEPTH_TEST);
-    // glDepthFunc(GL_GEQUAL); // Reverse-Z
-    // glClearDepth(0.0f);
+    glFrontFace(GL_CW); 
+    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); 
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_GEQUAL); // Reverse-Z
+    glClearDepth(0.0f);
 
 
 {
@@ -232,7 +232,7 @@ int main() {
         };
 
         // **************************** RING BUFFER SETUP ************************** //
-        const int MAX_VERTS = 1000;
+        const int MAX_VERTS = 100000;
         RingBufferSSBO renderer(MAX_VERTS, sizeof(PackedVertex)); // packed vertex is the stride
         Shader worldRingBufferShader("./resources/basicPackedVertexUnwrap.glsl", "./resources/basicSSBOFragTester.glsl");
         // **************************** RING BUFFER SETUP ************************** //
