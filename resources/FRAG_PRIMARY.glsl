@@ -9,20 +9,21 @@ out vec4 FragColor;
 
 void main()
 {
-    // Basic lighting to show depth (Simple Lambert)
-    vec3 sunDir = normalize(vec3(0.5, 0.8, 0.3));
-    float diff = max(dot(v_Normal, sunDir), 0.2); // 0.2 ambient
+    // Procedural Grid Check (No Texture Required)
+    // Creates a 1x1 checkerboard pattern on the blocks
+    // If you see this pattern cleanly, your UVs and Geometry are correct.
     
-    // Base color
-    vec3 objectColor = vec3(0.7, 0.7, 0.7); // Grey default
+    vec2 uv = v_TexCoord;
+    bool pattern = (mod(floor(uv.x) + floor(uv.y), 2.0) == 0.0);
     
-    // If ID is 1 (Stone/Block), make it slightly reddish/brown
-    if (v_TexID == 1.0) {
-        objectColor = vec3(0.8, 0.4, 0.4); 
-    }
+    vec3 baseColor = pattern ? vec3(0.8) : vec3(0.4);
+    
+    // Tint based on Normal to see faces
+    vec3 tint = v_Color * 0.5 + 0.5;
+    
+    // Simple lighting
+    vec3 sunDir = normalize(vec3(0.2, 1.0, 0.3));
+    float diff = max(dot(v_Normal, sunDir), 0.3);
 
-    // Combine
-    vec3 finalColor = objectColor * diff;
-
-    FragColor = vec4(finalColor, 1.0);
+    FragColor = vec4(baseColor * tint * diff, 1.0);
 }

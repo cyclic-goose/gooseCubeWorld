@@ -4,6 +4,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <iomanip> 
+#include <fstream> 
 
 #include "chunk.h"
 #include "camera.h"
@@ -15,12 +16,11 @@
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
-// Camera setup for viewing the chunk (0,0,0 to 32,32,32)
+// Camera Position: Back and Up
 Camera camera(glm::vec3(40.0f, 40.0f, 40.0f)); 
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
-
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
@@ -30,10 +30,30 @@ bool triggerDebugPrint = false;
 bool enableMeshing = true;
 bool keyProcessed = false; 
 
-// --- Test Chunk Generation ---
+// --- 1. SINE WAVE CHUNK ---
+void FillSineChunk(Chunk& chunk) {
+    std::memset(chunk.voxels, 0, sizeof(chunk.voxels));
+    for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
+        for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
+            if (x == 0 || x == CHUNK_SIZE_PADDED - 1 || 
+                z == 0 || z == CHUNK_SIZE_PADDED - 1) continue;
+
+            float fx = (float)x * 0.5f;
+            float fz = (float)z * 0.5f;
+            float val = sin(fx) * cos(fz); 
+            int height = 15 + (int)(val * 10.0f);
+
+            for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
+                if (y > 0 && y < height) chunk.Set(x, y, z, 1);
+            }
+        }
+    }
+}
+
+// --- 2. TEST CHUNK (Cube) ---
 void FillTestChunk(Chunk& chunk) {
     std::memset(chunk.voxels, 0, sizeof(chunk.voxels));
-    // Create a 3x3x3 block in the middle
+    // 3x3x3 Cube in Center
     for (int x = 14; x <= 16; x++) {
         for (int y = 14; y <= 16; y++) {
             for (int z = 14; z <= 16; z++) {
@@ -43,16 +63,11 @@ void FillTestChunk(Chunk& chunk) {
     }
 }
 
-void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
-    glViewport(0, 0, width, height);
-}
-
+void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     if (firstMouse) { lastX = xpos; lastY = ypos; firstMouse = false; }
-    float xoffset = xpos - lastX;
-    float yoffset = lastY - ypos; 
+    camera.ProcessMouseMovement(xpos - lastX, lastY - ypos);
     lastX = xpos; lastY = ypos;
-    camera.ProcessMouseMovement(xoffset, yoffset);
 }
 
 void processInput(GLFWwindow *window) {
@@ -64,29 +79,21 @@ void processInput(GLFWwindow *window) {
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
 
-    // DEBUG KEYS
-    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS && !keyProcessed) {
-        triggerDebugPrint = true; keyProcessed = true;
-    }
-    if (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS && !keyProcessed) {
-        useTestChunk = !useTestChunk;
-        std::cout << "[Debug] Switched to: " << (useTestChunk ? "TEST CHUNK" : "NOISE CHUNK") << std::endl;
-        keyProcessed = true;
-    }
-    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS && !keyProcessed) {
-        enableMeshing = !enableMeshing;
-        std::cout << "[Debug] Meshing: " << (enableMeshing ? "ON" : "OFF") << std::endl;
-        keyProcessed = true;
-    }
-    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_RELEASE && 
-        glfwGetKey(window, GLFW_KEY_T) == GLFW_RELEASE && 
-        glfwGetKey(window, GLFW_KEY_M) == GLFW_RELEASE) {
-        keyProcessed = false;
-    }
+    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS && !keyProcessed) { triggerDebugPrint = true; keyProcessed = true; }
+    if (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS && !keyProcessed) { useTestChunk = !useTestChunk; std::cout << "Mode: " << (useTestChunk ? "TEST" : "SINE") << std::endl; keyProcessed = true; }
+    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS && !keyProcessed) { enableMeshing = !enableMeshing; std::cout << "Meshing: " << (enableMeshing ? "ON" : "OFF") << std::endl; keyProcessed = true; }
+    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_RELEASE && glfwGetKey(window, GLFW_KEY_T) == GLFW_RELEASE && glfwGetKey(window, GLFW_KEY_M) == GLFW_RELEASE) keyProcessed = false;
 }
 
 void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, bool debug = false);
 void PrintVert(float x, float y, float z, int axis);
+inline uint32_t ctz(uint64_t x) {
+#if defined(_MSC_VER)
+    return _tzcnt_u64(x);
+#else
+    return __builtin_ctzll(x);
+#endif
+}
 
 int main() {
     glfwInit();
@@ -100,23 +107,38 @@ int main() {
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
-    // --- RENDER SETTINGS ---
-    // Standard Depth for now to reduce variables
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glClearDepth(1.0f);
-    glDisable(GL_CULL_FACE); // Show backfaces for debugging
-    glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+    // --- SCOPED BLOCK START ---
+    // Critical: Everything that uses OpenGL (Shaders, Buffers) must be destroyed 
+    // BEFORE glfwTerminate is called at the end of main.
     {
+        // Global GL State
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        glClearDepth(1.0f);
+        
+        // FIXED: Standard CCW Winding. 
+        // If your faces are inside-out, this (plus the mesh fix below) solves it.
+        glFrontFace(GL_CCW); 
+        glEnable(GL_CULL_FACE); 
+        glCullFace(GL_BACK);
+
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+
+        // TEXTURE FIX: Prevent "Lines" by repeating texture
+        // This applies to whatever texture unit 0 is bound to (even if none)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
         const int MAX_VERTS = 100000;
         RingBufferSSBO renderer(MAX_VERTS * sizeof(PackedVertex), sizeof(PackedVertex)); 
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         LinearAllocator<PackedVertex> scratch(1024 * 1024); 
 
-        Chunk noiseChunk; FillChunk(noiseChunk); 
+        Chunk noiseChunk; FillSineChunk(noiseChunk); 
         Chunk testChunk; FillTestChunk(testChunk);
 
         while (!glfwWindowShouldClose(window)) {
@@ -127,18 +149,15 @@ int main() {
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            // LOGIC FIX: Mesh if enabled OR if we requested a debug print
             if (enableMeshing || triggerDebugPrint) {
                 scratch.Reset(); 
                 Chunk& currentChunk = useTestChunk ? testChunk : noiseChunk;
                 MeshChunk(currentChunk, scratch, triggerDebugPrint); 
             }
 
-            // Upload
             void* gpuPtr = renderer.LockNextSegment();
             memcpy(gpuPtr, scratch.Data(), scratch.SizeBytes());
 
-            // Draw
             worldShader.use();
             glm::mat4 projection = camera.GetProjectionMatrix(SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
@@ -156,7 +175,10 @@ int main() {
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
-    }
+    } 
+    // --- SCOPED BLOCK END ---
+    // Destructors for 'renderer', 'shader', etc run here, safely before Terminate.
+
     glfwTerminate();
     return 0;
 }
@@ -165,17 +187,8 @@ void PrintVert(float x, float y, float z, int axis) {
     std::cout << "  V(" << x << ", " << y << ", " << z << ") Face: " << axis << std::endl;
 }
 
-inline uint32_t ctz(uint64_t x) {
-#if defined(_MSC_VER)
-    return _tzcnt_u64(x);
-#else
-    return __builtin_ctzll(x);
-#endif
-}
-
-// ... MeshChunk function is same as previous ...
 void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, bool debug) {
-    if (debug) std::cout << "--- Meshing Chunk Debug Log ---" << std::endl;
+    if (debug) std::cout << "--- Meshing Chunk ---" << std::endl;
     int quadCount = 0;
 
     for (int face = 0; face < 6; face++) {
@@ -235,28 +248,30 @@ void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, boo
                         float vx, vy, vz;
                         int r_row = v + dv; 
                         int r_col = u + du; 
-                        
-                        float px, py, pz;
-                        if (axis == 0)      { px = slice; py = r_col + 1; pz = r_row + 1; }
-                        else if (axis == 1) { px = r_row + 1; py = slice; pz = r_col + 1; }
-                        else                { px = r_col + 1; py = r_row + 1; pz = slice; }
-
-                        px -= 1; py -= 1; pz -= 1; 
-
+                        if (axis == 0)      { vx = slice; vy = r_col + 1; vz = r_row + 1; }
+                        else if (axis == 1) { vx = r_row + 1; vy = slice; vz = r_col + 1; }
+                        else                { vx = r_col + 1; vy = r_row + 1; vz = slice; }
+                        vx -= 1; vy -= 1; vz -= 1; 
                         if (direction == 1) {
-                            if (axis == 0) px += 1.0f;
-                            if (axis == 1) py += 1.0f;
-                            if (axis == 2) pz += 1.0f;
+                            if (axis == 0) vx += 1.0f;
+                            if (axis == 1) vy += 1.0f;
+                            if (axis == 2) vz += 1.0f;
                         }
-                        
-                        if (debug) PrintVert(px, py, pz, face);
-                        allocator.Push(PackedVertex(px, py, pz, (float)face, 1.0f));
+                        if (debug) PrintVert(vx, vy, vz, face);
+                        allocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f));
                     };
 
+                    // FIXED WINDING:
+                    // If direction is POSITIVE (1), Normal matches Axis. CCW.
+                    // If direction is NEGATIVE (-1), Normal opposes Axis. 
+                    // To face OUTWARD, we must flip winding for NEGATIVE faces.
                     if (direction == 1) {
+                         // (0,0)->(w,0)->(w,h)
                         PushVert(0, 0); PushVert(w, 0); PushVert(w, h);
                         PushVert(0, 0); PushVert(w, h); PushVert(0, h);
                     } else {
+                        // Flip for negative faces so they point OUT
+                         // (0,0)->(w,h)->(w,0)
                         PushVert(0, 0); PushVert(w, h); PushVert(w, 0);
                         PushVert(0, 0); PushVert(0, h); PushVert(w, h);
                     }
@@ -264,5 +279,4 @@ void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, boo
             }
         }
     }
-    if (debug) std::cout << "Total Quads: " << quadCount << " (" << quadCount * 6 << " Verts)" << std::endl;
 }

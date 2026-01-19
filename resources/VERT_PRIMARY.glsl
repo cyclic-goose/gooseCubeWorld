@@ -1,8 +1,5 @@
 #version 460 core
 
-// CRITICAL: Must be uvec2 (8 bytes) to match C++ PackedVertex
-// .x = Position/Normal data
-// .y = Texture/Data
 layout (std430, binding = 0) readonly buffer VoxelData {
     uvec2 packedVertices[];
 };
@@ -26,18 +23,12 @@ vec3 getCubeNormal(int i) {
 }
 
 void main() {
-    // 1. Fetch 8 bytes (uvec2)
     uvec2 rawData = packedVertices[gl_VertexID];
     
-    // 2. Unpack Word 0 (Coords + Normal)
-    // Matches C++ PackedVertex::data1
     float x = float(bitfieldExtract(rawData.x, 0,  6));
     float y = float(bitfieldExtract(rawData.x, 6,  6));
     float z = float(bitfieldExtract(rawData.x, 12, 6));
     int normIndex = int(bitfieldExtract(rawData.x, 18, 3));
-    
-    // 3. Unpack Word 1 (Texture ID)
-    // Matches C++ PackedVertex::data2
     int texID = int(bitfieldExtract(rawData.y, 0, 16));
 
     vec3 localPos = vec3(x, y, z);
@@ -46,12 +37,11 @@ void main() {
     v_Normal = getCubeNormal(normIndex);
     v_TexID = float(texID);
     
-    // Tri-planar UVs
     if (abs(v_Normal.x) > 0.5) v_TexCoord = localPos.yz;
     else if (abs(v_Normal.y) > 0.5) v_TexCoord = localPos.xz;
     else v_TexCoord = localPos.xy;
 
-    v_Color = v_Normal * 0.5 + 0.5; 
+    v_Color = v_Normal; // Pass raw normal for debug tinting
 
     gl_Position = u_ViewProjection * vec4(worldPos, 1.0);
 }
