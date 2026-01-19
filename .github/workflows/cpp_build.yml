@@ -1,43 +1,58 @@
-name: C++ Build (g++)
+name: Build GooseVoxelEngine
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
 
 jobs:
-  build:
+  build-linux:
+    name: Build (Linux)
     runs-on: ubuntu-latest
 
     steps:
-    # 1. Checkout the code
-    - name: Checkout code
+    # 1. Checkout Code & Submodules (FastNoise2)
+    - name: Checkout Repository
       uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-    # 2. Install Linux System Dependencies (GLFW, OpenGL, X11)
+    # 2. Install System Dependencies
+    # We need X11, OpenGL, and GLFW dev libraries to link against.
     - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgl1-mesa-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev xorg-dev libglfw3-dev libglm-dev
+        sudo apt-get install -y \
+          build-essential \
+          cmake \
+          libgl1-mesa-dev \
+          libx11-dev \
+          libxrandr-dev \
+          libxinerama-dev \
+          libxcursor-dev \
+          libxi-dev \
+          libglfw3-dev \
+          libglm-dev
 
-    # 3. Create Build Directories (Just like your setup task)
-    - name: Prepare Directories
-      run: mkdir -p build/release
+    # 3. Configure CMake
+    # -DCMAKE_BUILD_TYPE=Release ensures optimizations (O3) are on.
+    - name: Configure CMake
+      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
-    # 4. Compile with g++ (Matches your "Release" task)
-    - name: Build with g++
+    # 4. Build
+    # This compiles the engine and FastNoise2.
+    - name: Build Project
+      run: cmake --build build --config Release --parallel 4
+
+    # 5. Verify Artifact
+    # Ensures the binary was actually created at the expected path.
+    - name: Verify Binary Exists
       run: |
-        g++ \
-        -O3 -DNDEBUG -s -static-libgcc -static-libstdc++ -std=c++17 \
-        src/*.cpp \
-        src/vendor/glad.c \
-        src/vendor/imgui/*.cpp \
-        src/vendor/imgui/backends/imgui_impl_glfw.cpp \
-        src/vendor/imgui/backends/imgui_impl_opengl3.cpp \
-        -Isrc/vendor/imgui \
-        -Isrc/vendor/imgui/backends \
-        -I/usr/include \
-        -Iinclude \
-        -o build/release/gooseVoxelEngine \
-        -lglfw -lGL -ldl -lpthread -lX11
-
-    # 5. Verify the file was created
-    - name: Verify Build
-      run: ls -l build/release/gooseVoxelEngine
+        if [ -f "build/gooseVoxelEngine" ]; then
+          echo "Binary found!"
+          ls -lh build/gooseVoxelEngine
+        else
+          echo "Error: Binary not found!"
+          exit 1
+        fi

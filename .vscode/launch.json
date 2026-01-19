@@ -2,13 +2,13 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug: Goose Voxel Engine",
+            "name": "Debug GooseVoxelEngine",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug/gooseVoxelEngine",
+            "program": "${workspaceFolder}/build/gooseVoxelEngine",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
+            "cwd": "${workspaceFolder}/build",
             "environment": [],
             "externalConsole": false,
             "MIMode": "gdb",
@@ -19,20 +19,7 @@
                     "ignoreFailures": true
                 }
             ],
-            "preLaunchTask": "Build Goose Voxel Engine (Debug)"
-        },
-        {
-            "name": "Release: Goose Voxel Engine",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/release/gooseVoxelEngine",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "preLaunchTask": "Build Goose Voxel Engine (Release)"
+            "preLaunchTask": "CMake: Build"
         }
     ]
 }

@@ -1,0 +1,6 @@
+[submodule "src/vendor/FastNoise2"]
+	path = src/vendor/FastNoise2
+	url = https://github.com/Auburn/FastNoise2.git
+[submodule "external/FastNoise2"]
+	path = external/FastNoise2
+	url = https://github.com/Auburn/FastNoise2.git
