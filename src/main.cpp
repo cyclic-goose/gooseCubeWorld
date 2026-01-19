@@ -9,6 +9,7 @@
 #include "shader.h"
 //#include "persistentSSBO.h"
 #include "ringBufferSSBO.h"
+#include "packedVertex.h"
 
 // Screen settings
 const unsigned int SCR_WIDTH = 1920;

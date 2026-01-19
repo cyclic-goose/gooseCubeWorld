@@ -1,120 +1,25 @@
 {
     "version": "2.0.0",
     "tasks": [
-        // ---------------------------------------------------------
-        // 1. SETUP TASK: Creates the folders (Runs automatically)
-        // ---------------------------------------------------------
         {
-            "label": "prepare_dirs",
+            "label": "CMake Configure",
             "type": "shell",
-            "command": "mkdir",
-            "args": ["-p", "build/debug", "build/release"],
+            "command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug",
             "group": "none",
-            "presentation": {
-                "reveal": "silent",
-                "panel": "shared"
-            }
+            "presentation": { "reveal": "silent" }
         },
-
-        // ---------------------------------------------------------
-        // 2. DEBUG BUILD (Depends on setup)
-        // ---------------------------------------------------------
         {
-            "type": "cppbuild",
-            "label": "Build Goose Voxel Engine (Debug)",
-            "dependsOn": ["prepare_dirs"], // <--- THIS FIXES YOUR ERROR
-            "command": "/usr/bin/g++",
-            "args": [
-                "-fdiagnostics-color=always",
-                "-g",               // Debug symbols
-                "-O0",              // No optimization
-                "-DDEBUG",
-
-                "-std=c++17",
-
-                // SOURCE FILES
-                "${workspaceFolder}/src/*.cpp",
-                "${workspaceFolder}/src/vendor/glad.c",
-                "${workspaceFolder}/src/vendor/imgui/*.cpp",
-                "${workspaceFolder}/src/vendor/imgui/backends/*.cpp",
-
-                // INCLUDE PATHS
-                "-I${workspaceFolder}/src/vendor/imgui", 
-                "-I${workspaceFolder}/src/vendor/imgui/backends",
-                "-I/usr/include",
-                "-I${workspaceFolder}/include",
-
-                // OUTPUT
-                "-o",
-                "${workspaceFolder}/build/debug/gooseVoxelEngine",
-
-                // LINKER
-                "-lglfw",
-                "-lGL",
-                "-ldl",
-                "-lpthread",
-                "-lX11"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": ["$gcc"],
+            "label": "Build Project",
+            "type": "shell",
+            "command": "cmake --build build",
             "group": {
                 "kind": "build",
                 "isDefault": true
             },
-            "detail": "Debug build with symbols"
-        },
-
-        // ---------------------------------------------------------
-        // 3. RELEASE BUILD (Depends on setup)
-        // ---------------------------------------------------------
-        {
-            "type": "cppbuild",
-            "label": "Build Goose Voxel Engine (Release)",
-            "dependsOn": ["prepare_dirs"], // <--- THIS FIXES YOUR ERROR
-            "command": "/usr/bin/g++",
-            "args": [
-                "-fdiagnostics-color=always",
-                "-O3",              // Max speed
-                "-DNDEBUG",         // No debug assertions
-                "-s",               // Strip symbols
-                
-                // STATIC LIBS
-                "-static-libgcc",
-                "-static-libstdc++",
-
-                "-std=c++17",
-
-                // SOURCE FILES
-                "${workspaceFolder}/src/*.cpp",
-                "${workspaceFolder}/src/vendor/glad.c",
-                "${workspaceFolder}/src/vendor/imgui/*.cpp",
-                "${workspaceFolder}/src/vendor/imgui/backends/*.cpp",
-
-                // INCLUDE PATHS
-                "-I${workspaceFolder}/src/vendor/imgui", 
-                "-I${workspaceFolder}/src/vendor/imgui/backends",
-                "-I/usr/include",
-                "-I${workspaceFolder}/include",
-
-                // OUTPUT
-                "-o",
-                "${workspaceFolder}/build/release/gooseVoxelEngine",
-
-                // LINKER
-                "-lglfw",
-                "-lGL",
-                "-ldl",
-                "-lpthread",
-                "-lX11"
+            "dependsOn": [
+                "CMake Configure"
             ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": ["$gcc"],
-            "group": "build",
-            "detail": "Release build for max performance"
+            "problemMatcher": "$gcc"
         }
     ]
 }
