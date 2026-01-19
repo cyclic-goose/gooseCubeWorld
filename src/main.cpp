@@ -7,7 +7,6 @@
 #include "chunk.h"
 #include "camera.h"
 #include "shader.h"
-//#include "persistentSSBO.h"
 #include "ringBufferSSBO.h"
 #include "packedVertex.h"
 #include "linearAllocator.h"
@@ -17,7 +16,7 @@ const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
 // Camera
-Camera camera(glm::vec3(0.0f, 0.0f, -10.0f)); // Start above the chunk
+Camera camera(glm::vec3(16.0f, 30.0f, 40.0f)); // Start nicely positioned to see the chunk
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -28,8 +27,6 @@ float lastFrame = 0.0f;
 
 // ------------------------------------------------------------------------
 // Function: framebuffer_size_callback
-// Inputs:   window (GLFWwindow*), width (int), height (int)
-// Outputs:  void - Resizes the OpenGL viewport when window size changes
 // ------------------------------------------------------------------------
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
@@ -37,8 +34,6 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
 
 // ------------------------------------------------------------------------
 // Function: mouse_callback
-// Inputs:   window (GLFWwindow*), xpos (double), ypos (double)
-// Outputs:  void - Calculates mouse offsets and updates camera orientation
 // ------------------------------------------------------------------------
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     if (firstMouse) {
@@ -48,7 +43,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     }
 
     float xoffset = xpos - lastX;
-    float yoffset = lastY - ypos; // Reversed (y-coordinates go bottom to top)
+    float yoffset = lastY - ypos; 
 
     lastX = xpos;
     lastY = ypos;
@@ -58,8 +53,6 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
 
 // ------------------------------------------------------------------------
 // Function: processInput
-// Inputs:   window (GLFWwindow*) - The active window
-// Outputs:  void - Checks for key presses and moves camera
 // ------------------------------------------------------------------------
 void processInput(GLFWwindow *window) {
     static bool tabPressed = false;
@@ -83,7 +76,6 @@ void processInput(GLFWwindow *window) {
         camera.ProcessKeyboard(DOWN, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE)
     {
-
         if (!tabPressed) {
             wireframeMode = !wireframeMode;
             if (wireframeMode) {
@@ -94,7 +86,6 @@ void processInput(GLFWwindow *window) {
             }
             tabPressed = true;
         } 
-        
     } else {
         tabPressed = false;
     }
@@ -106,10 +97,10 @@ void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator);
 
 int main() {
     glfwInit();
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4); // Changed to 3.3 for wider compatibility, 4.6 is fine too
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    glfwWindowHint(GLFW_DEPTH_BITS, 32); // Suggestion, not a guarantee of Float
+    glfwWindowHint(GLFW_DEPTH_BITS, 32); 
 
     GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels", NULL, NULL);
     if (window == NULL) {
@@ -127,117 +118,20 @@ int main() {
         return -1;
     }
 
-    // DEBUG STEP 1: Disable Culling to ensure we aren't accidentally hiding our own triangles
-    //glEnable(GL_CULL_FACE); 
-
-
-    // ************* OLD TEST CHUNK BUFFER ************** //
-    // VBO/VAO Init
-    // unsigned int VAO, VBO;
-    // glGenVertexArrays(1, &VAO);
-    // glGenBuffers(1, &VBO);
-
-    // // Create Mesh Data
-    // Chunk myChunk;
-    // myChunk.Generate(0, 0, 0); // Generates a sphere at origin
-    
-    // std::vector<Vertex> vertices;
-    // myChunk.Mesh(vertices);
-
-    // Shader basicShader("./resources/basicChunkVert.glsl", "./resources/basicChunkFrag.glsl");
-
-    // // DEBUG STEP 2: Print vertex count to console
-    // std::cout << "Generated Vertices: " << vertices.size() << std::endl;
-    // if (vertices.empty()) {
-    //     std::cout << "WARNING: Mesh is empty! Check Chunk::Generate()" << std::endl;
-    // }
-
-    // // Upload
-    // glBindVertexArray(VAO);
-    // glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    // glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
-
-    // // Attrib 0: Pos
-    // glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
-    // glEnableVertexAttribArray(0);
-    
-    // // Attrib 1: Normal
-    // glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal));
-    // glEnableVertexAttribArray(1);
-
-
-    // ************* OLD TEST CHUNK BUFFER ************** //
-
-
-    //glEnable(GL_CULL_FACE);
-    //glCullFace(GL_FRONT);
     glFrontFace(GL_CW); 
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GEQUAL); // Reverse-Z
     glClearDepth(0.0f);
 
-
-{
-        // ***************** ATTEMPT AT USING SSBO and NEW RENDER SYSTEM ************* // 
-        // // CREATE SSBO
-        // PersistentSSBO SSBO(20); // input to constructor is number of vertices I think
-        
-        // // CREATE DATA
-        // std::vector<PackedVertex> vertices;
-        // vertices.emplace_back(0, 0, 0, 4, 1); // add a vertex at (0, 0, 0) facing up with texture 1
-        // vertices.emplace_back(0, 2, 0, 4, 1);
-        // vertices.emplace_back(4, 2, 0, 4, 1);
-        // //std::cout << vertices.size() * sizeof(PackedVertex) << " bytes used" << std::endl;
-        
-        // SSBO.Bind(0); // tell gl that we are fixing the layout to binding layout 0 (as reflected in our shader program)
-        
-        // // UPLOAD DATA TO SSBO
-        // SSBO.UploadData(vertices.data(), vertices.size() * sizeof(PackedVertex), 0);
-        
-        // // need empty VAO even though data is pulled straight from GPU
-        // // its because gl is dumb and still expects a VAO for draw calls
-        // GLuint emptyVAO;
-        // glCreateVertexArrays(1, &emptyVAO);
-
-        // Shader SSBOShaderTester("./resources/basicPackedVertexUnwrap.glsl", "./resources/basicSSBOFragTester.glsl");
-
-        
-        // // NOTE: If your shader doesn't have layout(location=2), you can keep this enabled 
-        // // but the shader just won't use it. However, 'Vertex' struct MUST have 'texCoord' member
-        // // for the stride (sizeof(Vertex)) to be correct.
-        // // glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoord));
-        // // glEnableVertexAttribArray(2);
-        
-        
-        // // 1. Bind the SSBO (Ensure you bind to the same target/ID used in UploadData)
-        // glBindBuffer(GL_SHADER_STORAGE_BUFFER, SSBO.GetID());
-        
-        // // 2. Query the Size
-        // GLint allocatedBytes = 0;
-        // glGetBufferParameteriv(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, &allocatedBytes);
-        // ***************** ATTEMPT AT USING SSBO and NEW RENDER SYSTEM ************* // 
-
-        // 3. Print Results
-        //std::cout << "VRAM Allocated: " << allocatedBytes << " bytes" << std::endl;
-        //std::cout << "VRAM Used:      " << (vertices.size() * sizeof(PackedVertex)) << " bytes" << std::endl;
-        // Render Loop
-
-        // A simple test manual Scaling Matrix (Scale = 1/40)
-        // This makes coordinate "40" appear at edge of screen "1.0"
-        float s = 1.0f / 40.0f; 
-        float scalingMatrix[16] = {
-            s,  0,  0,  0,
-            0,  s,  0,  0,
-            0,  0,  s,  0,
-            -0.5, -0.5, 0,  1  // Simple translation to center (optional)
-        };
-
+    {
         // **************************** RING BUFFER SETUP ************************** //
         const int MAX_VERTS = 100000;
-        RingBufferSSBO renderer(MAX_VERTS, sizeof(PackedVertex)); // packed vertex is the stride
-        Shader worldRingBufferShader("./resources/basicPackedVertexUnwrap.glsl", "./resources/basicSSBOFragTester.glsl");
-
+        
+        // CRITICAL FIX: The RingBuffer expects size in bytes, not vertex count.
+        RingBufferSSBO renderer(MAX_VERTS * sizeof(PackedVertex), sizeof(PackedVertex)); 
+        
+        Shader worldRingBufferShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
 
         LinearAllocator<PackedVertex> scratch(1024 * 1024); // 1 million verts space
 
@@ -256,63 +150,43 @@ int main() {
 
             glClearColor(0.4f, 0.3f, 0.5f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
             // ********* End Loop Maintainence ********** //
-    
+        
+            // 1. Reset Linear Allocator
             scratch.Reset(); 
 
+            // 2. Mesh Chunk directly into scratch memory
             MeshChunk(myChunk, scratch); 
 
-            //size_t currentOffset = renderer.m_head;
-
-
-
+            // 3. Upload to GPU via Ring Buffer
             void* gpuPtr = renderer.LockNextSegment();
             memcpy(gpuPtr, scratch.Data(), scratch.SizeBytes());
-
-
-            int width, height;
-            glfwGetFramebufferSize(window, &width, &height);
-            glViewport(0, 0, width, height);
-            glLineWidth(20); // make the lines painfully obvious for debugging
             
-            // ****************  World and camera Update Matrix
-            //glm::mat4 projection = glm::perspective(glm::radians(65.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 1000.0f);
+            // **************** World and camera Update Matrix *************** //
             glm::mat4 projection = camera.GetProjectionMatrix(SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
-            glm::mat4 model = glm::mat4(1.0f);
-            
-            // ************ End World and Camera Updates ********* // 
             
             // ******** Set Shader ********* //
             worldRingBufferShader.use();
-            // Send view projections Matrix
+            
             GLint locVP = glGetUniformLocation(worldRingBufferShader.ID, "u_ViewProjection");
             glUniformMatrix4fv(locVP, 1, GL_FALSE, glm::value_ptr(projection * view));
 
-            // Send Chunk Position (Start at 0,0,0)
             GLint locChunk = glGetUniformLocation(worldRingBufferShader.ID, "u_ChunkOffset");
-            glUniform3f(locChunk, 0.0f, 0.0f, 0.0f); // offset fixed to zero for now
+            glUniform3f(locChunk, 0.0f, 0.0f, 0.0f); 
             // ******** Set Shader ********* //
             
-            renderer.UnlockAndDraw(scratch.Count()); // draw the amount of vertices we have 
-            
-            
-            
+            // 4. Draw
+            renderer.UnlockAndDraw(scratch.Count()); 
             
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
+    }
 
-        // WHILE LOOP OUT OF SCOPE HERE
-}
-
-    //glDeleteBuffers(1, &emptyVAO);
     glfwTerminate();
     return 0;
 }
-
-
 
 // Using bit manipulation to count trailing zeros
 inline uint32_t ctz(uint64_t x) {
@@ -324,45 +198,39 @@ inline uint32_t ctz(uint64_t x) {
 }
 
 void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator) {
-    // 1. Column-major conversion
-    // We need to access columns of voxels as uint64_t.
-    // Since chunk is 32 high, one uint64_t covers 2 columns of height? 
-    // No, standard Binary Greedy works best on 32x32 planes.
-    // We iterate 6 faces.
-    
     // Axis definitions for the 6 faces
     // 0: +X (Right), 1: -X (Left), 2: +Y (Top), 3: -Y (Bottom), 4: +Z (Front), 5: -Z (Back)
     for (int face = 0; face < 6; face++) {
         int axis = face / 2;
         int direction = (face % 2) == 0? 1 : -1;
         
-        // We sweep along the main axis of the face (e.g. if Top face, we sweep Y)
+        // We sweep along the main axis of the face
         for (int slice = 1; slice <= CHUNK_SIZE; slice++) {
             
-            // Step 2: Generate Face Masks for this slice
-            // We pack a 32x32 plane of boolean visibility into an array of uint32s/uint64s
-            // Since chunk is 32 wide, a single uint32_t represents a ROW.
-            uint32_t colMasks[1]; 
+            // CRITICAL FIX: Array size was [1], causing stack smashing when writing to index > 0
+            uint32_t colMasks[32]; 
 
             for (int row = 0; row < 32; row++) {
                 uint32_t mask = 0;
                 for (int col = 0; col < 32; col++) {
-                    // Coordinates depend on axis rotation
                     int x, y, z;
                     
-                    // Simple coordinate mapping logic (U, V, Slice)
-                    if (axis == 0)      { x = slice; y = col + 1; z = row + 1; } // X-sweep
-                    else if (axis == 1) { x = row + 1; y = slice; z = col + 1; } // Y-sweep
-                    else                { x = col + 1; y = row + 1; z = slice; } // Z-sweep
+                    // Coordinate mapping
+                    if (axis == 0)      { x = slice; y = col + 1; z = row + 1; } // X-sweep (Y=Col, Z=Row)
+                    else if (axis == 1) { x = row + 1; y = slice; z = col + 1; } // Y-sweep (X=Row, Z=Col)
+                    else                { x = col + 1; y = row + 1; z = slice; } // Z-sweep (X=Col, Y=Row)
 
-                    // Check voxel and neighbor
-                    // Note: In a real engine, we pre-convert the whole chunk to bitmasks to avoid this get loop.
                     uint8_t current = chunk.Get(x, y, z);
                     uint8_t neighbor = chunk.Get(x + (axis==0?direction:0), 
                                                  y + (axis==1?direction:0), 
                                                  z + (axis==2?direction:0));
                     
-                    if (current!= 0 && neighbor == 0) {
+                    // We draw if current is solid and neighbor is air (or other way around depending on winding)
+                    // Simplified: Draw if current exists and neighbor doesn't (assuming we are inside block looking out? or normal culling)
+                    // For standard faces: Draw if current is solid and neighbor is air (and direction is +)
+                    // OR current is air and neighbor is solid (and direction is -) -> but loop iterates all solid blocks usually
+                    
+                    if (current != 0 && neighbor == 0) {
                         mask |= (1u << col);
                     }
                 }
@@ -370,47 +238,106 @@ void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator) {
             }
 
             // Step 3: Greedy Merging
-            // Iterate rows of the mask
             for (int i = 0; i < 32; i++) {
                 uint32_t mask = colMasks[i];
                 
-                while (mask!= 0) {
-                    // Find start of a run
-                    int widthStart = ctz(mask); // count trailing zeros
+                while (mask != 0) {
+                    int widthStart = ctz(mask); 
                     
-                    // Find end of run (first zero after start)
-                    // We can shift out the start zeros, flip bits, and find next trailing zero
                     int widthEnd = widthStart;
                     while (widthEnd < 32 && (mask & (1u << widthEnd))) widthEnd++;
                     int width = widthEnd - widthStart;
 
-                    // Compute height (check subsequent rows for same mask)
                     int height = 1;
                     for (int j = i + 1; j < 32; j++) {
-                        // Check if the next row has the same bits set in this range
                         uint32_t nextRow = colMasks[j];
                         uint32_t runMask = ((1u << width) - 1u) << widthStart;
                         
                         if ((nextRow & runMask) == runMask) {
                             height++;
-                            // Remove used bits from next row
                             colMasks[j] &= ~runMask;
                         } else {
                             break;
                         }
                     }
 
-                    // Remove used bits from current row
                     uint32_t runMask = ((1u << width) - 1u) << widthStart;
                     mask &= ~runMask;
 
-                    // Emit Quad
-                    // You need to map (i, widthStart) back to (x, y, z) based on axis
-                    // Output 4 vertices (for IBO) or 6 (for raw triangles)
-                    // Let's assume we output 6 vertices to LinearAllocator
+                    // Emit Quad (Two Triangles)
+                    // i = row index (V axis)
+                    // widthStart = col index (U axis)
                     
-                    //... (Vertex Packing Logic from Report 1)...
-                    // allocator.Push(PackedVertex(...));
+                    // Construct the 4 corners relative to the plane
+                    // u1 = widthStart, v1 = i
+                    // u2 = widthStart + width, v2 = i + height
+                    
+                    int u = widthStart;
+                    int v = i;
+                    int w = width;
+                    int h = height;
+
+                    // Determine X,Y,Z for the quad corners based on Axis
+                    // We need 6 vertices (2 triangles)
+                    // Triangle 1: (0,0), (w,0), (0,h)
+                    // Triangle 2: (w,0), (w,h), (0,h)
+                    // Note: Winding order matters!
+                    
+                    // Helper lambda to push a vertex
+                    auto PushVert = [&](int du, int dv) {
+                        float vx, vy, vz;
+                        // Map back to world coords
+                        // Offset by +1 because chunk padding puts (0,0,0) at (1,1,1) in array
+                        // but visual world mesh usually starts at 0.
+                        // However, slice is 1-based index into Padded array.
+                        
+                        // We use the same mapping logic as the mask generation
+                        // slice is the constant axis
+                        // row (v) is i
+                        // col (u) is widthStart
+                        
+                        int r_row = v + dv; 
+                        int r_col = u + du; 
+                        // Note: slice is the boundary. 
+                        // If direction is positive (looking towards +X), the face is on the +X side of the voxel (slice).
+                        // If direction is negative (looking towards -X), the face is on the -X side. 
+                        // Visual pos usually: if direction is positive, pos = slice. If negative, pos = slice - 1?
+                        // Let's stick to simple blocky integer coords.
+                        
+                        float px, py, pz;
+                        if (axis == 0)      { px = slice; py = r_col + 1; pz = r_row + 1; }
+                        else if (axis == 1) { px = r_row + 1; py = slice; pz = r_col + 1; }
+                        else                { px = r_col + 1; py = r_row + 1; pz = slice; }
+
+                        // Correction: loop used +1 offset for padding access.
+                        // Visual mesh should be 0-32.
+                        px -= 1; py -= 1; pz -= 1; 
+
+                        // Handle face offset for positive/negative directions
+                        // If direction is positive (e.g. Right face), x should be at the far end of the block?
+                        // Actually, slice iterates voxels. If we are at slice S, and neighbor S+1 is empty,
+                        // the face is at coordinate S+1 (between S and S+1).
+                        if (direction == 1) {
+                            if (axis == 0) px += 1.0f;
+                            if (axis == 1) py += 1.0f;
+                            if (axis == 2) pz += 1.0f;
+                        }
+                        
+                        // Push with Texture ID 1 for now
+                        allocator.Push(PackedVertex(px, py, pz, (float)face, 1.0f));
+                    };
+
+                    // Winding order flip based on direction?
+                    // Standard GL is CCW.
+                    if (direction == 1) {
+                        // Face pointing "Forward"
+                        PushVert(0, 0); PushVert(w, 0); PushVert(w, h);
+                        PushVert(0, 0); PushVert(w, h); PushVert(0, h);
+                    } else {
+                        // Face pointing "Backward"
+                        PushVert(0, 0); PushVert(w, h); PushVert(w, 0);
+                        PushVert(0, 0); PushVert(0, h); PushVert(w, h);
+                    }
                 }
             }
         }

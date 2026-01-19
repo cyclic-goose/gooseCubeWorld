@@ -41,3 +41,10 @@ target_link_libraries(gooseVoxelEngine PRIVATE
     pthread
     X11
 )
+
+# Create a symbolic link to the resources folder in the build directory
+# This ensures paths like "./resources/shader.glsl" always work.
+add_custom_command(TARGET gooseVoxelEngine POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources
+    ${CMAKE_CURRENT_BINARY_DIR}/resources)
