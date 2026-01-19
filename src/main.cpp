@@ -1,17 +1,20 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 
 #include "chunk.h"
 #include "camera.h"
 #include "shader.h"
+#include "persistentSSBO.h"
 
 // Screen settings
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
 // Camera
-Camera camera(glm::vec3(8.0f, 6.0f, 20.0f)); // Start above the chunk
+Camera camera(glm::vec3(0.0f, 0.0f, -10.0f)); // Start above the chunk
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -100,9 +103,10 @@ void processInput(GLFWwindow *window) {
 
 int main() {
     glfwInit();
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3); // Changed to 3.3 for wider compatibility, 4.6 is fine too
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4); // Changed to 3.3 for wider compatibility, 4.6 is fine too
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_DEPTH_BITS, 32); // Suggestion, not a guarantee of Float
 
     GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels", NULL, NULL);
     if (window == NULL) {
@@ -121,86 +125,141 @@ int main() {
     }
 
     // DEBUG STEP 1: Disable Culling to ensure we aren't accidentally hiding our own triangles
-    glEnable(GL_CULL_FACE); 
-    //glDisable(GL_CULL_FACE); 
+    //glEnable(GL_CULL_FACE); 
+
+
+    // ************* OLD TEST CHUNK BUFFER ************** //
+    // VBO/VAO Init
+    // unsigned int VAO, VBO;
+    // glGenVertexArrays(1, &VAO);
+    // glGenBuffers(1, &VBO);
+
+    // // Create Mesh Data
+    // Chunk myChunk;
+    // myChunk.Generate(0, 0, 0); // Generates a sphere at origin
+    
+    // std::vector<Vertex> vertices;
+    // myChunk.Mesh(vertices);
+
+    // Shader basicShader("./resources/basicChunkVert.glsl", "./resources/basicChunkFrag.glsl");
+
+    // // DEBUG STEP 2: Print vertex count to console
+    // std::cout << "Generated Vertices: " << vertices.size() << std::endl;
+    // if (vertices.empty()) {
+    //     std::cout << "WARNING: Mesh is empty! Check Chunk::Generate()" << std::endl;
+    // }
+
+    // // Upload
+    // glBindVertexArray(VAO);
+    // glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    // glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+
+    // // Attrib 0: Pos
+    // glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
+    // glEnableVertexAttribArray(0);
+    
+    // // Attrib 1: Normal
+    // glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal));
+    // glEnableVertexAttribArray(1);
+
+
+    // ************* OLD TEST CHUNK BUFFER ************** //
+
+
+    //glEnable(GL_CULL_FACE);
+    //glCullFace(GL_FRONT);
+    glFrontFace(GL_CW); 
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); 
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GEQUAL); // Reverse-Z
     glClearDepth(0.0f);
 
 
-    // VBO/VAO Init
-    unsigned int VAO, VBO;
-    glGenVertexArrays(1, &VAO);
-    glGenBuffers(1, &VBO);
+{
+        // ***************** ATTEMPT AT USING SSBO and NEW RENDER SYSTEM ************* // 
+        // CREATE SSBO
+        PersistentSSBO SSBO(20); // input to constructor is number of vertices I think
+        
+        // CREATE DATA
+        std::vector<PackedVertex> vertices;
+        vertices.emplace_back(0, 0, 0, 4, 1); // add a vertex at (0, 0, 0) facing up with texture 1
+        vertices.emplace_back(0, 2, 0, 4, 1);
+        vertices.emplace_back(4, 2, 0, 4, 1);
+        //std::cout << vertices.size() * sizeof(PackedVertex) << " bytes used" << std::endl;
+        
+        SSBO.Bind(0); // tell gl that we are fixing the layout to binding layout 0 (as reflected in our shader program)
+        
+        // UPLOAD DATA TO SSBO
+        SSBO.UploadData(vertices.data(), vertices.size() * sizeof(PackedVertex), 0);
+        
+        // need empty VAO even though data is pulled straight from GPU
+        // its because gl is dumb and still expects a VAO for draw calls
+        GLuint emptyVAO;
+        glCreateVertexArrays(1, &emptyVAO);
 
-    // Create Mesh Data
-    Chunk myChunk;
-    myChunk.Generate(0, 0, 0); // Generates a sphere at origin
-    
-    std::vector<Vertex> vertices;
-    myChunk.Mesh(vertices);
+        Shader SSBOShaderTester("./resources/basicPackedVertexUnwrap.glsl", "./resources/basicSSBOFragTester.glsl");
 
-    Shader basicShader("./resources/basicChunkVert.glsl", "./resources/basicChunkFrag.glsl");
+        // ***************** ATTEMPT AT USING SSBO and NEW RENDER SYSTEM ************* // 
 
-    // DEBUG STEP 2: Print vertex count to console
-    std::cout << "Generated Vertices: " << vertices.size() << std::endl;
-    if (vertices.empty()) {
-        std::cout << "WARNING: Mesh is empty! Check Chunk::Generate()" << std::endl;
-    }
+        // NOTE: If your shader doesn't have layout(location=2), you can keep this enabled 
+        // but the shader just won't use it. However, 'Vertex' struct MUST have 'texCoord' member
+        // for the stride (sizeof(Vertex)) to be correct.
+        // glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoord));
+        // glEnableVertexAttribArray(2);
 
-    // Upload
-    glBindVertexArray(VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
 
-    // Attrib 0: Pos
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
-    glEnableVertexAttribArray(0);
-    
-    // Attrib 1: Normal
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal));
-    glEnableVertexAttribArray(1);
+        // 1. Bind the SSBO (Ensure you bind to the same target/ID used in UploadData)
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, SSBO.GetID());
 
-    // NOTE: If your shader doesn't have layout(location=2), you can keep this enabled 
-    // but the shader just won't use it. However, 'Vertex' struct MUST have 'texCoord' member
-    // for the stride (sizeof(Vertex)) to be correct.
-    // glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoord));
-    // glEnableVertexAttribArray(2);
+        // 2. Query the Size
+        GLint allocatedBytes = 0;
+        glGetBufferParameteriv(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, &allocatedBytes);
 
-    // Render Loop
-    while (!glfwWindowShouldClose(window)) {
-        float currentFrame = (float)glfwGetTime();
-        deltaTime = currentFrame - lastFrame;
-        lastFrame = currentFrame;
+        // 3. Print Results
+        std::cout << "VRAM Allocated: " << allocatedBytes << " bytes" << std::endl;
+        std::cout << "VRAM Used:      " << (vertices.size() * sizeof(PackedVertex)) << " bytes" << std::endl;
+        // Render Loop
+        while (!glfwWindowShouldClose(window)) {
+            float currentFrame = (float)glfwGetTime();
+            deltaTime = currentFrame - lastFrame;
+            lastFrame = currentFrame;
 
-        processInput(window);
+            processInput(window);
 
-        glClearColor(0.4f, 0.3f, 0.5f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glClearColor(0.4f, 0.3f, 0.5f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        glUseProgram(basicShader.ID);
+            glUseProgram(SSBOShaderTester.ID);
+            glBindVertexArray(emptyVAO);
+            SSBO.Bind(0);
 
-        // Update Matrix
-        glm::mat4 projection = glm::perspective(glm::radians(65.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 1000.0f);
-        glm::mat4 view = camera.GetViewMatrix();
-        glm::mat4 model = glm::mat4(1.0f);
+            // Update Matrix
+            //glm::mat4 projection = glm::perspective(glm::radians(65.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 1000.0f);
+            glm::mat4 projection = camera.GetProjectionMatrix(SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
+            glm::mat4 view = camera.GetViewMatrix();
+            glm::mat4 model = glm::mat4(1.0f);
 
-        glUniformMatrix4fv(glGetUniformLocation(basicShader.ID, "projection"), 1, GL_FALSE, &projection[0][0]);
-        glUniformMatrix4fv(glGetUniformLocation(basicShader.ID, "view"), 1, GL_FALSE, &view[0][0]);
-        glUniformMatrix4fv(glGetUniformLocation(basicShader.ID, "model"), 1, GL_FALSE, &model[0][0]);
+            // set chunk position to 0, 0, 0
+            GLuint chunkOffsetLoc = glGetUniformLocation(SSBOShaderTester.ID, "u_ChunkOffset");
+            glUniform3iv(chunkOffsetLoc, 1, glm::value_ptr(glm::ivec3(0, 0, 0))); 
+            // set model view
+            GLuint vpLoc = glGetUniformLocation(SSBOShaderTester.ID, "u_ViewProjection");
+            glUniformMatrix4fv(vpLoc, 1, GL_FALSE, glm::value_ptr(projection * view));
 
-        glBindVertexArray(VAO);
-        if (!vertices.empty()) {
-             glDrawArrays(GL_TRIANGLES, 0, (GLsizei)vertices.size());
+            // shader pulls data from SSBO using indices 0 to N-1
+            //glPointSize(10);
+            glLineWidth(4);
+            glDrawArrays(GL_TRIANGLES, 0, vertices.size()); // 3 vertices for now
+
+
+            glfwSwapBuffers(window);
+            glfwPollEvents();
         }
+        glDeleteVertexArrays(1, &emptyVAO);
+        // WHILE LOOP OUT OF SCOPE HERE
+}
 
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-    }
-
-    glDeleteBuffers(1, &VBO);
-    glDeleteVertexArrays(1, &VAO);
+    //glDeleteBuffers(1, &emptyVAO);
     glfwTerminate();
     return 0;
 }
