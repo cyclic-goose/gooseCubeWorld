@@ -1,34 +1,54 @@
-// Chunk.h
 #pragma once
 #include <FastNoise/FastNoise.h>
+#include <cstring> // for memset
 
 constexpr int CHUNK_SIZE = 32;
 // Padded size includes 1-voxel border for neighbor culling
 constexpr int CHUNK_SIZE_PADDED = CHUNK_SIZE + 2; 
 
 struct Chunk {
-    // 34^3 = 39,304 bytes. Fits in L2 Cache.
-    uint8_t voxels;
-    int worldX, worldY, worldZ;
+    // FIXED: This was just 'uint8_t voxels' (1 byte). 
+    // It is now an array of 34^3 = 39,304 bytes.
+    uint8_t voxels[CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED];
+    
+    int worldX = 0;
+    int worldY = 0;
+    int worldZ = 0;
 
-    // Helper to index padded array
-    // (1,1,1) in this array is (0,0,0) in the logical chunk
+    Chunk() {
+        // Always initialize to 0 (Air) to avoid garbage data
+        std::memset(voxels, 0, sizeof(voxels));
+    }
+
+    // Indexing Helper:
+    // We use (X * Area) + (Z * Width) + Y
+    // This places the Y-column contiguously in memory, which is faster for heightmap generation.
+    inline int GetIndex(int x, int y, int z) const {
+        return (x * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED) + (z * CHUNK_SIZE_PADDED) + y;
+    }
+
     inline uint8_t Get(int x, int y, int z) const {
-        return voxels;
+        // Bounds safety check
+        if (x < 0 || x >= CHUNK_SIZE_PADDED || 
+            y < 0 || y >= CHUNK_SIZE_PADDED || 
+            z < 0 || z >= CHUNK_SIZE_PADDED) return 0;
+            
+        return voxels[GetIndex(x, y, z)];
     }
 
     inline void Set(int x, int y, int z, uint8_t v) {
-        voxels = v;
+        if (x < 0 || x >= CHUNK_SIZE_PADDED || 
+            y < 0 || y >= CHUNK_SIZE_PADDED || 
+            z < 0 || z >= CHUNK_SIZE_PADDED) return;
+
+        voxels[GetIndex(x, y, z)] = v;
     }
 };
 
 // Simple generator
 void FillChunk(Chunk& chunk) {
     auto node = FastNoise::New<FastNoise::Simplex>();
-    // Get SIMD-optimized noise for the whole 32x32x32 block
-    // Note: In real code, generate 34x34x34 to cover padding!
     
-    // Naive loops for clarity (FastNoise2 has GenTile which is faster)
     for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
         for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
             // Map 3D noise to world coordinates
@@ -36,13 +56,19 @@ void FillChunk(Chunk& chunk) {
             float wz = (chunk.worldZ + (z - 1)) * 0.02f;
             
             // Simple heightmap: Base height 16 + noise
+            // Simplex noise is roughly -1.0 to 1.0
             float noiseVal = node->GenSingle2D(wx, wz, 1337); 
             int height = 16 + (int)(noiseVal * 10.0f);
 
             for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
                 int wy = chunk.worldY + (y - 1);
                 uint8_t block = 0;
-                if (wy < height) block = 1; // Stone
+                
+                // Debug Visualization:
+                // Set blocks below 'height' to Stone (1)
+                // Set blocks exactly at 'height' to Grass (2) for contrast if you have textures
+                if (wy < height) block = 1; 
+                
                 chunk.Set(x, y, z, block);
             }
         }
