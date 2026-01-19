@@ -73,9 +73,9 @@ public:
     // returns raw OpenGL handle
     GLuint GetID() const {return m_rendererID; }
 
+    void* m_mappedPtr; // cpu side pointer to GPU memory
 private:
     GLuint m_rendererID; // openGL objects name
-    void* m_mappedPtr; // cpu side pointer to GPU memory
     size_t m_capacity; // total size in BYTES
 
 

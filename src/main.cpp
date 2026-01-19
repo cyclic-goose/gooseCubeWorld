@@ -7,7 +7,8 @@
 #include "chunk.h"
 #include "camera.h"
 #include "shader.h"
-#include "persistentSSBO.h"
+//#include "persistentSSBO.h"
+#include "ringBufferSSBO.h"
 
 // Screen settings
 const unsigned int SCR_WIDTH = 1920;
@@ -168,57 +169,70 @@ int main() {
 
     //glEnable(GL_CULL_FACE);
     //glCullFace(GL_FRONT);
-    glFrontFace(GL_CW); 
-    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); 
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_GEQUAL); // Reverse-Z
-    glClearDepth(0.0f);
+    // glFrontFace(GL_CW); 
+    // glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); 
+    // glEnable(GL_DEPTH_TEST);
+    // glDepthFunc(GL_GEQUAL); // Reverse-Z
+    // glClearDepth(0.0f);
 
 
 {
         // ***************** ATTEMPT AT USING SSBO and NEW RENDER SYSTEM ************* // 
-        // CREATE SSBO
-        PersistentSSBO SSBO(20); // input to constructor is number of vertices I think
+        // // CREATE SSBO
+        // PersistentSSBO SSBO(20); // input to constructor is number of vertices I think
         
-        // CREATE DATA
-        std::vector<PackedVertex> vertices;
+        // // CREATE DATA
+        // std::vector<PackedVertex> vertices;
+        // vertices.emplace_back(0, 0, 0, 4, 1); // add a vertex at (0, 0, 0) facing up with texture 1
+        // vertices.emplace_back(0, 2, 0, 4, 1);
+        // vertices.emplace_back(4, 2, 0, 4, 1);
+        // //std::cout << vertices.size() * sizeof(PackedVertex) << " bytes used" << std::endl;
+        
+        // SSBO.Bind(0); // tell gl that we are fixing the layout to binding layout 0 (as reflected in our shader program)
+        
+        // // UPLOAD DATA TO SSBO
+        // SSBO.UploadData(vertices.data(), vertices.size() * sizeof(PackedVertex), 0);
+        
+        // // need empty VAO even though data is pulled straight from GPU
+        // // its because gl is dumb and still expects a VAO for draw calls
+        // GLuint emptyVAO;
+        // glCreateVertexArrays(1, &emptyVAO);
+
+        // Shader SSBOShaderTester("./resources/basicPackedVertexUnwrap.glsl", "./resources/basicSSBOFragTester.glsl");
+
+        
+        // // NOTE: If your shader doesn't have layout(location=2), you can keep this enabled 
+        // // but the shader just won't use it. However, 'Vertex' struct MUST have 'texCoord' member
+        // // for the stride (sizeof(Vertex)) to be correct.
+        // // glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoord));
+        // // glEnableVertexAttribArray(2);
+        
+        
+        // // 1. Bind the SSBO (Ensure you bind to the same target/ID used in UploadData)
+        // glBindBuffer(GL_SHADER_STORAGE_BUFFER, SSBO.GetID());
+        
+        // // 2. Query the Size
+        // GLint allocatedBytes = 0;
+        // glGetBufferParameteriv(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, &allocatedBytes);
+        // ***************** ATTEMPT AT USING SSBO and NEW RENDER SYSTEM ************* // 
+
+        // 3. Print Results
+        //std::cout << "VRAM Allocated: " << allocatedBytes << " bytes" << std::endl;
+        //std::cout << "VRAM Used:      " << (vertices.size() * sizeof(PackedVertex)) << " bytes" << std::endl;
+        // Render Loop
+
+
+         std::vector<PackedVertex> vertices;
         vertices.emplace_back(0, 0, 0, 4, 1); // add a vertex at (0, 0, 0) facing up with texture 1
         vertices.emplace_back(0, 2, 0, 4, 1);
         vertices.emplace_back(4, 2, 0, 4, 1);
-        //std::cout << vertices.size() * sizeof(PackedVertex) << " bytes used" << std::endl;
+        // max amount of vertices per frame
+        size_t maxVertices = 10000;
+        size_t segmentSize = maxVertices * sizeof(vertices);
         
-        SSBO.Bind(0); // tell gl that we are fixing the layout to binding layout 0 (as reflected in our shader program)
-        
-        // UPLOAD DATA TO SSBO
-        SSBO.UploadData(vertices.data(), vertices.size() * sizeof(PackedVertex), 0);
-        
-        // need empty VAO even though data is pulled straight from GPU
-        // its because gl is dumb and still expects a VAO for draw calls
-        GLuint emptyVAO;
-        glCreateVertexArrays(1, &emptyVAO);
+        // instantiate ring buffer
+        RingBufferSSBO renderer(segmentSize); 
 
-        Shader SSBOShaderTester("./resources/basicPackedVertexUnwrap.glsl", "./resources/basicSSBOFragTester.glsl");
-
-        // ***************** ATTEMPT AT USING SSBO and NEW RENDER SYSTEM ************* // 
-
-        // NOTE: If your shader doesn't have layout(location=2), you can keep this enabled 
-        // but the shader just won't use it. However, 'Vertex' struct MUST have 'texCoord' member
-        // for the stride (sizeof(Vertex)) to be correct.
-        // glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoord));
-        // glEnableVertexAttribArray(2);
-
-
-        // 1. Bind the SSBO (Ensure you bind to the same target/ID used in UploadData)
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, SSBO.GetID());
-
-        // 2. Query the Size
-        GLint allocatedBytes = 0;
-        glGetBufferParameteriv(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, &allocatedBytes);
-
-        // 3. Print Results
-        std::cout << "VRAM Allocated: " << allocatedBytes << " bytes" << std::endl;
-        std::cout << "VRAM Used:      " << (vertices.size() * sizeof(PackedVertex)) << " bytes" << std::endl;
-        // Render Loop
         while (!glfwWindowShouldClose(window)) {
             float currentFrame = (float)glfwGetTime();
             deltaTime = currentFrame - lastFrame;
@@ -229,33 +243,20 @@ int main() {
             glClearColor(0.4f, 0.3f, 0.5f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            glUseProgram(SSBOShaderTester.ID);
-            glBindVertexArray(emptyVAO);
-            SSBO.Bind(0);
-
+    
             // Update Matrix
             //glm::mat4 projection = glm::perspective(glm::radians(65.0f), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 1000.0f);
             glm::mat4 projection = camera.GetProjectionMatrix(SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 model = glm::mat4(1.0f);
 
-            // set chunk position to 0, 0, 0
-            GLuint chunkOffsetLoc = glGetUniformLocation(SSBOShaderTester.ID, "u_ChunkOffset");
-            glUniform3iv(chunkOffsetLoc, 1, glm::value_ptr(glm::ivec3(0, 0, 0))); 
-            // set model view
-            GLuint vpLoc = glGetUniformLocation(SSBOShaderTester.ID, "u_ViewProjection");
-            glUniformMatrix4fv(vpLoc, 1, GL_FALSE, glm::value_ptr(projection * view));
 
-            // shader pulls data from SSBO using indices 0 to N-1
-            //glPointSize(10);
-            glLineWidth(4);
-            glDrawArrays(GL_TRIANGLES, 0, vertices.size()); // 3 vertices for now
 
 
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
-        glDeleteVertexArrays(1, &emptyVAO);
+
         // WHILE LOOP OUT OF SCOPE HERE
 }
 
