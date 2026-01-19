@@ -16,10 +16,7 @@
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
-// Camera Position: (40,40,40)
-// Target: (16,16,16) -> Direction is (-1, -1, -1)
-// Yaw: -135.0f (Looking South-West)
-// Pitch: -35.0f (Looking Down)
+// Camera Position: (40,40,40) looking back at (16,16,16)
 Camera camera(glm::vec3(40.0f, 40.0f, 40.0f), glm::vec3(0.0f, 1.0f, 0.0f), -135.0f, -35.0f);
 
 float lastX = SCR_WIDTH / 2.0f;
@@ -32,6 +29,7 @@ float lastFrame = 0.0f;
 bool useTestChunk = false;
 bool triggerDebugPrint = false;
 bool enableMeshing = true;
+bool wireframeMode = false; // New Wireframe State
 bool keyProcessed = false; 
 
 // --- 1. SINE WAVE CHUNK ---
@@ -58,6 +56,7 @@ void FillSineChunk(Chunk& chunk) {
 void FillTestChunk(Chunk& chunk) {
     std::memset(chunk.voxels, 0, sizeof(chunk.voxels));
     // 3x3x3 Cube in Center
+    // With greedy meshing, this should look like 1 big cube (6 quads)
     for (int x = 14; x <= 16; x++) {
         for (int y = 14; y <= 16; y++) {
             for (int z = 14; z <= 16; z++) {
@@ -83,10 +82,41 @@ void processInput(GLFWwindow *window) {
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
 
+    // --- TOGGLE KEYS ---
     if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS && !keyProcessed) { triggerDebugPrint = true; keyProcessed = true; }
-    if (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS && !keyProcessed) { useTestChunk = !useTestChunk; std::cout << "Mode: " << (useTestChunk ? "TEST" : "SINE") << std::endl; keyProcessed = true; }
-    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS && !keyProcessed) { enableMeshing = !enableMeshing; std::cout << "Meshing: " << (enableMeshing ? "ON" : "OFF") << std::endl; keyProcessed = true; }
-    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_RELEASE && glfwGetKey(window, GLFW_KEY_T) == GLFW_RELEASE && glfwGetKey(window, GLFW_KEY_M) == GLFW_RELEASE) keyProcessed = false;
+    
+    if (glfwGetKey(window, GLFW_KEY_T) == GLFW_PRESS && !keyProcessed) { 
+        useTestChunk = !useTestChunk; 
+        std::cout << "[Debug] Mode: " << (useTestChunk ? "TEST CUBE" : "SINE WAVE") << std::endl; 
+        keyProcessed = true; 
+    }
+    
+    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS && !keyProcessed) { 
+        enableMeshing = !enableMeshing; 
+        std::cout << "[Debug] Meshing: " << (enableMeshing ? "ON" : "OFF") << std::endl; 
+        keyProcessed = true; 
+    }
+
+    // --- WIREFRAME TOGGLE (TAB) ---
+    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS && !keyProcessed) {
+        wireframeMode = !wireframeMode;
+        if (wireframeMode) {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+            std::cout << "[Debug] Wireframe: ON" << std::endl;
+        } else {
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            std::cout << "[Debug] Wireframe: OFF" << std::endl;
+        }
+        keyProcessed = true;
+    }
+
+    // Reset debounce
+    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_RELEASE && 
+        glfwGetKey(window, GLFW_KEY_T) == GLFW_RELEASE && 
+        glfwGetKey(window, GLFW_KEY_M) == GLFW_RELEASE &&
+        glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE) {
+        keyProcessed = false;
+    }
 }
 
 void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, bool debug = false);
@@ -115,6 +145,7 @@ int main() {
 
     // --- SCOPED BLOCK START ---
     {
+        // Reverse-Z & Face Culling Setup
         glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_GEQUAL); 
