@@ -26,13 +26,20 @@ public:
         // allocate immutable storage
         // glNamedBufferStorage allocates the memory but does not init it. once
         // once called, the size and flags are frozen
+        // Add to PersistentSSBO constructor
+        while (glGetError() != GL_NO_ERROR); // Clear previous errors
         glNamedBufferStorage(m_rendererID, m_capacity, nullptr, flags);
-        
+        GLenum err = glGetError();
+        if (err != GL_NO_ERROR) {
+            std::cerr << "Buffer Storage Failed: " << err << std::endl;
+            // Error 1280 (0x0500) = GL_INVALID_ENUM (Flags invalid?)
+            // Error 1282 (0x0502) = GL_INVALID_OPERATION (DSA not supported/No Context?)
+}
         // map the buffer range
         // map the entire buffer. The returned pointer is valid until the buffer is deleted
         // the access flags must match the storage flags
         m_mappedPtr = glMapNamedBufferRange(m_rendererID, 0, m_capacity, flags);
-        std::cout << "Persistent Buffer Created. Capacity: " << 4 * size <<  " bytes of VRAM" << std::endl;
+        std::cout << "Persistent Buffer Created. Capacity: " << 4 * size <<  " bytes (" << (4.0f * (float)size / 1000000.0f) << "MB) of VRAM"<< std::endl;
         // check if any failures
         if (!m_mappedPtr) {
             std::cerr << "[CRITICAL ERROR: Failed to map persistent SSBO. VRAM not initialized]" << std::endl;
@@ -73,9 +80,9 @@ public:
     // returns raw OpenGL handle
     GLuint GetID() const {return m_rendererID; }
 
+    void* m_mappedPtr; // cpu side pointer to GPU memory
 private:
     GLuint m_rendererID; // openGL objects name
-    void* m_mappedPtr; // cpu side pointer to GPU memory
     size_t m_capacity; // total size in BYTES
 
 
