@@ -2,13 +2,22 @@
 #include <FastNoise/FastNoise.h>
 #include <cstring> // for memset
 
+/**
+ * CONFIGURATION
+ * -------------
+ * CHUNK_SIZE: The logical size of the chunk (32x32x32).
+ * CHUNK_SIZE_PADDED: Adds a 1-voxel border around the entire chunk.
+ * * WHY PADDING?
+ * When meshing a block at x=0, we need to check x=-1 to see if the face is visible.
+ * Without padding, checking x=-1 would crash or require checking a different Chunk object.
+ * Padding allows us to check neighbors locally in memory.
+ */
 constexpr int CHUNK_SIZE = 32;
-// Padded size includes 1-voxel border for neighbor culling
 constexpr int CHUNK_SIZE_PADDED = CHUNK_SIZE + 2; 
 
 struct Chunk {
-    // FIXED: This was just 'uint8_t voxels' (1 byte). 
-    // It is now an array of 34^3 = 39,304 bytes.
+    // The raw block data. 34 * 34 * 34 = 39,304 bytes.
+    // Fits easily in CPU L2 Cache (usually 256KB+), ensuring very fast access.
     uint8_t voxels[CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED];
     
     int worldX = 0;
@@ -16,19 +25,24 @@ struct Chunk {
     int worldZ = 0;
 
     Chunk() {
-        // Always initialize to 0 (Air) to avoid garbage data
+        // Critical: Initialize all memory to 0 (Air) to prevent garbage data
         std::memset(voxels, 0, sizeof(voxels));
     }
 
-    // Indexing Helper:
-    // We use (X * Area) + (Z * Width) + Y
-    // This places the Y-column contiguously in memory, which is faster for heightmap generation.
+    /**
+     * GetIndex
+     * --------
+     * Flattens 3D coordinates (x,y,z) into a 1D array index.
+     * We use Y as the innermost dimension (stride 1). 
+     * This is "Column-Major" storage, beneficial for Minecraft-like games 
+     * where loops often iterate vertically (gravity, sunlight).
+     */
     inline int GetIndex(int x, int y, int z) const {
         return (x * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED) + (z * CHUNK_SIZE_PADDED) + y;
     }
 
+    // Returns block ID at coordinate. Returns 0 (Air) if out of bounds.
     inline uint8_t Get(int x, int y, int z) const {
-        // Bounds safety check
         if (x < 0 || x >= CHUNK_SIZE_PADDED || 
             y < 0 || y >= CHUNK_SIZE_PADDED || 
             z < 0 || z >= CHUNK_SIZE_PADDED) return 0;
@@ -36,6 +50,7 @@ struct Chunk {
         return voxels[GetIndex(x, y, z)];
     }
 
+    // Sets block ID. Silently fails if out of bounds.
     inline void Set(int x, int y, int z, uint8_t v) {
         if (x < 0 || x >= CHUNK_SIZE_PADDED || 
             y < 0 || y >= CHUNK_SIZE_PADDED || 
@@ -44,33 +59,3 @@ struct Chunk {
         voxels[GetIndex(x, y, z)] = v;
     }
 };
-
-// Simple generator
-void FillChunk(Chunk& chunk) {
-    auto node = FastNoise::New<FastNoise::Simplex>();
-    
-    for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
-        for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
-            // Map 3D noise to world coordinates
-            float wx = (chunk.worldX + (x - 1)) * 0.02f;
-            float wz = (chunk.worldZ + (z - 1)) * 0.02f;
-            
-            // Simple heightmap: Base height 16 + noise
-            // Simplex noise is roughly -1.0 to 1.0
-            float noiseVal = node->GenSingle2D(wx, wz, 1337); 
-            int height = 16 + (int)(noiseVal * 10.0f);
-
-            for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
-                int wy = chunk.worldY + (y - 1);
-                uint8_t block = 0;
-                
-                // Debug Visualization:
-                // Set blocks below 'height' to Stone (1)
-                // Set blocks exactly at 'height' to Grass (2) for contrast if you have textures
-                if (wy < height) block = 1; 
-                
-                chunk.Set(x, y, z, block);
-            }
-        }
-    }
-}

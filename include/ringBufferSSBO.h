@@ -1,127 +1,93 @@
 #pragma once
-// the point of this class is to try and treat out persistent shader storage buffer object (SSBO) object as a "toroidal clipmap" or a ring buffer
-// We also need to do so while preventing Write-After-Read (WAR) hazards, resulting in tearing and memory corruption
-// Frame N: CPU writes to segment A, GPU reads segment C (From frame N-2)
-// Frame N+1: CPU writes segment B, GPU reads segment A
 #include "persistentSSBO.h"
 #include <vector>
 #include <iostream>
 #include <cassert>
 
+/**
+ * class RingBufferSSBO
+ * --------------------
+ * PURPOSE:
+ * Uploading data to the GPU is dangerous if the GPU is still reading that data.
+ * This is a "Write-After-Read" (WAR) hazard.
+ * * SOLUTION:
+ * We split the GPU buffer into 3 parts (Triple Buffering).
+ * Frame 1: CPU writes Part A. GPU reads Part A.
+ * Frame 2: CPU writes Part B. GPU reads Part B.
+ * Frame 3: CPU writes Part C. GPU reads Part C.
+ * Frame 4: CPU loops back to Part A. It waits (Fencing) to ensure GPU is done with Frame 1.
+ */
 class RingBufferSSBO {
-    size_t m_segmentSize; // size of one segment in bytes (aligned)
-    size_t m_vertexStride; // size of ONE vertex in bytes
-    PersistentSSBO m_SSBO;
-    int m_bufferCount = 3;
-    int m_head = 0; // current write segment
-    // We use a glFenceSync to place a marker in the command stream after a draw call, before writing to a segment we verify that the fence associated with that segments last use has been passed
+    size_t m_segmentSize;  // Size of one segment (aligned to 256 bytes)
+    size_t m_vertexStride; // Size of one vertex (8 bytes)
+    PersistentSSBO m_SSBO; // The actual OpenGL Buffer wrapper
+    int m_bufferCount = 3; // Triple buffering
+    int m_head = 0;        // Current segment index (0, 1, or 2)
+    
+    // Fences: Markers inserted into the GPU command queue.
+    // We check these to see if the GPU has passed a certain point.
     std::vector<GLsync> m_fences;
-    GLuint m_vao; // dummy VAO because opengl requires one be bound to draw 
+    GLuint m_vao; 
 
-    // static helper that runs before members are init
-    // this will help ensure alignment to 256 for segments inside the ring buffer
+    // Helper: OpenGL requires buffers to be aligned to specific byte boundaries (usually 256).
+    // This function rounds up 'originalSize' to the next multiple of 256.
     static size_t GetAlignedSize(size_t originalSize) {
         GLint alignment = 256;
         glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &alignment);
-
-        if (alignment <= 0) {
-            alignment = 256;
-        }
-
-        // Bitwise math to round up to the next multiple of 'alignment'
-        // Example: If alignment is 256 and size is 300, this returns 512
-        size_t finalSize = (originalSize + alignment - 1) & ~(alignment - 1);
-        
-        // DEBUG PRINT: This will appear in your console
-        std::cout << "[RingBuffer Debug] Req: " << originalSize 
-                  << " | Alignment: " << alignment 
-                  << " | Final Segment Size: " << finalSize << std::endl;
-
-        return finalSize;
+        if (alignment <= 0) alignment = 256;
+        return (originalSize + alignment - 1) & ~(alignment - 1);
     }
 
 public:
-    RingBufferSSBO(size_t rawSegmentSize, size_t stride) :  m_vertexStride(stride), 
-                                                            m_segmentSize(GetAlignedSize(rawSegmentSize)),
-                                                            m_SSBO(m_segmentSize * 3) 
+    RingBufferSSBO(size_t rawSegmentSize, size_t stride) 
+        : m_vertexStride(stride), 
+          m_segmentSize(GetAlignedSize(rawSegmentSize)),
+          m_SSBO(m_segmentSize * 3) // Allocate 3x the size for ring buffering
     {
         m_fences.resize(m_bufferCount, 0); 
-        glGenVertexArrays(1, &m_vao); 
-
-        std::cout << "RingBuffer: Requested " << rawSegmentSize  << " bytes, aligned to " << m_segmentSize << " bytes." << std::endl;
+        glCreateVertexArrays(1, &m_vao); // Create Empty VAO
     }
 
-    // destructor to clean things up 
     ~RingBufferSSBO() {
         glDeleteVertexArrays(1, &m_vao); 
-        for (auto fence: m_fences)
-        {
-            if (fence) 
-                glDeleteSync(fence); 
+        for (auto fence: m_fences) {
+            if (fence) glDeleteSync(fence); 
         }
     }
 
-    // new frame upload, writing data means writing to the pointer returned by this very function. Assume it will do the work of checking for free segments
+    // Locks the next segment for writing.
+    // If GPU is still using it, this function BLOCKS the CPU until GPU is done.
     void* LockNextSegment() {
-        //move head
-        m_head = (m_head + 1) % m_bufferCount;
+        m_head = (m_head + 1) % m_bufferCount; // Move to next segment
+        WaitForFence(m_fences[m_head]);        // Ensure it is safe to write
         
-        // wait for this segment to be free
-        WaitForFence(m_fences[m_head]);
-
-        // return pointer to start of this segment
+        // Return pointer to mapped memory for this segment
         return (uint8_t*)m_SSBO.m_mappedPtr + (m_head * m_segmentSize);
     }
 
-    // void UnlockAndDraw(int vertexCount) { 
-    //     // bind buffer (base + offset) or just uniform offset in shader
-    //     m_SSBO.Bind(0);
-
-    //     // draw command
-    //     glDrawArrays(GL_TRIANGLES, 0, vertexCount);
-
-    //     // place fence
-    //     // delete old fence if it still exists
-    //     if (m_fences[m_head]) glDeleteSync(m_fences[m_head]);
-
-    //     // now insert new fence
-    //     m_fences[m_head] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0); 
-    // }
-
+    // Issues the draw command and places a fence.
     void UnlockAndDraw(int vertexCount) {
-        // safety check, ensure we arent drawing more data than fits into the segment
-        size_t requiredBytes = vertexCount * m_vertexStride;
-        if (requiredBytes > m_segmentSize)
-        {
-            std::cerr << "[RingBuffer Overflow] Attempted to draw " << requiredBytes << " bytes, but segment is only " << m_segmentSize << " bytes. Clamping Vertices." << std::endl;
-            // clamp to prevent crashing and memory tearing, could also abort here
-            vertexCount = m_segmentSize / m_vertexStride;
-
-        }
-
-
-
-        // bind only current segment range so that the shader things the segment starts at index 0
+        // Bind only the active segment range
         glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 0, m_SSBO.GetID(), m_head * m_segmentSize, m_segmentSize);
-        // segmentSize must be aligned to GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT (usually 256 bytes)
+        
         glBindVertexArray(m_vao); 
-         
         glDrawArrays(GL_TRIANGLES, 0, vertexCount); 
         glBindVertexArray(0); 
 
-        // standard fencing locig 
+        // Place a fence AFTER the draw command.
+        // When we come back to this segment index later, we check this fence.
         if (m_fences[m_head]) glDeleteSync(m_fences[m_head]); 
         m_fences[m_head] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);         
     }
 
+    // Checks if fence is signaled. If not, waits.
     void WaitForFence(GLsync fence) {
-        if (!fence)  // no fence means the segment is free
-            return; 
+        if (!fence) return; 
         GLenum result; 
+        // glClientWaitSync blocks CPU. 
+        // Ideally, with 3 buffers, result is ALREADY_SIGNALED (no wait).
         do {
-            result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000); // BLOCKS THE CPU UNTIL GPU PASSES THE FENCE
+            result = glClientWaitSync(fence, GL_SYNC_FLUSH_COMMANDS_BIT, 1000000000); 
         } while (result == GL_TIMEOUT_EXPIRED); 
     }
-
-
 };
