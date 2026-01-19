@@ -15,8 +15,8 @@ struct PackedVertex {
         data = 0;
         data |= (x & 0x3f) << 0; // mask 6 bits, shift 0
         data |= (y & 0x3f) << 6; // mask 6 bits, shift 6
-        data |= (x & 0x3f) << 12; // mask 6 bits, shift 12
-        data |= (norm & 0x07) << 18;// mask 3 bits, shift 18
+        data |= (z & 0x3f) << 12; // mask 6 bits, shift 12
+        data |= (norm & 0x7) << 18;// mask 3 bits, shift 18
         data |= (tex & 0x7ff) << 21; // mask 11 bits, shift 21
     }
 };

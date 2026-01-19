@@ -4,6 +4,8 @@ in vec3 v_Normal;
 in vec2 v_TexCoord;
 in float v_TexID;
 
+out vec4 FragColor;
+
 
 void main()
 {

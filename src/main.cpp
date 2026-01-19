@@ -14,7 +14,7 @@ const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
 // Camera
-Camera camera(glm::vec3(8.0f, 6.0f, 20.0f)); // Start above the chunk
+Camera camera(glm::vec3(0.0f, 0.0f, -10.0f)); // Start above the chunk
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
@@ -126,13 +126,7 @@ int main() {
 
     // DEBUG STEP 1: Disable Culling to ensure we aren't accidentally hiding our own triangles
     //glEnable(GL_CULL_FACE); 
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_FRONT);
-    glFrontFace(GL_CCW); 
-    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); 
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_GEQUAL); // Reverse-Z
-    glClearDepth(0.0f);
+
 
     // ************* OLD TEST CHUNK BUFFER ************** //
     // VBO/VAO Init
@@ -171,6 +165,16 @@ int main() {
 
     // ************* OLD TEST CHUNK BUFFER ************** //
 
+
+    //glEnable(GL_CULL_FACE);
+    //glCullFace(GL_FRONT);
+    glFrontFace(GL_CW); 
+    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); 
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_GEQUAL); // Reverse-Z
+    glClearDepth(0.0f);
+
+
 {
         // ***************** ATTEMPT AT USING SSBO and NEW RENDER SYSTEM ************* // 
         // CREATE SSBO
@@ -179,20 +183,21 @@ int main() {
         // CREATE DATA
         std::vector<PackedVertex> vertices;
         vertices.emplace_back(0, 0, 0, 4, 1); // add a vertex at (0, 0, 0) facing up with texture 1
-        vertices.emplace_back(0, 0.5, 0, 4, 1);
-        vertices.emplace_back(-0.5, 0.5, 0, 4, 1);
+        vertices.emplace_back(0, 2, 0, 4, 1);
+        vertices.emplace_back(4, 2, 0, 4, 1);
+        //std::cout << vertices.size() * sizeof(PackedVertex) << " bytes used" << std::endl;
         
         SSBO.Bind(0); // tell gl that we are fixing the layout to binding layout 0 (as reflected in our shader program)
         
         // UPLOAD DATA TO SSBO
-        SSBO.UploadData(vertices.data(), vertices.size(), 0);
+        SSBO.UploadData(vertices.data(), vertices.size() * sizeof(PackedVertex), 0);
         
         // need empty VAO even though data is pulled straight from GPU
         // its because gl is dumb and still expects a VAO for draw calls
         GLuint emptyVAO;
         glCreateVertexArrays(1, &emptyVAO);
 
-        Shader SSBOShaderTester("./resources/basicPackedVertexUnwrap,glsl", "./resources/basicSSBOFragTester.glsl");
+        Shader SSBOShaderTester("./resources/basicPackedVertexUnwrap.glsl", "./resources/basicSSBOFragTester.glsl");
 
         // ***************** ATTEMPT AT USING SSBO and NEW RENDER SYSTEM ************* // 
 
@@ -202,6 +207,17 @@ int main() {
         // glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, texCoord));
         // glEnableVertexAttribArray(2);
 
+
+        // 1. Bind the SSBO (Ensure you bind to the same target/ID used in UploadData)
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, SSBO.GetID());
+
+        // 2. Query the Size
+        GLint allocatedBytes = 0;
+        glGetBufferParameteriv(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, &allocatedBytes);
+
+        // 3. Print Results
+        std::cout << "VRAM Allocated: " << allocatedBytes << " bytes" << std::endl;
+        std::cout << "VRAM Used:      " << (vertices.size() * sizeof(PackedVertex)) << " bytes" << std::endl;
         // Render Loop
         while (!glfwWindowShouldClose(window)) {
             float currentFrame = (float)glfwGetTime();
@@ -228,10 +244,12 @@ int main() {
             glUniform3iv(chunkOffsetLoc, 1, glm::value_ptr(glm::ivec3(0, 0, 0))); 
             // set model view
             GLuint vpLoc = glGetUniformLocation(SSBOShaderTester.ID, "u_ViewProjection");
-            glUniformMatrix4fv(vpLoc, 1, GL_FALSE, glm::value_ptr(view * projection));
+            glUniformMatrix4fv(vpLoc, 1, GL_FALSE, glm::value_ptr(projection * view));
 
             // shader pulls data from SSBO using indices 0 to N-1
-            glDrawArrays(GL_TRIANGLES, 0, 3); // 3 vertices for now
+            //glPointSize(10);
+            glLineWidth(4);
+            glDrawArrays(GL_TRIANGLES, 0, vertices.size()); // 3 vertices for now
 
 
             glfwSwapBuffers(window);
