@@ -94,6 +94,65 @@ void processInput(GLFWwindow *window, World& world) {
     } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) rPressed = false;
 }
 
+// a quick one off "splash screen" so the player doesnt think the computer just froze (although it is kind of, its allocating vram)
+void RenderLoadingScreen(GLFWwindow* window) {
+    // Force a few frames to render to clear out the swap chain buffers
+    // 3 iterations ensures we handle Double or Triple buffering correctly
+    for (int i = 0; i < 3; i++) {
+        // 1. Viewport & Clear
+        int display_w, display_h;
+        glfwGetFramebufferSize(window, &display_w, &display_h);
+        glViewport(0, 0, display_w, display_h);
+        
+        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        // 2. Draw UI
+        gui.BeginFrame();
+
+        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+        ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        
+        ImGui::Begin("Loading", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
+        ImGui::SetWindowFontScale(3.0f);
+        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Cyclic Goose Voxel Engine");
+        ImGui::SetWindowFontScale(2.0f);
+        ImGui::Separator();
+        ImGui::Text("Allocating VRAM Buffers (approx 900000GB)...");
+        ImGui::Text("Allocating Threadpool...");
+        ImGui::Text("Please Wait...");
+
+        // --- VERSION WINDOW (Anchored Relative to Main) ---
+        // Calculate position: Right edge of main box, 5 pixels down
+        // CAPTURE GEOMETRY: Get the bottom-right corner of this window
+        ImVec2 mainPos = ImGui::GetWindowPos();
+        ImVec2 mainSize = ImGui::GetWindowSize();
+        ImVec2 versionPos;
+        versionPos.x = mainPos.x + mainSize.x; 
+        versionPos.y = mainPos.y + mainSize.y + 5.0f; 
+
+        // Pivot (1.0f, 0.0f) = Top-Right of the version text
+        // This aligns the right edge of the text with the right edge of the box above it
+        ImGui::SetNextWindowPos(versionPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.0f); 
+        
+        ImGui::Begin("Version", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.1.0-alpha"); 
+        ImGui::End();
+        ImGui::End();
+
+        gui.EndFrame();
+        
+        // 3. Swap and Poll
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+    }
+    
+    // 4. Force synchronization before hanging the CPU
+    glFinish(); 
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+
 int main() {
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -110,14 +169,24 @@ int main() {
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
         glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
     }
-
-
+    
+    
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-
+    
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
+
+    // load the gui and use it to render a quick splash screen
+    // --- RENDER SPLASH SCREEN ---
+    gui.Init(window); // Stores window pointer for window management
+    
+    RenderLoadingScreen(window);
+
+
+
+    // pre game loop configurations
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GEQUAL); 
@@ -125,6 +194,8 @@ int main() {
     glEnable(GL_CULL_FACE); 
     glCullFace(GL_BACK);
     glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
+
+
 
     { // NEW SCOPE for destructors calling before glfwTerminate()
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
@@ -141,8 +212,8 @@ int main() {
         globalConfig.lodRadius[6] = 20;
         globalConfig.lodRadius[7] = 32;
 
+        // This takes a while but is only run once
         World world(globalConfig);
-        gui.Init(window); // Stores window pointer for window management
 
         while (!glfwWindowShouldClose(window)) {
             float currentFrame = (float)glfwGetTime();
@@ -177,6 +248,8 @@ int main() {
             //std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
+
+    gui.Shutdown(); // shutdown gui since its scope is global
     glfwTerminate();
     return 0;
 }
