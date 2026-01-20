@@ -130,6 +130,7 @@ private:
     std::queue<ChunkNode*> m_generatedQueue; 
     std::queue<ChunkNode*> m_meshedQueue;    
     int lastPx = -99999, lastPz = -99999;
+    int updateTimer = 0;
 
     struct ChunkRequest {
         int x, y, z;
@@ -153,10 +154,18 @@ public:
 
         ProcessQueues();
 
+        // 1. Unload immediately if moved (Memory safety)
         if (px != lastPx || pz != lastPz) {
             UnloadChunks(px, pz);
-            QueueNewChunks(px, pz);
             lastPx = px; lastPz = pz;
+        }
+
+        // 2. Load Continuously
+        // We run this every few frames to keep the queue full without spamming sorting
+        updateTimer++;
+        if (updateTimer > 10) {
+            QueueNewChunks(px, pz);
+            updateTimer = 0;
         }
     }
 
@@ -169,7 +178,6 @@ public:
         
         // 1. Collect ALL missing chunks in range
         std::vector<ChunkRequest> missing;
-        // Reserve to prevent reallocation
         missing.reserve(2000); 
 
         for (int x = px - r; x <= px + r; x++) {
@@ -179,7 +187,6 @@ public:
                     if (m_chunks.find(key) == m_chunks.end()) {
                         int dx = x - px;
                         int dz = z - pz;
-                        // Use simple 2D distance for priority to load full columns
                         int distSq = dx*dx + dz*dz; 
                         missing.push_back({x, y, z, distSq});
                     }
@@ -200,7 +207,6 @@ public:
             if (queued >= MAX_NEW_TASKS) break;
 
             int64_t key = ChunkKey(req.x, req.y, req.z);
-            // Double check existence (race condition safety)
             if (m_chunks.find(key) == m_chunks.end()) {
                 ChunkNode* newNode = m_chunkPool.Acquire();
                 if (newNode) {
@@ -215,19 +221,13 @@ public:
     }
 
     void UnloadChunks(int px, int pz) {
-        // HYSTERESIS: Unload radius must be LARGER than load radius
-        // If renderDistance is 16, unload at 20.
-        // This keeps a 4-chunk buffer where chunks exist but aren't re-queued.
-        int unloadRadius = m_config.renderDistance + 4; 
-        
+        int r = m_config.renderDistance + 4; // Hysteresis buffer
         std::vector<int64_t> toRemove;
         
         for (auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
-            // Check distance
-            if (abs(node->cx - px) > unloadRadius || abs(node->cz - pz) > unloadRadius) {
+            if (abs(node->cx - px) > r || abs(node->cz - pz) > r) {
                 ChunkState s = node->state.load();
-                // SAFE UNLOAD: Only recycle if idle
                 if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
                     toRemove.push_back(pair.first);
                     m_chunkPool.Release(node); 
@@ -237,8 +237,7 @@ public:
         for (auto k : toRemove) m_chunks.erase(k);
     }
 
-    // ... (Tasks, ProcessQueues, FillChunk, Draw, Reload remain same as previous)
-    
+    // ... (Tasks, ProcessQueues, FillChunk remain same)
     void Task_Generate(ChunkNode* node) {
         FillChunk(node->chunk, node->cx, node->cy, node->cz);
         std::lock_guard<std::mutex> lock(m_queueMutex);
