@@ -101,7 +101,7 @@ int main() {
         
         // 4. CONFIGURATION (LOD CONTROL)
         globalConfig.seed = 1337;
-        globalConfig.worldHeightChunks = 8;
+        globalConfig.worldHeightChunks = 16;
         
         // -- LOD CONTROL SECTION --
         // lodCount: How many stacked layers to render. 

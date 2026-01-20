@@ -48,7 +48,7 @@ void main() {
     // This allows the high-detail chunk (scale 1) to sit "on top" without z-fighting.
     // The amount to sink depends on scale. Larger scale = deeper sink.
     if (scale > 1.0) {
-        worldPos.y -= (scale * 2.0); 
+        worldPos.y -= (scale * 5.0); 
     }
 
     v_Normal = getCubeNormal(normIndex);
