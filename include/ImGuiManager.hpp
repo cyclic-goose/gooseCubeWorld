@@ -157,8 +157,15 @@ private:
     }
 
     void RenderDebugPanel(World& world, UIConfig& config) {
+        ImGuiWindowFlags flags = 0;
+        if (config.isGameMode) {
+            flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
+            ImGui::SetNextWindowBgAlpha(0.2f); // Faintly visible while playing
+        } else {
+            ImGui::SetNextWindowBgAlpha(0.85f); 
+        }
         ImGui::SetNextWindowSize(ImVec2(400, 600), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Engine Debug (F2)", &config.showDebugPanel)) {
+        if (ImGui::Begin("Engine Debug (F2)", &config.showDebugPanel, flags)) {
             
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "PERFORMANCE");
             ImGui::Separator();
@@ -178,6 +185,7 @@ private:
             
             ImGui::Text("VRAM: %.1f / %.1f MB", usedMB, totalMB);
             ImGui::ProgressBar(ratio, ImVec2(-1.0f, 15.0f));
+            ImGui::Text("Fragmentation: %zu free blocks", world.m_gpuMemory->GetFreeBlockCount());
 
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "WORLD GEOMETRY");
@@ -209,6 +217,13 @@ private:
     }
 
     void RenderWorldSettings(World& world, UIConfig& config) {
+
+
+        ImGuiWindowFlags flags = 0;
+        if (config.isGameMode) {
+            flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
+            ImGui::SetNextWindowBgAlpha(0.2f);
+        }
         ImGui::SetNextWindowSize(ImVec2(400, 550), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("World Generation (M)", &config.showWorldSettings)) {
             
