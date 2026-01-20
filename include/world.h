@@ -46,9 +46,18 @@ struct ChunkNode {
     std::vector<PackedVertex> cachedMesh; 
     std::atomic<ChunkState> state{ChunkState::MISSING};
     
+    // Bounding Box for Culling
+    glm::vec3 minAABB;
+    glm::vec3 maxAABB;
+
     void Reset(int x, int y, int z) {
         cx = x; cy = y; cz = z;
         position = glm::vec3(x * CHUNK_SIZE, y * CHUNK_SIZE, z * CHUNK_SIZE);
+        
+        // Pre-calculate AABB for frustum culling
+        minAABB = position;
+        maxAABB = position + glm::vec3(CHUNK_SIZE);
+
         chunk.worldX = (int)position.x;
         chunk.worldY = (int)position.y;
         chunk.worldZ = (int)position.z;
@@ -58,6 +67,7 @@ struct ChunkNode {
     }
 };
 
+// ... (TerrainGenerator remains the same) ...
 class TerrainGenerator {
 private:
     FastNoise::SmartNode<> m_baseNoise;
@@ -110,24 +120,59 @@ inline int64_t ChunkKey(int x, int y, int z) {
     return (ux << 40) | (uz << 16) | uy;
 }
 
+// Simple Frustum Culling Helper
+struct Frustum {
+    glm::vec4 planes[6];
+
+    void Update(const glm::mat4& viewProj) {
+        for (int i = 0; i < 3; ++i) {
+            for (int j = 0; j < 4; ++j) {
+                planes[i * 2][j] = viewProj[j][3] + viewProj[j][i];
+                planes[i * 2 + 1][j] = viewProj[j][3] - viewProj[j][i];
+            }
+        }
+        for (int i = 0; i < 6; ++i) {
+            float length = glm::length(glm::vec3(planes[i]));
+            planes[i] /= length;
+        }
+    }
+
+    bool IsBoxVisible(const glm::vec3& min, const glm::vec3& max) const {
+        for (int i = 0; i < 6; i++) {
+            if (glm::dot(planes[i], glm::vec4(min.x, min.y, min.z, 1.0f)) < 0.0f &&
+                glm::dot(planes[i], glm::vec4(max.x, min.y, min.z, 1.0f)) < 0.0f &&
+                glm::dot(planes[i], glm::vec4(min.x, max.y, min.z, 1.0f)) < 0.0f &&
+                glm::dot(planes[i], glm::vec4(max.x, max.y, min.z, 1.0f)) < 0.0f &&
+                glm::dot(planes[i], glm::vec4(min.x, min.y, max.z, 1.0f)) < 0.0f &&
+                glm::dot(planes[i], glm::vec4(max.x, min.y, max.z, 1.0f)) < 0.0f &&
+                glm::dot(planes[i], glm::vec4(min.x, max.y, max.z, 1.0f)) < 0.0f &&
+                glm::dot(planes[i], glm::vec4(max.x, max.y, max.z, 1.0f)) < 0.0f)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
 class World {
 private:
     WorldConfig m_config;
     TerrainGenerator m_generator;
-    
-    // NOTE: Pointers to Pool and ThreadPool
-    // We use pointers or unique_ptr to control destruction order explicitly
-    std::unique_ptr<ThreadPool> m_pool;
+    ThreadPool m_pool;
     
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
     ObjectPool<ChunkNode> m_chunkPool;
+
     std::mutex m_queueMutex;
     std::queue<ChunkNode*> m_generatedQueue; 
     std::queue<ChunkNode*> m_meshedQueue;    
+    
     int lastPx = -99999, lastPz = -99999;
     int updateTimer = 0;
     
     std::atomic<bool> m_shutdown{false};
+    Frustum m_frustum; // Reused per frame
 
     struct ChunkRequest {
         int x, y, z;
@@ -136,28 +181,15 @@ private:
 
 public:
     World(WorldConfig config) : m_config(config), m_generator(config) {
-        // Init ThreadPool
-        m_pool = std::make_unique<ThreadPool>();
-        
-        // Init ChunkPool
         int r = m_config.renderDistance + 5; 
         size_t maxChunks = (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
         m_chunkPool.Init(maxChunks);
     }
 
     ~World() { 
-        // 1. Signal shutdown to stop new tasks
         m_shutdown = true;
-        
-        // 2. Destroy ThreadPool first. 
-        // This blocks until all currently running tasks finish.
-        // Since we set m_shutdown, pending tasks in queue might exit early if we check for it.
-        // ThreadPool destructor calls join().
-        m_pool.reset(); 
-
-        // 3. Now it is safe to delete data
+        // Destruct pool implicitly joins threads
         m_chunks.clear();
-        // chunkPool handles its own memory
     }
 
     void Update(glm::vec3 cameraPos) {
@@ -180,6 +212,7 @@ public:
         }
     }
 
+    // ... (QueueNewChunks, UnloadChunks, Tasks, ProcessQueues, FillChunk remain same)
     void QueueNewChunks(int px, int pz) {
         int r = m_config.renderDistance;
         int h = m_config.worldHeightChunks;
@@ -218,7 +251,7 @@ public:
                     newNode->Reset(req.x, req.y, req.z);
                     m_chunks[key] = newNode;
                     newNode->state = ChunkState::GENERATING;
-                    m_pool->enqueue([this, newNode]() { this->Task_Generate(newNode); });
+                    m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
                     queued++;
                 }
             }
@@ -243,27 +276,24 @@ public:
     }
 
     void Task_Generate(ChunkNode* node) {
-        if (m_shutdown) return; // Exit early if shutting down
+        if (m_shutdown) return;
         FillChunk(node->chunk, node->cx, node->cy, node->cz);
-        
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_generatedQueue.push(node);
     }
 
     void Task_Mesh(ChunkNode* node) {
-        if (m_shutdown) return; // Exit early
+        if (m_shutdown) return;
         LinearAllocator<PackedVertex> threadAllocator(200000); 
         MeshChunk(node->chunk, threadAllocator, 0, false);
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
-        
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_meshedQueue.push(node);
     }
 
     void ProcessQueues() {
         std::lock_guard<std::mutex> lock(m_queueMutex);
-        int processed = 0; 
-        const int LIMIT = 200;
+        int processed = 0; const int LIMIT = 200;
 
         while (!m_generatedQueue.empty() && processed < LIMIT) {
             ChunkNode* node = m_generatedQueue.front(); m_generatedQueue.pop();
@@ -272,7 +302,7 @@ public:
                     node->state = ChunkState::ACTIVE;
                 } else {
                     node->state = ChunkState::MESHING;
-                    m_pool->enqueue([this, node]() { this->Task_Mesh(node); });
+                    m_pool.enqueue([this, node]() { this->Task_Mesh(node); });
                 }
             }
             processed++;
@@ -280,15 +310,12 @@ public:
 
         while (!m_meshedQueue.empty() && processed < LIMIT) {
             ChunkNode* node = m_meshedQueue.front(); m_meshedQueue.pop();
-            if (node->state == ChunkState::MESHING) {
-                node->state = ChunkState::ACTIVE;
-            }
+            if (node->state == ChunkState::MESHING) node->state = ChunkState::ACTIVE;
             processed++;
         }
     }
 
     void FillChunk(Chunk& chunk, int cx, int cy, int cz) {
-        // Safe access because this node is exclusive to this thread
         chunk.worldX = cx * CHUNK_SIZE;
         chunk.worldY = cy * CHUNK_SIZE;
         chunk.worldZ = cz * CHUNK_SIZE;
@@ -340,12 +367,20 @@ public:
         }
     }
 
+    // -------------------------------------------------------------------------
+    // DRAW (With Frustum Culling)
+    // -------------------------------------------------------------------------
     void Draw(RingBufferSSBO& renderer, LinearAllocator<PackedVertex>& scratch, Shader& shader, const glm::mat4& viewProj) {
         scratch.Reset();
+        
+        // Update Frustum Planes
+        m_frustum.Update(viewProj);
+
         const int MAX_BATCH = 64; 
         std::vector<glm::vec3> batchOffsets;
         batchOffsets.reserve(MAX_BATCH);
         int currentBatchCount = 0;
+        bool bufferFull = false;
 
         auto FlushBatch = [&]() {
             if (currentBatchCount == 0) return;
@@ -362,11 +397,23 @@ public:
 
         for (auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
+            
+            // 1. State Check
             if (node->state != ChunkState::ACTIVE) continue;
+            // 2. Empty Check
             if (node->cachedMesh.empty()) continue;
+            // 3. Frustum Check (Optimization)
+            if (!m_frustum.IsBoxVisible(node->minAABB, node->maxAABB)) continue;
 
             PackedVertex* dest = scratch.Allocate(node->cachedMesh.size());
-            if (!dest) break; 
+            if (!dest) {
+                if (!bufferFull) {
+                    std::cout << "[Warning] Scratch Buffer Full!" << std::endl;
+                    bufferFull = true;
+                }
+                // Stop adding chunks to this frame, but flush what we have
+                break; 
+            }
 
             memcpy(dest, node->cachedMesh.data(), node->cachedMesh.size() * sizeof(PackedVertex));
             

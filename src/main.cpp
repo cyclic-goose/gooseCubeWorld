@@ -25,6 +25,10 @@ float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 bool keyProcessed = false; 
 
+// This global config is our "State" for the application.
+// When we change it (via keys), we must call world.Reload() to apply changes.
+WorldConfig globalConfig;
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     if (firstMouse) { lastX = xpos; lastY = ypos; firstMouse = false; }
@@ -32,14 +36,14 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     lastX = xpos; lastY = ypos;
 }
 
-WorldConfig globalConfig;
-
 void processInput(GLFWwindow *window, World& world) {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
     
+    // Speed Boost
     if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.MovementSpeed = 250.0f;
     else camera.MovementSpeed = 50.0f;
 
+    // Movement
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT, deltaTime);
@@ -47,12 +51,16 @@ void processInput(GLFWwindow *window, World& world) {
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
 
+    // Toggles
     if (!keyProcessed) {
+        // [R] Regenerate World
         if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
             globalConfig.seed = rand();
+            std::cout << "[System] Regenerating... Seed: " << globalConfig.seed << std::endl;
             world.Reload(globalConfig);
             keyProcessed = true;
         }
+        // [TAB] Wireframe Toggle
         if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS) {
             static bool wire = false;
             wire = !wire;
@@ -71,7 +79,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Massive Scale", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Infinite World", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -80,46 +88,49 @@ int main() {
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
     {
-        // --- REVERSE-Z SETUP ---
-        // 1. Map NDC Depth to [0, 1] 
+        // --- 1. REVERSE-Z & RENDER SETUP ---
+        // Map NDC Depth to [0, 1] for infinite far plane support
         glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
-        
         glEnable(GL_DEPTH_TEST);
-        
-        // 2. Pass if Greater or Equal (Near is 1.0, Far is 0.0)
+        // Pass if Greater or Equal (Near is 1.0, Far is 0.0)
         glDepthFunc(GL_GEQUAL); 
-        
-        // 3. Clear to 0.0 (Far plane)
+        // Clear Depth buffer to 0.0 (Far plane)
         glClearDepth(0.0f);
 
         glDisable(GL_CULL_FACE); 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
 
-        // Buffers
+        // --- 2. RESOURCE ALLOCATION ---
+        // GPU Buffer: 20 Million Vertices
         const int MAX_VERTS = 20000000; 
         RingBufferSSBO renderer(MAX_VERTS * sizeof(PackedVertex), sizeof(PackedVertex)); 
+        
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
+        
+        // CPU Buffer: 256 MB Scratch space per frame
         LinearAllocator<PackedVertex> scratch(256 * 1024 * 1024); 
 
-        // Config
+        // --- 3. WORLD CONFIGURATION ---
         globalConfig.seed = 1337;
-        globalConfig.renderDistance = 32; 
+        globalConfig.renderDistance = 40; 
+        globalConfig.worldHeightChunks = 4;
         
-        globalConfig.scale = 0.02f;           
-        globalConfig.hillAmplitude = 15.0f;   
-        globalConfig.mountainAmplitude = 50.0f; 
+        globalConfig.scale = 0.15f;           
+        globalConfig.hillAmplitude = 40.0f;   
+        globalConfig.mountainAmplitude = 90.0f; 
         globalConfig.seaLevel = 10;
         globalConfig.enableCaves = false;      
         
         World world(globalConfig);
 
+        // --- 4. RENDER LOOP ---
         while (!glfwWindowShouldClose(window)) {
             float currentFrame = (float)glfwGetTime();
             deltaTime = currentFrame - lastFrame;
             lastFrame = currentFrame;
             processInput(window, world);
 
-            // Update World
+            // Trigger World Streaming Updates
             world.Update(camera.Position);
 
             std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + " | Pos: " 
@@ -131,12 +142,14 @@ int main() {
             // Clear buffers (Depth 0.0 for Reverse-Z)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            // --- INFINITE REVERSE-Z PROJECTION ---
-            // Uses helper directly from camera class
+            // Use Camera class helper for Infinite Reverse-Z Projection
+            // Aspect Ratio, Z-Near (0.1f)
+            // Z-Far is handled internally by the class as infinite (0.0)
             glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
 
+            // Draw World
             world.Draw(renderer, scratch, worldShader, viewProj);
 
             glfwSwapBuffers(window);
