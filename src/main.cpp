@@ -9,6 +9,7 @@
 #include "world.h" 
 #include "camera.h"
 #include "shader.h"
+#include "ImGuiManager.hpp"
 
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
@@ -117,13 +118,14 @@ int main() {
         //
         // Stacking Strategy: Increase radius for higher LODs so they stick out 
         // from underneath the detailed layers.
-        globalConfig.lodCount = 5; 
+        globalConfig.lodCount = 6; 
         globalConfig.lodRadius[0] = 10; 
         globalConfig.lodRadius[1] = 10; 
         globalConfig.lodRadius[2] = 16; 
         globalConfig.lodRadius[3] = 24; 
         globalConfig.lodRadius[4] = 32;
-        //globalConfig.lodRadius[5] = 32;
+        globalConfig.lodRadius[5] = 20;
+        //globalConfig.lodRadius[6] = 20;
 
         globalConfig.scale = 0.02f;           
         globalConfig.hillAmplitude = 15.0f;  
@@ -134,7 +136,8 @@ int main() {
         globalConfig.enableCaves = false;      
         
         World world(globalConfig);
-
+        ImGuiManager gui;
+        gui.Init(window);
 
         // --- CALCULATE RENDER DISTANCE ---
             int maxDistBlocks = 0;
@@ -160,15 +163,21 @@ int main() {
 
             world.Update(camera.Position);
 
-            
+            // 1. Start UI Frame
+            gui.BeginFrame();
 
-            std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + 
-                " | Dist: " + std::to_string(effectiveChunks) + " chunks (" + s_km + "km)" +
-                " | Pos: " 
-                + std::to_string((int)camera.Position.x) + ", " 
-                + std::to_string((int)camera.Position.y) + ", " 
-                + std::to_string((int)camera.Position.z);
-            glfwSetWindowTitle(window, title.c_str());
+            // 2. Draw UI (Menu, Overlay, or your own ImGui calls)
+            if (gui.RenderStandardMenu()) {
+                glfwSetWindowShouldClose(window, true);
+            }
+
+            // std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + 
+            //     " | Dist: " + std::to_string(effectiveChunks) + " chunks (" + s_km + "km)" +
+            //     " | Pos: " 
+            //     + std::to_string((int)camera.Position.x) + ", " 
+            //     + std::to_string((int)camera.Position.y) + ", " 
+            //     + std::to_string((int)camera.Position.z);
+            // glfwSetWindowTitle(window, title.c_str());
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -177,7 +186,12 @@ int main() {
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
 
+            // ************* World DRAW call
             world.Draw(worldShader, viewProj);
+
+
+            // ************* ImGui Draw call
+            gui.EndFrame();
 
             glfwSwapBuffers(window);
             glfwPollEvents();
