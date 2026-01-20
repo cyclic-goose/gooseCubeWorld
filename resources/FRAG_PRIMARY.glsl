@@ -9,20 +9,19 @@ out vec4 FragColor;
 
 void main()
 {
-    // Procedural Grid Check (No Texture Required)
-    // Creates a 1x1 checkerboard pattern on the blocks.
-    // If you see this pattern cleanly, your UVs and Geometry are correct.
+    // Procedural Grid Pattern
     vec2 uv = v_TexCoord;
     bool pattern = (mod(floor(uv.x) + floor(uv.y), 2.0) == 0.0);
     
+    // Colors
     vec3 baseColor = pattern ? vec3(0.8) : vec3(0.4);
     
-    // Tint based on Normal to see faces
-    vec3 tint = v_Color;
-    
-    // Simple Lambert Lighting
+    // Lighting (Simple Lambert)
     vec3 sunDir = normalize(vec3(0.2, 1.0, 0.3));
-    float diff = max(dot(v_Normal, sunDir), 0.3); // 0.3 is Ambient floor
+    float diff = max(dot(v_Normal, sunDir), 0.3); // 0.3 ambient
 
-    FragColor = vec4(baseColor * tint * diff, 1.0);
+    // Tint based on block type/normals for now
+    vec3 finalColor = baseColor * v_Color * diff;
+
+    FragColor = vec4(finalColor, 1.0);
 }

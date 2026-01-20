@@ -20,9 +20,8 @@ inline void PrintVert(float x, float y, float z, int axis) {
     std::cout << "  V(" << x << ", " << y << ", " << z << ") Face: " << axis << std::endl;
 }
 
-// Added 'int chunkId' parameter (default 0)
-inline void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, int chunkId, bool debug = false) {
-    if (debug) std::cout << "--- Meshing Chunk " << chunkId << " ---" << std::endl;
+inline void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, bool debug = false) {
+    if (debug) std::cout << "--- Meshing Chunk ---" << std::endl;
     int quadCount = 0;
 
     for (int face = 0; face < 6; face++) {
@@ -83,6 +82,15 @@ inline void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocat
                     int h = height;
                     quadCount++;
 
+                    // Grab block ID for texture from the first block in the quad
+                    // (Since we merged them, we assume they are roughly the same)
+                    int bx, by, bz;
+                    if (axis == 0)      { bx = slice; by = u + 1; bz = v + 1; }
+                    else if (axis == 1) { bx = v + 1; by = slice; bz = u + 1; }
+                    else                { bx = u + 1; by = v + 1; bz = slice; }
+                    
+                    uint32_t texID = chunk.Get(bx, by, bz);
+
                     auto PushVert = [&](int du, int dv) {
                         float vx, vy, vz;
                         int r_row = v + dv; 
@@ -100,10 +108,8 @@ inline void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocat
                             if (axis == 2) vz += 1.0f;
                         }
 
-                        if (debug) PrintVert(vx, vy, vz, face);
-                        
-                        // PASS chunkId HERE
-                        allocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f, chunkId));
+                        // UPDATED: Use the 8-byte packing constructor
+                        allocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f, texID));
                     };
 
                     if (direction == 1) {

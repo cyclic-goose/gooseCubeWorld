@@ -15,21 +15,11 @@
 
 #include "chunk.h"
 #include "mesher.h"
+#include "ringBufferSSBO.h"
 #include "linearAllocator.h"
 #include "shader.h"
 #include "threadpool.h"
 #include "chunk_pool.h"
-#include "gpu_memory.h"
-#include "packedVertex.h" 
-
-struct DrawArraysIndirectCommand {
-    uint32_t count;
-    uint32_t instanceCount;
-    uint32_t first;
-    uint32_t baseInstance;
-};
-
-
 
 struct WorldConfig {
     int seed = 1337;
@@ -56,11 +46,7 @@ struct ChunkNode {
     std::vector<PackedVertex> cachedMesh; 
     std::atomic<ChunkState> state{ChunkState::MISSING};
     
-    // GPU Handles
-    long long gpuOffset = -1; 
-    size_t vertexCount = 0;
-
-    // Bounding Box
+    // Bounding Box for Culling
     glm::vec3 minAABB;
     glm::vec3 maxAABB;
 
@@ -68,6 +54,7 @@ struct ChunkNode {
         cx = x; cy = y; cz = z;
         position = glm::vec3(x * CHUNK_SIZE, y * CHUNK_SIZE, z * CHUNK_SIZE);
         
+        // Pre-calculate AABB for frustum culling
         minAABB = position;
         maxAABB = position + glm::vec3(CHUNK_SIZE);
 
@@ -77,11 +64,10 @@ struct ChunkNode {
         state = ChunkState::MISSING;
         cachedMesh.clear();
         chunk.isUniform = false;
-        gpuOffset = -1;
-        vertexCount = 0;
     }
 };
 
+// ... (TerrainGenerator remains the same) ...
 class TerrainGenerator {
 private:
     FastNoise::SmartNode<> m_baseNoise;
@@ -134,8 +120,10 @@ inline int64_t ChunkKey(int x, int y, int z) {
     return (ux << 40) | (uz << 16) | uy;
 }
 
+// Simple Frustum Culling Helper
 struct Frustum {
     glm::vec4 planes[6];
+
     void Update(const glm::mat4& viewProj) {
         for (int i = 0; i < 3; ++i) {
             for (int j = 0; j < 4; ++j) {
@@ -148,6 +136,7 @@ struct Frustum {
             planes[i] /= length;
         }
     }
+
     bool IsBoxVisible(const glm::vec3& min, const glm::vec3& max) const {
         for (int i = 0; i < 6; i++) {
             if (glm::dot(planes[i], glm::vec4(min.x, min.y, min.z, 1.0f)) < 0.0f &&
@@ -158,7 +147,9 @@ struct Frustum {
                 glm::dot(planes[i], glm::vec4(max.x, min.y, max.z, 1.0f)) < 0.0f &&
                 glm::dot(planes[i], glm::vec4(min.x, max.y, max.z, 1.0f)) < 0.0f &&
                 glm::dot(planes[i], glm::vec4(max.x, max.y, max.z, 1.0f)) < 0.0f)
+            {
                 return false;
+            }
         }
         return true;
     }
@@ -168,185 +159,60 @@ class World {
 private:
     WorldConfig m_config;
     TerrainGenerator m_generator;
+    ThreadPool m_pool;
     
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
     ObjectPool<ChunkNode> m_chunkPool;
-    // THREAD POOL MUST BE LAST to destroy threads before pool
-    ThreadPool m_pool; 
 
     std::mutex m_queueMutex;
     std::queue<ChunkNode*> m_generatedQueue; 
     std::queue<ChunkNode*> m_meshedQueue;    
+    
     int lastPx = -99999, lastPz = -99999;
     int updateTimer = 0;
-    std::atomic<bool> m_shutdown{false};
-    Frustum m_frustum;
-
-    // --- GPU RESOURCES ---
-    std::unique_ptr<GpuMemoryManager> m_gpuMemory;
-    GLuint m_indirectBuffer; 
-    GLuint m_batchSSBO; 
     
-    // FIX 1: DUMMY VAO FOR CORE PROFILE
-    GLuint m_dummyVAO; 
+    std::atomic<bool> m_shutdown{false};
+    Frustum m_frustum; // Reused per frame
 
-    struct ChunkRequest { int x, y, z; int distSq; };
+    struct ChunkRequest {
+        int x, y, z;
+        int distSq;
+    };
 
 public:
     World(WorldConfig config) : m_config(config), m_generator(config) {
         int r = m_config.renderDistance + 5; 
         size_t maxChunks = (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
         m_chunkPool.Init(maxChunks);
-
-        m_gpuMemory = std::make_unique<GpuMemoryManager>(512 * 1024 * 1024);
-
-        glCreateBuffers(1, &m_indirectBuffer);
-        glNamedBufferStorage(m_indirectBuffer, maxChunks * sizeof(DrawArraysIndirectCommand), nullptr, GL_DYNAMIC_STORAGE_BIT);
-
-        glCreateBuffers(1, &m_batchSSBO);
-        glNamedBufferStorage(m_batchSSBO, maxChunks * sizeof(glm::vec4), nullptr, GL_DYNAMIC_STORAGE_BIT);
-
-        // FIX 1: Create the dummy VAO
-        glCreateVertexArrays(1, &m_dummyVAO);
     }
 
     ~World() { 
         m_shutdown = true;
+        // Destruct pool implicitly joins threads
         m_chunks.clear();
-        glDeleteBuffers(1, &m_indirectBuffer);
-        glDeleteBuffers(1, &m_batchSSBO);
-        glDeleteVertexArrays(1, &m_dummyVAO);
     }
 
     void Update(glm::vec3 cameraPos) {
         if (m_shutdown) return;
+
         int px = (int)floor(cameraPos.x / CHUNK_SIZE);
         int pz = (int)floor(cameraPos.z / CHUNK_SIZE);
 
-        ProcessQueues(); 
+        ProcessQueues();
 
         if (px != lastPx || pz != lastPz) {
             UnloadChunks(px, pz);
             lastPx = px; lastPz = pz;
         }
+
         updateTimer++;
-        if (updateTimer > 5) {
+        if (updateTimer > 10) {
             QueueNewChunks(px, pz);
             updateTimer = 0;
         }
     }
 
-    void ProcessQueues() {
-        std::lock_guard<std::mutex> lock(m_queueMutex);
-        int processed = 0; 
-        
-        while (!m_generatedQueue.empty() && processed < 50) {
-            ChunkNode* node = m_generatedQueue.front(); m_generatedQueue.pop();
-            if (node->state == ChunkState::GENERATING) {
-                if (node->chunk.isUniform && node->chunk.uniformID == 0) node->state = ChunkState::ACTIVE;
-                else {
-                    node->state = ChunkState::MESHING;
-                    m_pool.enqueue([this, node]() { this->Task_Mesh(node); });
-                }
-            }
-            processed++;
-        }
-
-        while (!m_meshedQueue.empty() && processed < 50) {
-            ChunkNode* node = m_meshedQueue.front(); m_meshedQueue.pop();
-            if (node->state == ChunkState::MESHING) {
-                if (!node->cachedMesh.empty()) {
-                    size_t bytes = node->cachedMesh.size() * sizeof(PackedVertex);
-                    
-                    // FIX 2: Align by 8 bytes (sizeof PackedVertex)
-                    long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
-                    
-                    if (offset != -1) {
-                        m_gpuMemory->Upload(offset, node->cachedMesh.data(), bytes);
-                        node->gpuOffset = offset;
-                        node->vertexCount = node->cachedMesh.size();
-                        node->cachedMesh.clear(); 
-                        node->cachedMesh.shrink_to_fit();
-                    }
-                }
-                node->state = ChunkState::ACTIVE;
-            }
-            processed++;
-        }
-    }
-
-    void UnloadChunks(int px, int pz) {
-        int r = m_config.renderDistance + 4; 
-        std::vector<int64_t> toRemove;
-        
-        for (auto& pair : m_chunks) {
-            ChunkNode* node = pair.second;
-            if (abs(node->cx - px) > r || abs(node->cz - pz) > r) {
-                ChunkState s = node->state.load();
-                if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
-                    if (node->gpuOffset != -1) {
-                        m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
-                        node->gpuOffset = -1;
-                    }
-                    toRemove.push_back(pair.first);
-                    m_chunkPool.Release(node); 
-                }
-            }
-        }
-        for (auto k : toRemove) m_chunks.erase(k);
-    }
-
-    void Draw(Shader& shader, const glm::mat4& viewProj) {
-        m_frustum.Update(viewProj);
-
-        static std::vector<DrawArraysIndirectCommand> commands;
-        static std::vector<glm::vec4> batchOffsets;
-        commands.clear();
-        batchOffsets.clear();
-
-        int instanceID = 0;
-        for (auto& pair : m_chunks) {
-            ChunkNode* node = pair.second;
-            
-            if (node->state != ChunkState::ACTIVE) continue;
-            if (node->gpuOffset == -1) continue; 
-            if (!m_frustum.IsBoxVisible(node->minAABB, node->maxAABB)) continue;
-
-            DrawArraysIndirectCommand cmd;
-            cmd.count = (uint32_t)node->vertexCount;
-            cmd.instanceCount = 1;
-            
-            // MDI requires the offset index to be aligned to the stride of the data
-            cmd.first = (uint32_t)(node->gpuOffset / sizeof(PackedVertex)); 
-            cmd.baseInstance = instanceID; 
-
-            commands.push_back(cmd);
-            batchOffsets.push_back(glm::vec4(node->position, 0.0f));
-            
-            instanceID++;
-        }
-
-        if (commands.empty()) return;
-
-        glNamedBufferSubData(m_indirectBuffer, 0, commands.size() * sizeof(DrawArraysIndirectCommand), commands.data());
-        glNamedBufferSubData(m_batchSSBO, 0, batchOffsets.size() * sizeof(glm::vec4), batchOffsets.data());
-
-        shader.use();
-        glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
-        
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_batchSSBO);
-
-        // FIX 1: Bind the valid dummy VAO (Do not bind 0!)
-        glBindVertexArray(m_dummyVAO);
-        
-        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_indirectBuffer);
-        glMultiDrawArraysIndirect(GL_TRIANGLES, 0, (GLsizei)commands.size(), 0);
-        glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
-        
-        glBindVertexArray(0); // Clean up after
-    }
-
+    // ... (QueueNewChunks, UnloadChunks, Tasks, ProcessQueues, FillChunk remain same)
     void QueueNewChunks(int px, int pz) {
         int r = m_config.renderDistance;
         int h = m_config.worldHeightChunks;
@@ -392,6 +258,23 @@ public:
         }
     }
 
+    void UnloadChunks(int px, int pz) {
+        int r = m_config.renderDistance + 4; 
+        std::vector<int64_t> toRemove;
+        
+        for (auto& pair : m_chunks) {
+            ChunkNode* node = pair.second;
+            if (abs(node->cx - px) > r || abs(node->cz - pz) > r) {
+                ChunkState s = node->state.load();
+                if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
+                    toRemove.push_back(pair.first);
+                    m_chunkPool.Release(node); 
+                }
+            }
+        }
+        for (auto k : toRemove) m_chunks.erase(k);
+    }
+
     void Task_Generate(ChunkNode* node) {
         if (m_shutdown) return;
         FillChunk(node->chunk, node->cx, node->cy, node->cz);
@@ -400,11 +283,36 @@ public:
     }
 
     void Task_Mesh(ChunkNode* node) {
+        if (m_shutdown) return;
         LinearAllocator<PackedVertex> threadAllocator(200000); 
-        MeshChunk(node->chunk, threadAllocator, false);
+        MeshChunk(node->chunk, threadAllocator, 0, false);
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_meshedQueue.push(node);
+    }
+
+    void ProcessQueues() {
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        int processed = 0; const int LIMIT = 200;
+
+        while (!m_generatedQueue.empty() && processed < LIMIT) {
+            ChunkNode* node = m_generatedQueue.front(); m_generatedQueue.pop();
+            if (node->state == ChunkState::GENERATING) {
+                if (node->chunk.isUniform && node->chunk.uniformID == 0) {
+                    node->state = ChunkState::ACTIVE;
+                } else {
+                    node->state = ChunkState::MESHING;
+                    m_pool.enqueue([this, node]() { this->Task_Mesh(node); });
+                }
+            }
+            processed++;
+        }
+
+        while (!m_meshedQueue.empty() && processed < LIMIT) {
+            ChunkNode* node = m_meshedQueue.front(); m_meshedQueue.pop();
+            if (node->state == ChunkState::MESHING) node->state = ChunkState::ACTIVE;
+            processed++;
+        }
     }
 
     void FillChunk(Chunk& chunk, int cx, int cy, int cz) {
@@ -459,6 +367,68 @@ public:
         }
     }
 
+    // -------------------------------------------------------------------------
+    // DRAW (With Frustum Culling)
+    // -------------------------------------------------------------------------
+    void Draw(RingBufferSSBO& renderer, LinearAllocator<PackedVertex>& scratch, Shader& shader, const glm::mat4& viewProj) {
+        scratch.Reset();
+        
+        // Update Frustum Planes
+        m_frustum.Update(viewProj);
+
+        const int MAX_BATCH = 64; 
+        std::vector<glm::vec3> batchOffsets;
+        batchOffsets.reserve(MAX_BATCH);
+        int currentBatchCount = 0;
+        bool bufferFull = false;
+
+        auto FlushBatch = [&]() {
+            if (currentBatchCount == 0) return;
+            void* gpuPtr = renderer.LockNextSegment();
+            memcpy(gpuPtr, scratch.Data(), scratch.SizeBytes());
+            shader.use();
+            glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
+            glUniform3fv(glGetUniformLocation(shader.ID, "u_ChunkOffsets"), currentBatchCount, glm::value_ptr(batchOffsets[0]));
+            renderer.UnlockAndDraw(scratch.Count());
+            scratch.Reset();
+            batchOffsets.clear();
+            currentBatchCount = 0;
+        };
+
+        for (auto& pair : m_chunks) {
+            ChunkNode* node = pair.second;
+            
+            // 1. State Check
+            if (node->state != ChunkState::ACTIVE) continue;
+            // 2. Empty Check
+            if (node->cachedMesh.empty()) continue;
+            // 3. Frustum Check (Optimization)
+            if (!m_frustum.IsBoxVisible(node->minAABB, node->maxAABB)) continue;
+
+            PackedVertex* dest = scratch.Allocate(node->cachedMesh.size());
+            if (!dest) {
+                if (!bufferFull) {
+                    std::cout << "[Warning] Scratch Buffer Full!" << std::endl;
+                    bufferFull = true;
+                }
+                // Stop adding chunks to this frame, but flush what we have
+                break; 
+            }
+
+            memcpy(dest, node->cachedMesh.data(), node->cachedMesh.size() * sizeof(PackedVertex));
+            
+            uint32_t batchIDMask = (uint32_t)currentBatchCount << 16;
+            size_t count = node->cachedMesh.size();
+            for(size_t i=0; i<count; i++) dest[i].data2 = (dest[i].data2 & 0xFFFF) | batchIDMask;
+
+            batchOffsets.push_back(node->position);
+            currentBatchCount++;
+
+            if (currentBatchCount >= MAX_BATCH) FlushBatch();
+        }
+        FlushBatch();
+    }
+    
     void Reload(WorldConfig newConfig) {
         m_config = newConfig;
         m_generator = TerrainGenerator(m_config);
