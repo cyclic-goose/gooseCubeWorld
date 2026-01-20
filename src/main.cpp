@@ -71,7 +71,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Threaded Streaming", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Refactored System", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -97,7 +97,7 @@ int main() {
         globalConfig.seed = 1337;
         globalConfig.renderDistance = 20; 
         
-        globalConfig.scale = 0.06f;           
+        globalConfig.scale = 0.02f;           
         globalConfig.hillAmplitude = 15.0f;   
         globalConfig.mountainAmplitude = 50.0f; 
         globalConfig.seaLevel = 10;
@@ -116,6 +116,7 @@ int main() {
 
             std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + " | Pos: " 
                 + std::to_string((int)camera.Position.x) + ", " 
+                + std::to_string((int)camera.Position.y) + ", " 
                 + std::to_string((int)camera.Position.z);
             glfwSetWindowTitle(window, title.c_str());
 

@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <mutex>
 #include <queue>
+#include <atomic>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -18,6 +19,7 @@
 #include "linearAllocator.h"
 #include "shader.h"
 #include "threadpool.h"
+#include "chunk_pool.h"
 
 // -----------------------------------------------------------------------------
 // CONFIGURATION
@@ -25,18 +27,45 @@
 struct WorldConfig {
     int seed = 1337;
     int renderDistance = 16;      
+    int worldHeightChunks = 8;    
+    
     float scale = 0.02f;          
     float hillAmplitude = 15.0f;  
     float hillFrequency = 1.0f;   
-    float mountainAmplitude = 50.0f; 
+    float mountainAmplitude = 80.0f; 
     float mountainFrequency = 0.5f; 
-    int seaLevel = 0;            
+    int seaLevel = 10;            
     bool enableCaves = false;     
     float caveThreshold = 0.5f;   
 };
 
 // -----------------------------------------------------------------------------
-// TERRAIN GENERATOR (Thread Safe Copy)
+// CHUNK NODE
+// -----------------------------------------------------------------------------
+enum class ChunkState { MISSING, GENERATING, GENERATED, MESHING, MESHED, ACTIVE };
+
+struct ChunkNode {
+    Chunk chunk;
+    glm::vec3 position;
+    int cx, cy, cz; 
+    
+    std::vector<PackedVertex> cachedMesh; 
+    std::atomic<ChunkState> state{ChunkState::MISSING};
+    
+    void Reset(int x, int y, int z) {
+        cx = x; cy = y; cz = z;
+        position = glm::vec3(x * CHUNK_SIZE, y * CHUNK_SIZE, z * CHUNK_SIZE);
+        chunk.worldX = (int)position.x;
+        chunk.worldY = (int)position.y;
+        chunk.worldZ = (int)position.z;
+        state = ChunkState::MISSING;
+        cachedMesh.clear();
+        chunk.isUniform = false;
+    }
+};
+
+// -----------------------------------------------------------------------------
+// TERRAIN GENERATOR
 // -----------------------------------------------------------------------------
 class TerrainGenerator {
 private:
@@ -67,15 +96,12 @@ public:
     int GetHeight(float x, float z) const {
         float nx = x * m_config.scale;
         float nz = z * m_config.scale;
-        
         float baseVal = m_baseNoise->GenSingle2D(nx * m_config.hillFrequency, nz * m_config.hillFrequency, m_config.seed);
         float hillHeight = baseVal * m_config.hillAmplitude;
-
         float mountainVal = m_mountainNoise->GenSingle2D(nx * m_config.mountainFrequency, nz * m_config.mountainFrequency, m_config.seed + 1);
         mountainVal = std::abs(mountainVal); 
         mountainVal = std::pow(mountainVal, 2.0f); 
         float mountainHeight = mountainVal * m_config.mountainAmplitude;
-
         return m_config.seaLevel + (int)(hillHeight + mountainHeight);
     }
 
@@ -84,242 +110,221 @@ public:
         float val = m_caveNoise->GenSingle3D(x * 0.02f, y * 0.04f, z * 0.02f, m_config.seed);
         return val > m_config.caveThreshold;
     }
-
-    const WorldConfig& GetConfig() const { return m_config; }
 };
 
-// -----------------------------------------------------------------------------
-// CHUNK NODE & COORDINATE HASHING
-// -----------------------------------------------------------------------------
-// Packs X,Z into a single 64-bit int for map keys. 
-// Assumes chunk coords fit in 32 bits (Range +/- 2 Billion).
-inline int64_t ChunkKey(int x, int z) {
-    return ((int64_t)x << 32) | ((int64_t)z & 0xFFFFFFFF);
+inline int64_t ChunkKey(int x, int y, int z) {
+    uint64_t ux = (uint64_t)(uint32_t)x & 0xFFFFFF; 
+    uint64_t uz = (uint64_t)(uint32_t)z & 0xFFFFFF; 
+    uint64_t uy = (uint64_t)(uint32_t)y & 0xFFFF;   
+    return (ux << 40) | (uz << 16) | uy;
 }
 
-enum class ChunkState {
-    MISSING,
-    GENERATING, // In thread pool
-    GENERATED,  // Terrain done, waiting for mesh
-    MESHING,    // In thread pool
-    MESHED,     // Mesh done, waiting for upload
-    ACTIVE      // On GPU / Ready to Draw
-};
-
-struct ChunkNode {
-    Chunk chunk;
-    glm::vec3 position;
-    int cx, cz; // Chunk Coordinates
-    
-    std::vector<PackedVertex> cachedMesh; 
-    std::atomic<ChunkState> state{ChunkState::MISSING};
-    
-    ChunkNode(int x, int z) : cx(x), cz(z), position(x * CHUNK_SIZE, 0, z * CHUNK_SIZE) {
-        chunk.worldX = (int)position.x;
-        chunk.worldY = (int)position.y;
-        chunk.worldZ = (int)position.z;
-    }
-};
-
-// -----------------------------------------------------------------------------
-// WORLD CLASS (STREAMING)
-// -----------------------------------------------------------------------------
 class World {
 private:
     WorldConfig m_config;
     TerrainGenerator m_generator;
     ThreadPool m_pool;
-
-    // Chunk Storage
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
-    
-    // Coordination Queues (Thread Safe)
-    std::mutex m_resultMutex;
-    std::queue<ChunkNode*> m_generatedQueue; // Chunks finished generating
-    std::queue<ChunkNode*> m_meshedQueue;    // Chunks finished meshing
+    ObjectPool<ChunkNode> m_chunkPool;
+    std::mutex m_queueMutex;
+    std::queue<ChunkNode*> m_generatedQueue; 
+    std::queue<ChunkNode*> m_meshedQueue;    
+    int lastPx = -99999, lastPz = -99999;
+
+    struct ChunkRequest {
+        int x, y, z;
+        int distSq;
+    };
 
 public:
     World(WorldConfig config) : m_config(config), m_generator(config), m_pool() {
-        // No initial generation loop here. We let Update() handle it.
+        int r = m_config.renderDistance + 5; 
+        size_t maxChunks = (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
+        m_chunkPool.Init(maxChunks);
     }
 
-    ~World() {
-        // Cleanup memory
-        for (auto& pair : m_chunks) {
-            delete pair.second;
+    ~World() { 
+        m_chunks.clear();
+    }
+
+    void Update(glm::vec3 cameraPos) {
+        int px = (int)floor(cameraPos.x / CHUNK_SIZE);
+        int pz = (int)floor(cameraPos.z / CHUNK_SIZE);
+
+        ProcessQueues();
+
+        if (px != lastPx || pz != lastPz) {
+            UnloadChunks(px, pz);
+            QueueNewChunks(px, pz);
+            lastPx = px; lastPz = pz;
         }
     }
 
-    // Call this every frame with camera position
-    void Update(glm::vec3 cameraPos) {
-        int playerChunkX = (int)floor(cameraPos.x / CHUNK_SIZE);
-        int playerChunkZ = (int)floor(cameraPos.z / CHUNK_SIZE);
-
-        // 1. Unload far chunks
-        UnloadChunks(playerChunkX, playerChunkZ);
-
-        // 2. Queue new chunks (Spiral Outwards pattern is best, simple box for now)
-        LoadChunks(playerChunkX, playerChunkZ);
-
-        // 3. Process Async Results
-        ProcessQueues();
-    }
-
     // -------------------------------------------------------------------------
-    // LOAD / UNLOAD LOGIC
+    // SCHEDULING (SORTED)
     // -------------------------------------------------------------------------
-    void LoadChunks(int px, int pz) {
+    void QueueNewChunks(int px, int pz) {
         int r = m_config.renderDistance;
+        int h = m_config.worldHeightChunks;
         
-        // Simple loop, prioritizing closer chunks would be better
+        // 1. Collect ALL missing chunks in range
+        std::vector<ChunkRequest> missing;
+        // Reserve to prevent reallocation
+        missing.reserve(2000); 
+
         for (int x = px - r; x <= px + r; x++) {
             for (int z = pz - r; z <= pz + r; z++) {
-                int64_t key = ChunkKey(x, z);
-                
-                // If chunk doesn't exist, create it
-                if (m_chunks.find(key) == m_chunks.end()) {
-                    ChunkNode* newNode = new ChunkNode(x, z);
-                    m_chunks[key] = newNode;
-                    
-                    // Dispatch Generation Task
-                    newNode->state = ChunkState::GENERATING;
-                    m_pool.enqueue([this, newNode]() {
-                        this->Task_Generate(newNode);
-                    });
-                }
-                // If it exists and is GENERATED, check if we can mesh it
-                else {
-                    ChunkNode* node = m_chunks[key];
-                    if (node->state == ChunkState::GENERATED) {
-                        TryMeshChunk(node);
+                for (int y = 0; y < h; y++) {
+                    int64_t key = ChunkKey(x, y, z);
+                    if (m_chunks.find(key) == m_chunks.end()) {
+                        int dx = x - px;
+                        int dz = z - pz;
+                        // Use simple 2D distance for priority to load full columns
+                        int distSq = dx*dx + dz*dz; 
+                        missing.push_back({x, y, z, distSq});
                     }
+                }
+            }
+        }
+
+        // 2. Sort by distance (Closest first)
+        std::sort(missing.begin(), missing.end(), [](const ChunkRequest& a, const ChunkRequest& b){
+            return a.distSq < b.distSq;
+        });
+
+        // 3. Queue up to LIMIT
+        const int MAX_NEW_TASKS = 64; 
+        int queued = 0;
+
+        for (const auto& req : missing) {
+            if (queued >= MAX_NEW_TASKS) break;
+
+            int64_t key = ChunkKey(req.x, req.y, req.z);
+            // Double check existence (race condition safety)
+            if (m_chunks.find(key) == m_chunks.end()) {
+                ChunkNode* newNode = m_chunkPool.Acquire();
+                if (newNode) {
+                    newNode->Reset(req.x, req.y, req.z);
+                    m_chunks[key] = newNode;
+                    newNode->state = ChunkState::GENERATING;
+                    m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
+                    queued++;
                 }
             }
         }
     }
 
     void UnloadChunks(int px, int pz) {
-        int r = m_config.renderDistance + 2; // Keep a buffer
+        // HYSTERESIS: Unload radius must be LARGER than load radius
+        // If renderDistance is 16, unload at 20.
+        // This keeps a 4-chunk buffer where chunks exist but aren't re-queued.
+        int unloadRadius = m_config.renderDistance + 4; 
         
-        // Iterate and remove far chunks
-        // Note: Safe removal from map while iterating is tricky, using simple copy list approach
         std::vector<int64_t> toRemove;
+        
         for (auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
-            if (abs(node->cx - px) > r || abs(node->cz - pz) > r) {
-                // Only unload if not currently being processed by a thread to avoid segfaults
-                // (Simple approach: leak memory slightly until thread done, or wait. 
-                // For this demo, we assume threads finish fast enough or we just delete only IDLE ones)
-                if (node->state == ChunkState::ACTIVE || node->state == ChunkState::GENERATED || node->state == ChunkState::MESHED) {
+            // Check distance
+            if (abs(node->cx - px) > unloadRadius || abs(node->cz - pz) > unloadRadius) {
+                ChunkState s = node->state.load();
+                // SAFE UNLOAD: Only recycle if idle
+                if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
                     toRemove.push_back(pair.first);
-                    delete node;
+                    m_chunkPool.Release(node); 
                 }
             }
         }
         for (auto k : toRemove) m_chunks.erase(k);
     }
 
-    void TryMeshChunk(ChunkNode* node) {
-        // We need all 4 neighbors + neighbors-of-neighbors for complete AO/Smoothing, 
-        // but for basic meshing we need immediate neighbors.
-        // Actually, greedy meshing inside a chunk handles padding internally, 
-        // BUT the padding logic inside FillChunk relies on local math, so it is self-contained!
-        // Wait, chunk.h padding access is self-contained. 
-        // So we don't strictly need neighbors loaded to mesh *if* FillChunk generated the border padding.
-        // My FillChunk implementation DOES generate padding! 
-        
-        // So we can mesh immediately.
-        node->state = ChunkState::MESHING;
-        m_pool.enqueue([this, node]() {
-            this->Task_Mesh(node);
-        });
-    }
-
-    // -------------------------------------------------------------------------
-    // WORKER TASKS
-    // -------------------------------------------------------------------------
+    // ... (Tasks, ProcessQueues, FillChunk, Draw, Reload remain same as previous)
+    
     void Task_Generate(ChunkNode* node) {
-        FillChunk(node->chunk, node->cx, node->cz);
-        
-        // Notify Main Thread
-        std::lock_guard<std::mutex> lock(m_resultMutex);
+        FillChunk(node->chunk, node->cx, node->cy, node->cz);
+        std::lock_guard<std::mutex> lock(m_queueMutex);
         m_generatedQueue.push(node);
     }
 
     void Task_Mesh(ChunkNode* node) {
-        // Use a local allocator for thread safety
         LinearAllocator<PackedVertex> threadAllocator(200000); 
-        
-        // Perform Meshing
-        // Note: passing 0 as batchId, we patch it later in Draw
         MeshChunk(node->chunk, threadAllocator, 0, false);
-
-        // Copy result to node
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
-
-        // Notify Main Thread
-        std::lock_guard<std::mutex> lock(m_resultMutex);
+        std::lock_guard<std::mutex> lock(m_queueMutex);
         m_meshedQueue.push(node);
     }
 
-    // -------------------------------------------------------------------------
-    // MAIN THREAD PROCESSING
-    // -------------------------------------------------------------------------
     void ProcessQueues() {
-        std::lock_guard<std::mutex> lock(m_resultMutex);
-        
-        // Process Generated Chunks
-        while (!m_generatedQueue.empty()) {
-            ChunkNode* node = m_generatedQueue.front();
-            m_generatedQueue.pop();
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        int processed = 0; 
+        const int LIMIT = 200;
+
+        while (!m_generatedQueue.empty() && processed < LIMIT) {
+            ChunkNode* node = m_generatedQueue.front(); m_generatedQueue.pop();
             if (node->state == ChunkState::GENERATING) {
-                node->state = ChunkState::GENERATED;
+                if (node->chunk.isUniform && node->chunk.uniformID == 0) {
+                    node->state = ChunkState::ACTIVE;
+                } else {
+                    node->state = ChunkState::MESHING;
+                    m_pool.enqueue([this, node]() { this->Task_Mesh(node); });
+                }
             }
+            processed++;
         }
 
-        // Process Meshed Chunks
-        while (!m_meshedQueue.empty()) {
-            ChunkNode* node = m_meshedQueue.front();
-            m_meshedQueue.pop();
+        while (!m_meshedQueue.empty() && processed < LIMIT) {
+            ChunkNode* node = m_meshedQueue.front(); m_meshedQueue.pop();
             if (node->state == ChunkState::MESHING) {
                 node->state = ChunkState::ACTIVE;
             }
+            processed++;
         }
     }
 
-    // -------------------------------------------------------------------------
-    // GENERATION LOGIC (Thread Safe)
-    // -------------------------------------------------------------------------
-    void FillChunk(Chunk& chunk, int cx, int cz) {
-        std::memset(chunk.voxels, 0, sizeof(chunk.voxels));
-        
-        // Need to calculate worldX based on chunk coord
+    void FillChunk(Chunk& chunk, int cx, int cy, int cz) {
         chunk.worldX = cx * CHUNK_SIZE;
-        chunk.worldY = 0;
+        chunk.worldY = cy * CHUNK_SIZE;
         chunk.worldZ = cz * CHUNK_SIZE;
+
+        int chunkBottomY = chunk.worldY;
+        int chunkTopY = chunk.worldY + CHUNK_SIZE;
+
+        int heights[CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED];
+        int minHeight = 99999;
+        int maxHeight = -99999;
 
         for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
             for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
                 float wx = (float)(chunk.worldX + (x - 1));
                 float wz = (float)(chunk.worldZ + (z - 1));
-                int height = m_generator.GetHeight(wx, wz);
+                int h = m_generator.GetHeight(wx, wz);
+                heights[x][z] = h;
+                if (h < minHeight) minHeight = h;
+                if (h > maxHeight) maxHeight = h;
+            }
+        }
 
-                for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
+        if (maxHeight < chunkBottomY) { chunk.FillUniform(0); return; } 
+        if (minHeight > chunkTopY && !m_config.enableCaves) { chunk.FillUniform(1); return; } 
+
+        std::memset(chunk.voxels, 0, sizeof(chunk.voxels));
+        
+        for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
+            for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
+                int height = heights[x][z]; 
+                int localMaxY = std::min(height - chunkBottomY + 2, CHUNK_SIZE_PADDED - 1);
+                if (localMaxY < 0) continue; 
+
+                for (int y = 0; y <= localMaxY; y++) {
                     int wy = chunk.worldY + (y - 1); 
-                    if (wy == 0) { chunk.Set(x, y, z, 3); continue; } 
-
+                    uint8_t blockID = 1; 
                     if (wy <= height) {
-                        uint8_t blockID = 1; 
-                        if (wy == height) {
-                            if (wy > 55) blockID = 4;      
-                            else if (wy > 35) blockID = 1; 
-                            else blockID = 2;              
+                        if (wy == 0) blockID = 3; 
+                        else if (wy == height) {
+                            if (wy > 55) blockID = 4; else if (wy > 35) blockID = 1; else blockID = 2;
                         } else if (wy > height - 4) {
-                            if (wy > 55) blockID = 4;      
-                            else if (wy > 35) blockID = 1; 
-                            else blockID = 5;              
+                            if (wy > 55) blockID = 4; else if (wy > 35) blockID = 1; else blockID = 5;
                         }
-                        if (m_generator.IsCave(wx, (float)wy, wz)) blockID = 0;
+                        if (m_generator.IsCave((float)(chunk.worldX + (x-1)), (float)wy, (float)(chunk.worldZ + (z-1)))) blockID = 0;
                         chunk.Set(x, y, z, blockID);
                     }
                 }
@@ -327,26 +332,20 @@ public:
         }
     }
 
-    // -------------------------------------------------------------------------
-    // DRAW
-    // -------------------------------------------------------------------------
     void Draw(RingBufferSSBO& renderer, LinearAllocator<PackedVertex>& scratch, Shader& shader, const glm::mat4& viewProj) {
         scratch.Reset();
         const int MAX_BATCH = 64; 
         std::vector<glm::vec3> batchOffsets;
         batchOffsets.reserve(MAX_BATCH);
         int currentBatchCount = 0;
-        bool bufferFull = false;
 
         auto FlushBatch = [&]() {
             if (currentBatchCount == 0) return;
             void* gpuPtr = renderer.LockNextSegment();
             memcpy(gpuPtr, scratch.Data(), scratch.SizeBytes());
-
             shader.use();
             glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
             glUniform3fv(glGetUniformLocation(shader.ID, "u_ChunkOffsets"), currentBatchCount, glm::value_ptr(batchOffsets[0]));
-
             renderer.UnlockAndDraw(scratch.Count());
             scratch.Reset();
             batchOffsets.clear();
@@ -355,25 +354,14 @@ public:
 
         for (auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
-            
-            // Only draw ACTIVE chunks
             if (node->state != ChunkState::ACTIVE) continue;
-
-            // Frustum Culling Placeholder (Check distance for simple cull)
-            // if (glm::distance(node->position, cameraPos) > m_config.renderDistance * CHUNK_SIZE * 1.5) continue;
+            if (node->cachedMesh.empty()) continue;
 
             PackedVertex* dest = scratch.Allocate(node->cachedMesh.size());
-            if (!dest) {
-                if (!bufferFull) {
-                    std::cout << "[Warning] Scratch Buffer Full!" << std::endl;
-                    bufferFull = true;
-                }
-                continue; 
-            }
+            if (!dest) break; 
 
             memcpy(dest, node->cachedMesh.data(), node->cachedMesh.size() * sizeof(PackedVertex));
             
-            // Batch Patching
             uint32_t batchIDMask = (uint32_t)currentBatchCount << 16;
             size_t count = node->cachedMesh.size();
             for(size_t i=0; i<count; i++) dest[i].data2 = (dest[i].data2 & 0xFFFF) | batchIDMask;
@@ -389,11 +377,8 @@ public:
     void Reload(WorldConfig newConfig) {
         m_config = newConfig;
         m_generator = TerrainGenerator(m_config);
-        
-        // Clear all chunks
-        for (auto& pair : m_chunks) delete pair.second;
+        for (auto& pair : m_chunks) m_chunkPool.Release(pair.second);
         m_chunks.clear();
-        
-        // Will regenerate automatically in next Update()
+        lastPx = -99999;
     }
 };
