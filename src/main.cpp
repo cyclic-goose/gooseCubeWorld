@@ -13,6 +13,7 @@
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
+// Camera setup
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
 
 float lastX = SCR_WIDTH / 2.0f;
@@ -34,7 +35,8 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
 void processInput(GLFWwindow *window, World& world) {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
     
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.MovementSpeed = 250.0f;
+    // Speed boost for flying around large maps
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.MovementSpeed = 500.0f;
     else camera.MovementSpeed = 50.0f;
 
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
@@ -69,7 +71,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: MDI LOD", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Stacked LODs", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -78,32 +80,48 @@ int main() {
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
     {
-        // 1. REVERSE-Z SETUP
+        // 1. REVERSE-Z SETUP (Best for large distances)
         glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_GEQUAL); 
         glClearDepth(0.0f);     
 
-        // FIX 2: ENABLE CULL FACE
-        // This is critical. Skirts are geometry that exist *inside* the neighboring chunk.
-        // Without culling, you see the back of the skirt flickering against the front of the neighbor.
+        // 2. CULLING
+        // With "Stacked" LODs, we want normal backface culling.
+        // We removed the skirts, so we don't need to worry about skirt winding.
         glEnable(GL_CULL_FACE); 
         glCullFace(GL_BACK);
         
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
 
+        // 3. SHADER
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         
+        // 4. CONFIGURATION (LOD CONTROL)
         globalConfig.seed = 1337;
+        globalConfig.worldHeightChunks = 8;
         
-        globalConfig.lodCount = 4;
-        globalConfig.lodRadius[0] = 12; 
-        globalConfig.lodRadius[1] = 16; 
-        globalConfig.lodRadius[2] = 24; 
-        globalConfig.lodRadius[3] = 32; 
+        // -- LOD CONTROL SECTION --
+        // lodCount: How many stacked layers to render. 
+        // 5 layers = Scales 1, 2, 4, 8, 16.
+        globalConfig.lodCount = 5; 
 
-        globalConfig.worldHeightChunks = 4;
-        
+        // lodRadius[i]: How many *chunks* out to render for that layer.
+        // Note: Chunks at higher LODs are physically larger.
+        // LOD 0 (Scale 1, 32m):  Radius 12 = 384m range
+        // LOD 1 (Scale 2, 64m):  Radius 12 = 768m range
+        // LOD 2 (Scale 4, 128m): Radius 16 = 2048m range
+        // LOD 3 (Scale 8, 256m): Radius 16 = 4096m range
+        // LOD 4 (Scale 16, 512m): Radius 16 = 8192m range
+        //
+        // Stacking Strategy: Increase radius for higher LODs so they stick out 
+        // from underneath the detailed layers.
+        globalConfig.lodRadius[0] = 12; 
+        globalConfig.lodRadius[1] = 12; 
+        globalConfig.lodRadius[2] = 16; 
+        globalConfig.lodRadius[3] = 16; 
+        globalConfig.lodRadius[4] = 16; 
+
         globalConfig.scale = 0.08f;           
         globalConfig.hillAmplitude = 15.0f;   
         globalConfig.mountainAmplitude = 80.0f; 
@@ -112,6 +130,7 @@ int main() {
         
         World world(globalConfig);
 
+        // 5. RENDER LOOP
         while (!glfwWindowShouldClose(window)) {
             float currentFrame = (float)glfwGetTime();
             deltaTime = currentFrame - lastFrame;
@@ -128,6 +147,7 @@ int main() {
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+            // Infinite Projection Matrix (far plane at infinity)
             glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;

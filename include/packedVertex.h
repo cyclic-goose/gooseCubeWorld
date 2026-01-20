@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cmath>
+#include <algorithm> // for std::clamp
 
 struct PackedVertex {
     uint32_t d0; 
@@ -8,20 +9,20 @@ struct PackedVertex {
 
     PackedVertex() : d0(0), d1(0) {}
 
-    // UPDATED: Now uses 8 bits per axis with +64 offset to handle negative values (skirts)
     PackedVertex(float x, float y, float z, float face, float ao, uint32_t textureId) {
-        // Offset to handle negative coordinates (e.g. skirts going down)
-        // Range: -64.0 to +191.0 covers 0..32 chunk + skirts
-        uint32_t ix = (uint32_t)(x + 64.0f);
-        uint32_t iy = (uint32_t)(y + 64.0f);
-        uint32_t iz = (uint32_t)(z + 64.0f);
+        // OFFSET: 128.0f allows coordinates from -128 to +127.
+        // This safely covers 0..32 chunk range and -10..0 skirts.
+        float ox = x + 128.0f;
+        float oy = y + 128.0f;
+        float oz = z + 128.0f;
+
+        // SAFETY: Clamp to 0..255 range to prevent integer underflow/overflow
+        // which causes the "Sky Skirts" and potentially UB crashes.
+        uint32_t ix = (uint32_t)std::clamp(ox, 0.0f, 255.0f);
+        uint32_t iy = (uint32_t)std::clamp(oy, 0.0f, 255.0f);
+        uint32_t iz = (uint32_t)std::clamp(oz, 0.0f, 255.0f);
         uint32_t iface = (uint32_t)face;
         
-        // Packing scheme:
-        // x: bits 0-7   (8 bits)
-        // y: bits 8-15  (8 bits)
-        // z: bits 16-23 (8 bits)
-        // norm: bits 24-26 (3 bits)
         d0 = (ix & 0xFF) | 
              ((iy & 0xFF) << 8) | 
              ((iz & 0xFF) << 16) | 

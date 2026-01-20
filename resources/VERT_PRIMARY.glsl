@@ -28,10 +28,10 @@ vec3 getCubeNormal(int i) {
 void main() {
     uvec2 rawData = packedVertices[gl_VertexID];
     
-    // UPDATED UNPACKING: 8 bits per component, -64 offset
-    float x = float(bitfieldExtract(rawData.x, 0,  8)) - 64.0;
-    float y = float(bitfieldExtract(rawData.x, 8,  8)) - 64.0;
-    float z = float(bitfieldExtract(rawData.x, 16, 8)) - 64.0;
+    // Unpack with 128 offset
+    float x = float(bitfieldExtract(rawData.x, 0,  8)) - 128.0;
+    float y = float(bitfieldExtract(rawData.x, 8,  8)) - 128.0;
+    float z = float(bitfieldExtract(rawData.x, 16, 8)) - 128.0;
     
     int normIndex = int(bitfieldExtract(rawData.x, 24, 3));
     int texID = int(bitfieldExtract(rawData.y, 0, 16));
@@ -43,10 +43,17 @@ void main() {
 
     vec3 worldPos = (localPos * scale) + chunkOffset;
 
+    // SINKING LOGIC:
+    // If scale > 1 (LOD > 0), push the vertex DOWN.
+    // This allows the high-detail chunk (scale 1) to sit "on top" without z-fighting.
+    // The amount to sink depends on scale. Larger scale = deeper sink.
+    if (scale > 1.0) {
+        worldPos.y -= (scale * 2.0); 
+    }
+
     v_Normal = getCubeNormal(normIndex);
     v_TexID = float(texID);
     
-    // Tri-planar UVs
     if (abs(v_Normal.x) > 0.5) v_TexCoord = worldPos.yz * 0.5; 
     else if (abs(v_Normal.y) > 0.5) v_TexCoord = worldPos.xz * 0.5;
     else v_TexCoord = worldPos.xy * 0.5;

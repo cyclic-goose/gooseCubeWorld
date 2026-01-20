@@ -32,10 +32,14 @@ struct DrawArraysIndirectCommand {
 struct WorldConfig {
     int seed = 1337;
     int worldHeightChunks = 8;
-    int lodCount = 4; 
+    int lodCount = 5; 
 
-    // Radii for each LOD ring 
-    int lodRadius[4] = { 12, 12, 16, 16 }; 
+    // LOD Radii: High detail close, low detail far.
+    // Stacking strategy: We draw ALL of these. 
+    // LOD 0 is drawn 12 chunks out.
+    // LOD 1 is drawn 16 chunks out (underneath LOD 0).
+    // ...
+    int lodRadius[8] = { 10, 16, 24, 32, 48, 0, 0, 0 }; 
     
     float scale = 0.02f;          
     float hillAmplitude = 15.0f;  
@@ -74,6 +78,7 @@ struct ChunkNode {
         float size = (float)(CHUNK_SIZE * scale);
         position = glm::vec3(x * size, y * size, z * size);
         
+        // AABB covers the full cubic volume of the chunk slot
         minAABB = position;
         maxAABB = position + glm::vec3(size);
 
@@ -115,6 +120,7 @@ public:
         m_caveNoise = FastNoise::New<FastNoise::Perlin>();
     }
 
+    // Scalar noise lookup (SIMD optimization would require batched generation)
     int GetHeight(float x, float z) const {
         float nx = x * m_config.scale;
         float nz = z * m_config.scale;
@@ -135,11 +141,11 @@ public:
 };
 
 inline int64_t ChunkKey(int x, int y, int z, int lod) {
-    uint64_t ulod = (uint64_t)(lod & 0x3) << 62;
+    uint64_t ulod = (uint64_t)(lod & 0x7) << 61; 
     uint64_t ux = (uint64_t)(uint32_t)x & 0xFFFFF; 
     uint64_t uz = (uint64_t)(uint32_t)z & 0xFFFFF; 
-    uint64_t uy = (uint64_t)(uint32_t)y & 0x3FFFFF;   
-    return ulod | (ux << 42) | (uz << 22) | uy;
+    uint64_t uy = (uint64_t)(uint32_t)y & 0x1FFFFF;   
+    return ulod | (ux << 41) | (uz << 21) | uy;
 }
 
 struct Frustum {
@@ -185,8 +191,8 @@ private:
     std::queue<ChunkNode*> m_generatedQueue; 
     std::queue<ChunkNode*> m_meshedQueue;    
     
-    int lastPx[4] = {-999,-999,-999,-999};
-    int lastPz[4] = {-999,-999,-999,-999};
+    int lastPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
+    int lastPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
 
     int updateTimer = 0;
     std::atomic<bool> m_shutdown{false};
@@ -206,7 +212,7 @@ public:
             int r = m_config.lodRadius[i];
             maxChunks += (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
         }
-        m_chunkPool.Init(maxChunks + 1000);
+        m_chunkPool.Init(maxChunks + 3000); 
 
         m_gpuMemory = std::make_unique<GpuMemoryManager>(512 * 1024 * 1024);
 
@@ -297,7 +303,7 @@ public:
             ChunkNode* node = pair.second;
             int lod = node->lod;
             int scale = node->scale;
-            int limit = m_config.lodRadius[lod] + 2; 
+            int limit = m_config.lodRadius[lod] + 3; 
 
             int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
             int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
@@ -331,8 +337,14 @@ public:
             
             if (node->state != ChunkState::ACTIVE) continue;
             if (node->gpuOffset == -1) continue; 
+            
+            // FRUSTUM CULLING
             if (!m_frustum.IsBoxVisible(node->minAABB, node->maxAABB)) continue;
 
+            // STACKED RENDERING:
+            // We draw ALL LODs that are active. 
+            // The vertex shader handles Z-fighting by sinking lower LODs.
+            
             DrawArraysIndirectCommand cmd;
             cmd.count = (uint32_t)node->vertexCount;
             cmd.instanceCount = 1;
@@ -367,7 +379,7 @@ public:
         std::vector<ChunkRequest> missing;
         missing.reserve(1000); 
 
-        const int MAX_TASKS = 32; 
+        const int MAX_TASKS = 64; 
 
         for (int lod = 0; lod < m_config.lodCount; lod++) {
             int scale = 1 << lod;
@@ -376,18 +388,9 @@ public:
             int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
             int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
 
-            int innerR = -1;
-            if (lod > 0) {
-                innerR = m_config.lodRadius[lod-1] / 2;
-            }
-
             for (int x = px - r; x <= px + r; x++) {
                 for (int z = pz - r; z <= pz + r; z++) {
-                    
-                    if (lod > 0) {
-                         if (abs(x - px) <= innerR && abs(z - pz) <= innerR) continue;
-                    }
-
+                    // NOTE: NO Inner Radius Check. We generate EVERYTHING. Stacked.
                     for (int y = 0; y < m_config.worldHeightChunks; y++) {
                         int64_t key = ChunkKey(x, y, z, lod);
                         if (m_chunks.find(key) == m_chunks.end()) {
@@ -431,14 +434,13 @@ public:
     }
 
     void Task_Mesh(ChunkNode* node) {
-        LinearAllocator<PackedVertex> threadAllocator(200000); 
-        MeshChunk(node->chunk, threadAllocator, node->scale, false);
+        LinearAllocator<PackedVertex> threadAllocator(1000000); 
+        MeshChunk(node->chunk, threadAllocator, false); // Removed Scale, Removed Skirts
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_meshedQueue.push(node);
     }
 
-    // UPDATED: Added Terracing (Height Quantization)
     void FillChunk(Chunk& chunk, int cx, int cy, int cz, int scale) {
         chunk.worldX = cx * CHUNK_SIZE * scale;
         chunk.worldY = cy * CHUNK_SIZE * scale;
@@ -461,10 +463,7 @@ public:
                 
                 int h = m_generator.GetHeight(wx, wz);
 
-                // FIX 1: TERRACING
-                // Snap height to a multiple of 'scale'. 
-                // This makes the noise "step" like rice terraces.
-                // The Greedy Mesher loves this and will merge the flat tops.
+                // Terracing is crucial for far LODs to mesh well
                 if (scale > 1) {
                     h = (h / scale) * scale;
                 }
@@ -521,6 +520,6 @@ public:
         m_generator = TerrainGenerator(m_config);
         for (auto& pair : m_chunks) m_chunkPool.Release(pair.second);
         m_chunks.clear();
-        for(int i=0; i<4; i++) { lastPx[i] = -999; lastPz[i] = -999; }
+        for(int i=0; i<8; i++) { lastPx[i] = -999; lastPz[i] = -999; }
     }
 };
