@@ -222,7 +222,7 @@ int main() {
             world.Update(camera.Position);
 
             gui.BeginFrame();
-            gui.RenderUI(world, appState);
+            gui.RenderUI(world, appState, camera);
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 

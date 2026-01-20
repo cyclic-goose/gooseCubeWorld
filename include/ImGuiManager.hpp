@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include "world.h"
+#include "camera.h"
 
 // --- CONFIGURATION STRUCT ---
 struct UIConfig {
@@ -76,7 +77,7 @@ public:
         m_Initialized = false;
     }
 
-    void RenderUI(World& world, UIConfig& config) {
+    void RenderUI(World& world, UIConfig& config, const Camera& camera) {
         if (!config.editConfigInitialized) {
             config.editConfig = world.GetConfig();
             config.editConfigInitialized = true;
@@ -89,7 +90,7 @@ public:
         }
 
         // Always render the minimal overlay
-        if (config.showOverlay) RenderSimpleOverlay(config);
+        if (config.showOverlay) RenderSimpleOverlay(config, camera);
 
         // Hide menus and windows if we are in Game Mode (Locked Mouse)
         if (!config.isGameMode) {
@@ -135,7 +136,7 @@ private:
         style.WindowPadding = ImVec2(10, 10);
     }
 
-    void RenderSimpleOverlay(const UIConfig& config) {
+    void RenderSimpleOverlay(const UIConfig& config, const Camera& camera) {
         const float PAD = 10.0f;
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImVec2 window_pos = ImVec2(viewport->WorkPos.x + PAD, viewport->WorkPos.y + PAD);
@@ -148,6 +149,9 @@ private:
         if (ImGui::Begin("StatsOverlay", nullptr, flags)) {
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "FPS: %.1f", ImGui::GetIO().Framerate);
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", config.isGameMode ? "[LOCKED]" : "[UNLOCKED]");
+            ImGui::Separator();
+            ImGui::Text("XYZ: %.1f, %.1f, %.1f", camera.Position.x, camera.Position.y, camera.Position.z);
+            ImGui::Text("Angle: Y:%.1f P:%.1f", camera.Yaw, camera.Pitch);
         }
         ImGui::End();
     }
