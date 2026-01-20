@@ -101,7 +101,7 @@ int main() {
         
         // 4. CONFIGURATION (LOD CONTROL)
         globalConfig.seed = 1337;
-        globalConfig.worldHeightChunks = 16;
+        globalConfig.worldHeightChunks = 32;
         
         // -- LOD CONTROL SECTION --
         // lodCount: How many stacked layers to render. 
@@ -128,7 +128,7 @@ int main() {
         globalConfig.scale = 0.02f;           
         globalConfig.hillAmplitude = 15.0f;  
         globalConfig.hillFrequency = 0.9f;   
-        globalConfig.mountainAmplitude = 2000.0f; 
+        globalConfig.mountainAmplitude = 512.0f; 
         globalConfig.mountainFrequency = 0.5f; 
         globalConfig.seaLevel = 10;
         globalConfig.enableCaves = false;      

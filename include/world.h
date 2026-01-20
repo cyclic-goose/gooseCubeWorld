@@ -31,10 +31,12 @@ struct DrawArraysIndirectCommand {
 
 struct WorldConfig {
     int seed = 1337;
-    int worldHeightChunks = 8;
+    
+    // FIX 1: Increase World Height to 32 (1024 blocks)
+    // We can afford this now because we won't generate the empty air chunks.
+    int worldHeightChunks = 32;
+    
     int lodCount = 5; 
-
-    // Radius config
     int lodRadius[8] = { 10, 16, 24, 32, 48, 0, 0, 0 }; 
     
     float scale = 0.02f;          
@@ -127,6 +129,25 @@ public:
         return m_config.seaLevel + (int)(hillHeight + mountainHeight);
     }
 
+    // FIX 2: Fast Surface Bounds Check
+    // Returns the min and max height for a chunk column region.
+    // This allows us to skip generating chunks that are purely air or purely stone.
+    void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) {
+        int worldX = cx * CHUNK_SIZE * scale;
+        int worldZ = cz * CHUNK_SIZE * scale;
+        int size = CHUNK_SIZE * scale;
+
+        // Sample 5 points: 4 corners + center
+        int h1 = GetHeight(worldX, worldZ);
+        int h2 = GetHeight(worldX + size, worldZ);
+        int h3 = GetHeight(worldX, worldZ + size);
+        int h4 = GetHeight(worldX + size, worldZ + size);
+        int h5 = GetHeight(worldX + size/2, worldZ + size/2);
+
+        minH = std::min({h1, h2, h3, h4, h5});
+        maxH = std::max({h1, h2, h3, h4, h5});
+    }
+
     bool IsCave(float x, float y, float z) const {
         if (!m_config.enableCaves) return false;
         float val = m_caveNoise->GenSingle3D(x * 0.02f, y * 0.04f, z * 0.02f, m_config.seed);
@@ -163,7 +184,7 @@ struct Frustum {
                 glm::dot(planes[i], glm::vec4(min.x, max.y, min.z, 1.0f)) < 0.0f &&
                 glm::dot(planes[i], glm::vec4(max.x, max.y, min.z, 1.0f)) < 0.0f &&
                 glm::dot(planes[i], glm::vec4(min.x, min.y, max.z, 1.0f)) < 0.0f &&
-                glm::dot(planes[i], glm::vec4(max.x, min.y, max.z, 1.0f)) < 0.0f &&
+                glm::dot(planes[i], glm::vec4(max.x, max.y, max.z, 1.0f)) < 0.0f &&
                 glm::dot(planes[i], glm::vec4(min.x, max.y, max.z, 1.0f)) < 0.0f &&
                 glm::dot(planes[i], glm::vec4(max.x, max.y, max.z, 1.0f)) < 0.0f)
                 return false;
@@ -200,6 +221,26 @@ private:
 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
+    bool HasHigherDetail(int cx, int cz, int currentLod) {
+        if (currentLod == 0) return false;
+        int prevLod = currentLod - 1;
+        int scaleRatio = 2; 
+        int minX = cx * scaleRatio;
+        int minZ = cz * scaleRatio;
+        int maxX = minX + 1; 
+        int maxZ = minZ + 1;
+
+        for (int x = minX; x <= maxX; x++) {
+            for (int z = minZ; z <= maxZ; z++) {
+                if (m_chunks.find(ChunkKey(x, 0, z, prevLod)) != m_chunks.end()) {
+                   ChunkNode* n = m_chunks[ChunkKey(x, 0, z, prevLod)];
+                   if(n && n->state == ChunkState::ACTIVE) return true;
+                }
+            }
+        }
+        return false;
+    }
+
 public:
     World(WorldConfig config) : m_config(config), m_generator(config) {
         size_t maxChunks = 0;
@@ -207,10 +248,8 @@ public:
             int r = m_config.lodRadius[i];
             maxChunks += (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
         }
-        m_chunkPool.Init(maxChunks + 4000); 
+        m_chunkPool.Init(maxChunks + 3000); 
 
-        // FIX 3: INCREASED VRAM TO 1GB
-        // High detail chunks are heavy. 512MB gets filled quickly with 5 LOD layers.
         m_gpuMemory = std::make_unique<GpuMemoryManager>(1024 * 1024 * 1024);
 
         glCreateBuffers(1, &m_indirectBuffer);
@@ -278,12 +317,7 @@ public:
                         node->vertexCount = node->cachedMesh.size();
                         node->cachedMesh.clear(); 
                         node->cachedMesh.shrink_to_fit();
-                    } else {
-                        // VRAM FULL!
-                        // In a production system, we would evict distant chunks here.
-                        // For now, it stays ACTIVE but invisible.
-                        // Increase GpuMemory size if this happens.
-                    }
+                    } 
                 }
                 node->state = ChunkState::ACTIVE;
             }
@@ -330,10 +364,8 @@ public:
             if (node->gpuOffset == -1) continue; 
             if (!m_frustum.IsBoxVisible(node->minAABB, node->maxAABB)) continue;
             
-            // FIX 2: REMOVED OCCLUSION CHECK
-            // We draw ALL chunks. This eliminates gaps completely.
-            // Z-buffering and Vertex Sinking (in shader) handle the overlap.
-
+            // Stacked LOD: Draw everything. Z-sinking handles overlap.
+            
             DrawArraysIndirectCommand cmd;
             cmd.count = (uint32_t)node->vertexCount;
             cmd.instanceCount = 1;
@@ -361,12 +393,13 @@ public:
         glBindVertexArray(0); 
     }
 
+    // FIX 3: VERTICAL CULLING IN QUEUE
     void QueueNewChunks(glm::vec3 cameraPos) {
         std::vector<ChunkRequest> missing;
         missing.reserve(1000); 
         const int MAX_TASKS = 64; 
 
-        // Current Camera Y-Block
+        // Get camera height block to prioritize nearby vertical chunks
         int camYBlock = (int)cameraPos.y;
 
         for (int lod = 0; lod < m_config.lodCount; lod++) {
@@ -377,20 +410,32 @@ public:
 
             for (int x = px - r; x <= px + r; x++) {
                 for (int z = pz - r; z <= pz + r; z++) {
-                    for (int y = 0; y < m_config.worldHeightChunks; y++) {
+                    
+                    // --- OPTIMIZATION START ---
+                    // Determine which Y-levels actually contain terrain.
+                    int minH, maxH;
+                    m_generator.GetHeightBounds(x, z, scale, minH, maxH);
+
+                    // Convert World Height to Chunk Y Indices
+                    int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
+                    int chunkYEnd = (maxH / (CHUNK_SIZE * scale)) + 1;
+
+                    // Clamp to world bounds
+                    chunkYStart = std::max(0, chunkYStart);
+                    chunkYEnd = std::min(m_config.worldHeightChunks - 1, chunkYEnd);
+                    // --- OPTIMIZATION END ---
+
+                    for (int y = chunkYStart; y <= chunkYEnd; y++) {
                         int64_t key = ChunkKey(x, y, z, lod);
                         if (m_chunks.find(key) == m_chunks.end()) {
                             int dx = x - px; 
                             int dz = z - pz; 
                             
-                            // FIX 1: VERTICAL PRIORITY
-                            // Calculate dy based on world coordinates
                             int chunkWorldY = y * CHUNK_SIZE * scale;
                             int dy = (chunkWorldY - camYBlock) / (CHUNK_SIZE * scale); 
                             
                             int distSq = dx*dx + dz*dz + (dy*dy); 
                             
-                            // Highly prioritize LOD 0 and chunks near the player
                             missing.push_back({x, y, z, lod, distSq + (lod * 5000)});
                         }
                     }
@@ -450,12 +495,7 @@ public:
                 float wx = (float)(chunk.worldX + (x - 1) * scale);
                 float wz = (float)(chunk.worldZ + (z - 1) * scale);
                 int h = m_generator.GetHeight(wx, wz);
-                
-                // FIX 4: NO TERRACING FOR LOD 0
-                // High detail (scale 1) should be smooth.
-                // Lower detail uses steps to mesh better.
                 if (scale > 1) { h = (h / scale) * scale; }
-                
                 heights[x][z] = h;
                 if (h < minHeight) minHeight = h;
                 if (h > maxHeight) maxHeight = h;
