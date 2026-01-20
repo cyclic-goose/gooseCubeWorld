@@ -111,9 +111,6 @@ int main() {
         glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
     }
 
-    // 2. Default VSync to ON (safe default)
-    // The gui.Init() below will respect the m_VSync default (true) or user can toggle later
-    glfwSwapInterval(0); 
 
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
@@ -134,13 +131,15 @@ int main() {
         
         WorldConfig globalConfig;
         // ... config setup ...
-        globalConfig.lodCount = 5; 
+        globalConfig.lodCount = 8; 
         globalConfig.lodRadius[0] = 10; 
-        globalConfig.lodRadius[1] = 10; 
-        globalConfig.lodRadius[2] = 16; 
-        globalConfig.lodRadius[3] = 24; 
-        globalConfig.lodRadius[4] = 32;
-        //globalConfig.lodRadius[5] = 20;
+        globalConfig.lodRadius[1] = 5; 
+        globalConfig.lodRadius[2] = 5; 
+        globalConfig.lodRadius[3] = 5; 
+        globalConfig.lodRadius[4] = 5;
+        globalConfig.lodRadius[5] = 20;
+        globalConfig.lodRadius[6] = 20;
+        globalConfig.lodRadius[7] = 32;
 
         World world(globalConfig);
         gui.Init(window); // Stores window pointer for window management

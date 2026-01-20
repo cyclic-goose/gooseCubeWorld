@@ -17,7 +17,7 @@ public:
     bool m_GameMode = true; 
     
     // Window State
-    bool m_VSync = true; // Default to true (safe)
+    bool m_VSync = false; // Default to true (safe)
 
     // Disable copying
     ImGuiManager(const ImGuiManager&) = delete;
@@ -46,6 +46,9 @@ public:
         // Initialize Cache for windowed restore
         glfwGetWindowPos(m_Window, &m_WindowedX, &m_WindowedY);
         glfwGetWindowSize(m_Window, &m_WindowedW, &m_WindowedH);
+
+        // set vsync
+        SetVSync(m_VSync);
 
         m_Initialized = true;
     }
