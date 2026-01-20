@@ -10,49 +10,43 @@ jobs:
   build-linux:
     name: Build (Linux)
     runs-on: ubuntu-latest
-
     steps:
-    # 1. Checkout Code & Submodules (FastNoise2)
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libglfw3-dev libglm-dev
+    - name: Configure & Build
+      run: |
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        cmake --build build --config Release --parallel 4
+
+  build-windows:
+    name: Build (Windows Cross-Compile)
+    runs-on: ubuntu-latest
+    steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
       with:
         submodules: recursive
 
-    # 2. Install System Dependencies
-    # We need X11, OpenGL, and GLFW dev libraries to link against.
-    - name: Install Dependencies
+    - name: Install MinGW
       run: |
         sudo apt-get update
-        sudo apt-get install -y \
-          build-essential \
-          cmake \
-          libgl1-mesa-dev \
-          libx11-dev \
-          libxrandr-dev \
-          libxinerama-dev \
-          libxcursor-dev \
-          libxi-dev \
-          libglfw3-dev \
-          libglm-dev
+        sudo apt-get install -y mingw-w64
 
-    # 3. Configure CMake
-    # -DCMAKE_BUILD_TYPE=Release ensures optimizations (O3) are on.
-    - name: Configure CMake
-      run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+    - name: Make Script Executable
+      run: chmod +x scripts/build_windows_release.sh
 
-    # 4. Build
-    # This compiles the engine and FastNoise2.
-    - name: Build Project
-      run: cmake --build build --config Release --parallel 4
+    - name: Run Build Script
+      run: ./scripts/build_windows_release.sh
 
-    # 5. Verify Artifact
-    # Ensures the binary was actually created at the expected path.
-    - name: Verify Binary Exists
-      run: |
-        if [ -f "build/gooseVoxelEngine" ]; then
-          echo "Binary found!"
-          ls -lh build/gooseVoxelEngine
-        else
-          echo "Error: Binary not found!"
-          exit 1
-        fi
+    # CHANGED: Upload the clean 'dist' folder, not the build folder
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: GooseVoxelEngine-Windows
+        path: dist/windows_goose_engine/
