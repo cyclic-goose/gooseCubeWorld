@@ -15,7 +15,7 @@
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
-// Camera
+// Start camera high up
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
 
 float lastX = SCR_WIDTH / 2.0f;
@@ -71,7 +71,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Refactored System", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Massive Scale", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -80,22 +80,30 @@ int main() {
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
     {
+        // --- REVERSE-Z SETUP ---
+        // 1. Map NDC Depth to [0, 1] 
+        glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+        
         glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LESS);
-        glClearDepth(1.0f);
+        
+        // 2. Pass if Greater or Equal (Near is 1.0, Far is 0.0)
+        glDepthFunc(GL_GEQUAL); 
+        
+        // 3. Clear to 0.0 (Far plane)
+        glClearDepth(0.0f);
+
         glDisable(GL_CULL_FACE); 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
 
         // Buffers
         const int MAX_VERTS = 20000000; 
-        std::cout << "[System] GPU RingBuffer: " << (MAX_VERTS * sizeof(PackedVertex) / 1024 / 1024) * 3 << " MB" << std::endl;
         RingBufferSSBO renderer(MAX_VERTS * sizeof(PackedVertex), sizeof(PackedVertex)); 
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         LinearAllocator<PackedVertex> scratch(256 * 1024 * 1024); 
 
         // Config
         globalConfig.seed = 1337;
-        globalConfig.renderDistance = 20; 
+        globalConfig.renderDistance = 32; 
         
         globalConfig.scale = 0.02f;           
         globalConfig.hillAmplitude = 15.0f;   
@@ -111,7 +119,7 @@ int main() {
             lastFrame = currentFrame;
             processInput(window, world);
 
-            // --- STREAMING UPDATE ---
+            // Update World
             world.Update(camera.Position);
 
             std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + " | Pos: " 
@@ -120,9 +128,12 @@ int main() {
                 + std::to_string((int)camera.Position.z);
             glfwSetWindowTitle(window, title.c_str());
 
+            // Clear buffers (Depth 0.0 for Reverse-Z)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 2000.0f);
+            // --- INFINITE REVERSE-Z PROJECTION ---
+            // Uses helper directly from camera class
+            glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
 

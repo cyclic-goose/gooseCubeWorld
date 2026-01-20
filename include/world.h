@@ -21,9 +21,6 @@
 #include "threadpool.h"
 #include "chunk_pool.h"
 
-// -----------------------------------------------------------------------------
-// CONFIGURATION
-// -----------------------------------------------------------------------------
 struct WorldConfig {
     int seed = 1337;
     int renderDistance = 16;      
@@ -39,9 +36,6 @@ struct WorldConfig {
     float caveThreshold = 0.5f;   
 };
 
-// -----------------------------------------------------------------------------
-// CHUNK NODE
-// -----------------------------------------------------------------------------
 enum class ChunkState { MISSING, GENERATING, GENERATED, MESHING, MESHED, ACTIVE };
 
 struct ChunkNode {
@@ -64,9 +58,6 @@ struct ChunkNode {
     }
 };
 
-// -----------------------------------------------------------------------------
-// TERRAIN GENERATOR
-// -----------------------------------------------------------------------------
 class TerrainGenerator {
 private:
     FastNoise::SmartNode<> m_baseNoise;
@@ -123,7 +114,11 @@ class World {
 private:
     WorldConfig m_config;
     TerrainGenerator m_generator;
-    ThreadPool m_pool;
+    
+    // NOTE: Pointers to Pool and ThreadPool
+    // We use pointers or unique_ptr to control destruction order explicitly
+    std::unique_ptr<ThreadPool> m_pool;
+    
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
     ObjectPool<ChunkNode> m_chunkPool;
     std::mutex m_queueMutex;
@@ -131,6 +126,8 @@ private:
     std::queue<ChunkNode*> m_meshedQueue;    
     int lastPx = -99999, lastPz = -99999;
     int updateTimer = 0;
+    
+    std::atomic<bool> m_shutdown{false};
 
     struct ChunkRequest {
         int x, y, z;
@@ -138,30 +135,44 @@ private:
     };
 
 public:
-    World(WorldConfig config) : m_config(config), m_generator(config), m_pool() {
+    World(WorldConfig config) : m_config(config), m_generator(config) {
+        // Init ThreadPool
+        m_pool = std::make_unique<ThreadPool>();
+        
+        // Init ChunkPool
         int r = m_config.renderDistance + 5; 
         size_t maxChunks = (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
         m_chunkPool.Init(maxChunks);
     }
 
     ~World() { 
+        // 1. Signal shutdown to stop new tasks
+        m_shutdown = true;
+        
+        // 2. Destroy ThreadPool first. 
+        // This blocks until all currently running tasks finish.
+        // Since we set m_shutdown, pending tasks in queue might exit early if we check for it.
+        // ThreadPool destructor calls join().
+        m_pool.reset(); 
+
+        // 3. Now it is safe to delete data
         m_chunks.clear();
+        // chunkPool handles its own memory
     }
 
     void Update(glm::vec3 cameraPos) {
+        if (m_shutdown) return;
+
         int px = (int)floor(cameraPos.x / CHUNK_SIZE);
         int pz = (int)floor(cameraPos.z / CHUNK_SIZE);
 
         ProcessQueues();
 
-        // 1. Unload immediately if moved (Memory safety)
         if (px != lastPx || pz != lastPz) {
             UnloadChunks(px, pz);
             lastPx = px; lastPz = pz;
         }
 
-        // 2. Load Continuously
-        // We run this every few frames to keep the queue full without spamming sorting
         updateTimer++;
         if (updateTimer > 10) {
             QueueNewChunks(px, pz);
@@ -169,14 +180,10 @@ public:
         }
     }
 
-    // -------------------------------------------------------------------------
-    // SCHEDULING (SORTED)
-    // -------------------------------------------------------------------------
     void QueueNewChunks(int px, int pz) {
         int r = m_config.renderDistance;
         int h = m_config.worldHeightChunks;
         
-        // 1. Collect ALL missing chunks in range
         std::vector<ChunkRequest> missing;
         missing.reserve(2000); 
 
@@ -194,12 +201,10 @@ public:
             }
         }
 
-        // 2. Sort by distance (Closest first)
         std::sort(missing.begin(), missing.end(), [](const ChunkRequest& a, const ChunkRequest& b){
             return a.distSq < b.distSq;
         });
 
-        // 3. Queue up to LIMIT
         const int MAX_NEW_TASKS = 64; 
         int queued = 0;
 
@@ -213,7 +218,7 @@ public:
                     newNode->Reset(req.x, req.y, req.z);
                     m_chunks[key] = newNode;
                     newNode->state = ChunkState::GENERATING;
-                    m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
+                    m_pool->enqueue([this, newNode]() { this->Task_Generate(newNode); });
                     queued++;
                 }
             }
@@ -221,7 +226,7 @@ public:
     }
 
     void UnloadChunks(int px, int pz) {
-        int r = m_config.renderDistance + 4; // Hysteresis buffer
+        int r = m_config.renderDistance + 4; 
         std::vector<int64_t> toRemove;
         
         for (auto& pair : m_chunks) {
@@ -237,17 +242,20 @@ public:
         for (auto k : toRemove) m_chunks.erase(k);
     }
 
-    // ... (Tasks, ProcessQueues, FillChunk remain same)
     void Task_Generate(ChunkNode* node) {
+        if (m_shutdown) return; // Exit early if shutting down
         FillChunk(node->chunk, node->cx, node->cy, node->cz);
+        
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_generatedQueue.push(node);
     }
 
     void Task_Mesh(ChunkNode* node) {
+        if (m_shutdown) return; // Exit early
         LinearAllocator<PackedVertex> threadAllocator(200000); 
         MeshChunk(node->chunk, threadAllocator, 0, false);
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
+        
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_meshedQueue.push(node);
     }
@@ -264,7 +272,7 @@ public:
                     node->state = ChunkState::ACTIVE;
                 } else {
                     node->state = ChunkState::MESHING;
-                    m_pool.enqueue([this, node]() { this->Task_Mesh(node); });
+                    m_pool->enqueue([this, node]() { this->Task_Mesh(node); });
                 }
             }
             processed++;
@@ -280,6 +288,7 @@ public:
     }
 
     void FillChunk(Chunk& chunk, int cx, int cy, int cz) {
+        // Safe access because this node is exclusive to this thread
         chunk.worldX = cx * CHUNK_SIZE;
         chunk.worldY = cy * CHUNK_SIZE;
         chunk.worldZ = cz * CHUNK_SIZE;
