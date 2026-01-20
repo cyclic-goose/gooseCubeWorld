@@ -16,7 +16,7 @@ const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
 // Camera
-Camera camera(glm::vec3(0.0f, 60.0f, 60.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
+Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
 
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
@@ -36,8 +36,9 @@ WorldConfig globalConfig;
 
 void processInput(GLFWwindow *window, World& world) {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.MovementSpeed = 100.0f;
-    else camera.MovementSpeed = 30.0f;
+    
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.MovementSpeed = 250.0f;
+    else camera.MovementSpeed = 50.0f;
 
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
@@ -70,7 +71,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Threaded Streaming", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -79,23 +80,28 @@ int main() {
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
     {
-        // Debug Render Settings
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
         glClearDepth(1.0f);
-        glDisable(GL_CULL_FACE); // Show both sides of faces
+        glDisable(GL_CULL_FACE); 
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
 
-        // Allocator sizes
-        const int MAX_VERTS = 5000000; // 5M GPU buffer
+        // Buffers
+        const int MAX_VERTS = 20000000; 
+        std::cout << "[System] GPU RingBuffer: " << (MAX_VERTS * sizeof(PackedVertex) / 1024 / 1024) * 3 << " MB" << std::endl;
         RingBufferSSBO renderer(MAX_VERTS * sizeof(PackedVertex), sizeof(PackedVertex)); 
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
-        LinearAllocator<PackedVertex> scratch(32 * 1024 * 1024); // 32MB scratch for frame
+        LinearAllocator<PackedVertex> scratch(256 * 1024 * 1024); 
 
+        // Config
         globalConfig.seed = 1337;
-        globalConfig.renderDistance = 6;
-        globalConfig.heightScale = 40.0f;
-        globalConfig.noiseFrequency = 0.005f; 
+        globalConfig.renderDistance = 20; 
+        
+        globalConfig.scale = 0.06f;           
+        globalConfig.hillAmplitude = 15.0f;   
+        globalConfig.mountainAmplitude = 50.0f; 
+        globalConfig.seaLevel = 10;
+        globalConfig.enableCaves = false;      
         
         World world(globalConfig);
 
@@ -105,12 +111,17 @@ int main() {
             lastFrame = currentFrame;
             processInput(window, world);
 
-            std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime));
+            // --- STREAMING UPDATE ---
+            world.Update(camera.Position);
+
+            std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + " | Pos: " 
+                + std::to_string((int)camera.Position.x) + ", " 
+                + std::to_string((int)camera.Position.z);
             glfwSetWindowTitle(window, title.c_str());
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 1000.0f);
+            glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 2000.0f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
 
