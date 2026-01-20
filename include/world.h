@@ -8,6 +8,8 @@
 #include <mutex>
 #include <queue>
 #include <atomic>
+#include <chrono>
+#include <utility> // for std::pair
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -31,14 +33,14 @@ struct DrawArraysIndirectCommand {
 
 struct WorldConfig {
     int seed = 1337;
-    int worldHeightChunks = 48;
+    int worldHeightChunks = 32;
     int lodCount = 5; 
     int lodRadius[8] = { 10, 16, 24, 32, 48, 0, 0, 0 }; 
     
     float scale = 0.02f;          
     float hillAmplitude = 15.0f;  
     float hillFrequency = 1.0f;   
-    float mountainAmplitude = 500.0f; 
+    float mountainAmplitude = 300.0f; 
     float mountainFrequency = 0.5f; 
     int seaLevel = 10;            
     bool enableCaves = false;     
@@ -199,51 +201,40 @@ private:
     
     ThreadPool m_pool; 
 
+    // Used for tracking movement per LOD
     int lastPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
     int lastPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
 
-    int updateTimer = 0;
+    int m_frameCounter = 0; 
     std::atomic<bool> m_shutdown{false};
     Frustum m_frustum;
 
     std::unique_ptr<GpuMemoryManager> m_gpuMemory;
-    GLuint m_indirectBuffer; 
-    GLuint m_batchSSBO; 
-    GLuint m_dummyVAO; 
+    GLuint m_indirectBuffer = 0; 
+    GLuint m_batchSSBO = 0; 
+    GLuint m_dummyVAO = 0; 
 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
     friend class ImGuiManager;
 
-    // FIX: Strict Coverage Check
-    // Returns TRUE only if ALL 4 children chunks of the higher detail level are ACTIVE.
-    // If ANY are missing, we return FALSE so the parent (low detail) chunk is drawn as fallback.
     bool IsFullyCovered(int cx, int cz, int currentLod) {
         if (currentLod == 0) return false;
-        
         int prevLod = currentLod - 1;
-        int scaleRatio = 2; // LODs are always 2x size
-        
-        // A chunk at (cx, cz) in LOD N covers (2*cx ... 2*cx+1) in LOD N-1
+        int scaleRatio = 2; 
         int minX = cx * scaleRatio;
         int minZ = cz * scaleRatio;
         int maxX = minX + 1; 
         int maxZ = minZ + 1;
 
-        // Check the 2x2 grid
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
                 int64_t key = ChunkKey(x, 0, z, prevLod);
                 auto it = m_chunks.find(key);
-                
-                // If chunk is missing, generated but not uploaded, or meshing...
-                if (it == m_chunks.end()) return false; // Gap!
-                if (it->second->state != ChunkState::ACTIVE) return false; // Not ready!
+                if (it == m_chunks.end()) return false; 
+                if (it->second->state != ChunkState::ACTIVE) return false; 
             }
         }
-        
-        // If we get here, all 4 quadrants are covered by active high-detail geometry.
-        // We can safely cull this coarse chunk.
         return true; 
     }
 
@@ -268,54 +259,63 @@ public:
     }
 
     ~World() { 
-        m_shutdown = true;
-        m_chunks.clear();
-        glDeleteBuffers(1, &m_indirectBuffer);
-        glDeleteBuffers(1, &m_batchSSBO);
-        glDeleteVertexArrays(1, &m_dummyVAO);
+        Dispose();
     }
     
-    // Allow read-only access to config for Main loop
+    void Dispose() {
+        m_shutdown = true;
+        if (m_indirectBuffer) { glDeleteBuffers(1, &m_indirectBuffer); m_indirectBuffer = 0; }
+        if (m_batchSSBO) { glDeleteBuffers(1, &m_batchSSBO); m_batchSSBO = 0; }
+        if (m_dummyVAO) { glDeleteVertexArrays(1, &m_dummyVAO); m_dummyVAO = 0; }
+    }
+    
     const WorldConfig& GetConfig() const { return m_config; }
 
     void Update(glm::vec3 cameraPos) {
         if (m_shutdown) return;
         ProcessQueues(); 
-        updateTimer++;
-        if (updateTimer > 5) {
-            bool moved = false;
-            for (int lod = 0; lod < m_config.lodCount; lod++) {
-                int scale = 1 << lod;
-                int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
-                int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
-                if (px != lastPx[lod] || pz != lastPz[lod]) {
-                    lastPx[lod] = px; lastPz[lod] = pz; moved = true;
-                }
-            }
-            if (moved) UnloadChunks(cameraPos);
-            QueueNewChunks(cameraPos);
-            updateTimer = 0;
-        }
+        
+        int lodToUpdate = m_frameCounter % m_config.lodCount;
+        m_frameCounter++;
+        UnloadChunks(cameraPos, lodToUpdate);
+        QueueNewChunks(cameraPos, lodToUpdate);
     }
 
     void ProcessQueues() {
-        std::lock_guard<std::mutex> lock(m_queueMutex);
-        int processed = 0; 
+        if(m_shutdown) return;
+        std::vector<ChunkNode*> nodesToMesh;
+        std::vector<ChunkNode*> nodesToUpload;
         
-        while (!m_generatedQueue.empty() && processed < 50) {
-            ChunkNode* node = m_generatedQueue.front(); m_generatedQueue.pop();
+        {
+            std::lock_guard<std::mutex> lock(m_queueMutex);
+            int limitGen = 64; 
+            while (!m_generatedQueue.empty() && limitGen > 0) {
+                nodesToMesh.push_back(m_generatedQueue.front());
+                m_generatedQueue.pop();
+                limitGen--;
+            }
+            int limitUpload = 64; 
+            while (!m_meshedQueue.empty() && limitUpload > 0) {
+                nodesToUpload.push_back(m_meshedQueue.front());
+                m_meshedQueue.pop();
+                limitUpload--;
+            }
+        }
+
+        for (ChunkNode* node : nodesToMesh) {
+            if(m_shutdown) return; 
             if (node->state == ChunkState::GENERATING) {
-                if (node->chunk.isUniform && node->chunk.uniformID == 0) node->state = ChunkState::ACTIVE;
-                else {
+                if (node->chunk.isUniform && node->chunk.uniformID == 0) {
+                    node->state = ChunkState::ACTIVE;
+                } else {
                     node->state = ChunkState::MESHING;
                     m_pool.enqueue([this, node]() { this->Task_Mesh(node); });
                 }
             }
-            processed++;
         }
 
-        while (!m_meshedQueue.empty() && processed < 50) {
-            ChunkNode* node = m_meshedQueue.front(); m_meshedQueue.pop();
+        for (ChunkNode* node : nodesToUpload) {
+            if(m_shutdown) return; 
             if (node->state == ChunkState::MESHING) {
                 if (!node->cachedMesh.empty()) {
                     size_t bytes = node->cachedMesh.size() * sizeof(PackedVertex);
@@ -330,17 +330,19 @@ public:
                 }
                 node->state = ChunkState::ACTIVE;
             }
-            processed++;
         }
     }
 
-    void UnloadChunks(glm::vec3 cameraPos) {
+    void UnloadChunks(glm::vec3 cameraPos, int targetLod) {
+        if(m_shutdown) return;
         std::vector<int64_t> toRemove;
+        
         for (auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
-            int lod = node->lod;
+            if (node->lod != targetLod) continue;
+
             int scale = node->scale;
-            int limit = m_config.lodRadius[lod] + 3; 
+            int limit = m_config.lodRadius[targetLod] + 3; 
             int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
             int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
 
@@ -360,6 +362,7 @@ public:
     }
 
     void Draw(Shader& shader, const glm::mat4& viewProj) {
+        if(m_shutdown) return;
         m_frustum.Update(viewProj);
         static std::vector<DrawArraysIndirectCommand> commands;
         static std::vector<glm::vec4> batchOffsets;
@@ -372,11 +375,7 @@ public:
             if (node->state != ChunkState::ACTIVE) continue;
             if (node->gpuOffset == -1) continue; 
             if (!m_frustum.IsBoxVisible(node->minAABB, node->maxAABB)) continue;
-            
-            // FIX: Re-enable Culling, but use the STRICT check
-            if (node->lod > 0) {
-                 if (IsFullyCovered(node->cx, node->cz, node->lod)) continue;
-            }
+            if (node->lod > 0 && IsFullyCovered(node->cx, node->cz, node->lod)) continue;
 
             DrawArraysIndirectCommand cmd;
             cmd.count = (uint32_t)node->vertexCount;
@@ -394,6 +393,8 @@ public:
         glNamedBufferSubData(m_indirectBuffer, 0, commands.size() * sizeof(DrawArraysIndirectCommand), commands.data());
         glNamedBufferSubData(m_batchSSBO, 0, batchOffsets.size() * sizeof(glm::vec4), batchOffsets.data());
 
+        glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+
         shader.use();
         glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
@@ -405,44 +406,73 @@ public:
         glBindVertexArray(0); 
     }
 
-    void QueueNewChunks(glm::vec3 cameraPos) {
+    void QueueNewChunks(glm::vec3 cameraPos, int targetLod) {
+        if (m_shutdown) return;
+
+        // FIXED: Use a spiral pattern (Center -> Out) instead of Loop (Left -> Right).
+        // This ensures that if the Time Budget is exceeded, we drop the FAR chunks,
+        // not the chunks on the positive X/Z axis.
+        static std::vector<std::pair<int, int>> spiralOffsets;
+        static std::once_flag flag;
+        std::call_once(flag, [](){
+            int maxR = 64; 
+            for (int x = -maxR; x <= maxR; x++) {
+                for (int z = -maxR; z <= maxR; z++) {
+                    spiralOffsets.push_back({x, z});
+                }
+            }
+            // Sort by distance from center
+            std::sort(spiralOffsets.begin(), spiralOffsets.end(), [](const std::pair<int,int>& a, const std::pair<int,int>& b){
+                return (a.first*a.first + a.second*a.second) < (b.first*b.first + b.second*b.second);
+            });
+        });
+        
+        auto startTime = std::chrono::high_resolution_clock::now();
         std::vector<ChunkRequest> missing;
-        missing.reserve(1000); 
-        const int MAX_TASKS = 64; 
+        missing.reserve(200); 
+        const int MAX_TASKS =  64; 
 
         int camYBlock = (int)cameraPos.y;
+        int lod = targetLod;
+        int scale = 1 << lod;
+        int r = m_config.lodRadius[lod];
+        int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
+        int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
 
-        for (int lod = 0; lod < m_config.lodCount; lod++) {
-            int scale = 1 << lod;
-            int r = m_config.lodRadius[lod];
-            int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
-            int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+        // Iterate using Spiral Offset
+        for (const auto& offset : spiralOffsets) {
+            // Check if offset is within current LOD radius
+            if (std::abs(offset.first) > r || std::abs(offset.second) > r) continue;
 
-            for (int x = px - r; x <= px + r; x++) {
-                for (int z = pz - r; z <= pz + r; z++) {
-                    
-                    int minH, maxH;
-                    m_generator.GetHeightBounds(x, z, scale, minH, maxH);
 
-                    int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
-                    int chunkYEnd = (maxH / (CHUNK_SIZE * scale)) + 1;
+            // ********** SPRIRAL CHUNK UPDATING LIMITER ************ //
+            // Time Budget Check (2ms limit per frame per LOD)
+            // auto currTime = std::chrono::high_resolution_clock::now();
+            // auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(currTime - startTime).count();
+            // if (elapsed > 5) break; // Break loop if taking too long
+            // ********** SPRIRAL CHUNK UPDATING LIMITER ************ //
 
-                    chunkYStart = std::max(0, chunkYStart);
-                    chunkYEnd = std::min(m_config.worldHeightChunks - 1, chunkYEnd);
 
-                    for (int y = chunkYStart; y <= chunkYEnd; y++) {
-                        int64_t key = ChunkKey(x, y, z, lod);
-                        if (m_chunks.find(key) == m_chunks.end()) {
-                            int dx = x - px; 
-                            int dz = z - pz; 
-                            int chunkWorldY = y * CHUNK_SIZE * scale;
-                            int dy = (chunkWorldY - camYBlock) / (CHUNK_SIZE * scale); 
-                            
-                            int distSq = dx*dx + dz*dz + (dy*dy); 
-                            
-                            missing.push_back({x, y, z, lod, distSq + (lod * 5000)});
-                        }
-                    }
+            int x = px + offset.first;
+            int z = pz + offset.second;
+            
+            // Calculate height range for this column
+            int minH, maxH;
+            m_generator.GetHeightBounds(x, z, scale, minH, maxH);
+            int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
+            int chunkYEnd = (maxH / (CHUNK_SIZE * scale)) + 1;
+            chunkYStart = std::max(0, chunkYStart);
+            chunkYEnd = std::min(m_config.worldHeightChunks - 1, chunkYEnd);
+
+            for (int y = chunkYStart; y <= chunkYEnd; y++) {
+                int64_t key = ChunkKey(x, y, z, lod);
+                if (m_chunks.find(key) == m_chunks.end()) {
+                    int dx = x - px; 
+                    int dz = z - pz; 
+                    int chunkWorldY = y * CHUNK_SIZE * scale;
+                    int dy = (chunkWorldY - camYBlock) / (CHUNK_SIZE * scale); 
+                    int distSq = dx*dx + dz*dz + (dy*dy); 
+                    missing.push_back({x, y, z, lod, distSq});
                 }
             }
         }
@@ -470,14 +500,17 @@ public:
         if (m_shutdown) return;
         FillChunk(node->chunk, node->cx, node->cy, node->cz, node->scale);
         std::lock_guard<std::mutex> lock(m_queueMutex);
+        if (m_shutdown) return;
         m_generatedQueue.push(node);
     }
 
     void Task_Mesh(ChunkNode* node) {
+        if (m_shutdown) return;
         LinearAllocator<PackedVertex> threadAllocator(1000000); 
         MeshChunk(node->chunk, threadAllocator, false);
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
         std::lock_guard<std::mutex> lock(m_queueMutex);
+        if (m_shutdown) return;
         m_meshedQueue.push(node);
     }
 
@@ -546,9 +579,6 @@ public:
         m_config = newConfig;
         m_generator = TerrainGenerator(m_config);
         
-        // --- VRAM LEAK FIX ---
-        // Explicitly free the GPU memory for all current chunks
-        // before releasing them to the pool.
         for (auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
             if (node->gpuOffset != -1) {

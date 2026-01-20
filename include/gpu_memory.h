@@ -5,9 +5,11 @@
 #include <iostream>
 #include <algorithm>
 #include <limits>
+#include <cstring> // Required for memcpy
 
 class GpuMemoryManager {
     GLuint m_bufferId;
+    void* m_mappedPtr = nullptr; // Persistent CPU pointer to GPU memory
     size_t m_capacity;
     size_t m_used = 0;
     std::map<size_t, size_t> m_freeBlocks;
@@ -22,16 +24,27 @@ class GpuMemoryManager {
 public:
     GpuMemoryManager(size_t sizeBytes) : m_capacity(sizeBytes) {
         glCreateBuffers(1, &m_bufferId);
-        glNamedBufferStorage(m_bufferId, m_capacity, nullptr, GL_DYNAMIC_STORAGE_BIT);
+        
+        // PERSISTENT MAPPING SETUP
+        // We ask for a buffer that we can write to (WRITE) while the GPU is using it (PERSISTENT).
+        // COHERENT means the GPU sees our writes automatically (no manual flush needed).
+        GLbitfield flags = GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT;
+        
+        glNamedBufferStorage(m_bufferId, m_capacity, nullptr, flags);
+        m_mappedPtr = glMapNamedBufferRange(m_bufferId, 0, m_capacity, flags);
+        
         m_freeBlocks[0] = m_capacity;
-        std::cout << "[GpuMem] Allocated " << (sizeBytes / 1024 / 1024) << "MB Static VRAM" << std::endl;
+        std::cout << "[GpuMem] Allocated " << (sizeBytes / 1024 / 1024) << "MB Persistent VRAM" << std::endl;
     }
 
     ~GpuMemoryManager() {
+        if (m_mappedPtr) {
+            glUnmapNamedBuffer(m_bufferId);
+        }
         glDeleteBuffers(1, &m_bufferId);
     }
 
-    // Upgraded to BEST FIT strategy to reduce fragmentation
+    // Best Fit Allocation Strategy
     long long Allocate(size_t rawSize, size_t alignment = 256) {
         size_t size = AlignTo(rawSize, 4); 
 
@@ -40,7 +53,6 @@ public:
         size_t bestAlignedOffset = 0;
         size_t bestPadding = 0;
 
-        // Iterate ALL free blocks to find the best fit
         for (auto it = m_freeBlocks.begin(); it != m_freeBlocks.end(); ++it) {
             size_t blockOffset = it->first;
             size_t blockSize = it->second;
@@ -51,7 +63,6 @@ public:
             if (blockSize >= size + padding) {
                 size_t waste = blockSize - (size + padding);
                 
-                // Perfect fit? Take it immediately.
                 if (waste == 0) {
                     bestIt = it;
                     bestAlignedOffset = alignedOffset;
@@ -59,7 +70,6 @@ public:
                     break; 
                 }
 
-                // Better fit than what we found so far?
                 if (waste < minWaste) {
                     minWaste = waste;
                     bestIt = it;
@@ -69,20 +79,16 @@ public:
             }
         }
 
-        // Did we find a block?
         if (bestIt != m_freeBlocks.end()) {
             size_t blockOffset = bestIt->first;
             size_t blockSize = bestIt->second;
 
-            // 1. Remove the original free block
             m_freeBlocks.erase(bestIt);
 
-            // 2. Add padding block if needed (left side)
             if (bestPadding > 0) {
                 m_freeBlocks[blockOffset] = bestPadding;
             }
 
-            // 3. Add remaining space block if needed (right side)
             size_t allocatedEnd = bestAlignedOffset + size;
             size_t blockEnd = blockOffset + blockSize;
             
@@ -101,7 +107,6 @@ public:
         size_t size = AlignTo(rawSize, 4); 
         m_used -= size; 
         
-        // Insert freed block
         auto ret = m_freeBlocks.insert({offset, size});
         auto it = ret.first;
 
@@ -124,8 +129,12 @@ public:
         }
     }
 
+    // NON-BLOCKING UPLOAD
     void Upload(size_t offset, const void* data, size_t rawSize) {
-        glNamedBufferSubData(m_bufferId, offset, rawSize, data);
+        if (m_mappedPtr) {
+            // Direct memory copy. No driver interaction. No stall.
+            std::memcpy((uint8_t*)m_mappedPtr + offset, data, rawSize);
+        }
     }
 
     GLuint GetID() const { return m_bufferId; }

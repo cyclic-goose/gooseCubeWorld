@@ -113,7 +113,7 @@ int main() {
 
     // 2. Default VSync to ON (safe default)
     // The gui.Init() below will respect the m_VSync default (true) or user can toggle later
-    glfwSwapInterval(1); 
+    glfwSwapInterval(0); 
 
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
@@ -129,54 +129,55 @@ int main() {
     glCullFace(GL_BACK);
     glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
 
-    Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
-    
-    WorldConfig globalConfig;
-    // ... config setup ...
-    globalConfig.lodCount = 6; 
-    globalConfig.lodRadius[0] = 10; 
-    globalConfig.lodRadius[1] = 10; 
-    globalConfig.lodRadius[2] = 16; 
-    globalConfig.lodRadius[3] = 24; 
-    globalConfig.lodRadius[4] = 32;
-    globalConfig.lodRadius[5] = 20;
+    { // NEW SCOPE for destructors calling before glfwTerminate()
+        Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
+        
+        WorldConfig globalConfig;
+        // ... config setup ...
+        globalConfig.lodCount = 5; 
+        globalConfig.lodRadius[0] = 10; 
+        globalConfig.lodRadius[1] = 10; 
+        globalConfig.lodRadius[2] = 16; 
+        globalConfig.lodRadius[3] = 24; 
+        globalConfig.lodRadius[4] = 32;
+        //globalConfig.lodRadius[5] = 20;
 
-    World world(globalConfig);
-    gui.Init(window); // Stores window pointer for window management
+        World world(globalConfig);
+        gui.Init(window); // Stores window pointer for window management
 
-    while (!glfwWindowShouldClose(window)) {
-        float currentFrame = (float)glfwGetTime();
-        deltaTime = currentFrame - lastFrame;
-        lastFrame = currentFrame;
+        while (!glfwWindowShouldClose(window)) {
+            float currentFrame = (float)glfwGetTime();
+            deltaTime = currentFrame - lastFrame;
+            lastFrame = currentFrame;
 
-        processInput(window, world);
-        world.Update(camera.Position);
+            processInput(window, world);
+            world.Update(camera.Position);
 
-        gui.BeginFrame();
-        gui.RenderDebugPanel(world); 
+            gui.BeginFrame();
+            gui.RenderDebugPanel(world); 
 
-        if (gui.RenderStandardMenu()) {
-            glfwSetWindowShouldClose(window, true);
+            // if (gui.RenderStandardMenu()) {
+            //     glfwSetWindowShouldClose(window, true);
+            // }
+
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+            glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
+            glm::mat4 view = camera.GetViewMatrix();
+            glm::mat4 viewProj = projection * view;
+
+            world.Draw(worldShader, viewProj);
+
+            gui.EndFrame();
+
+            glfwSwapBuffers(window);
+            glfwPollEvents();
+
+            // --- PREVENT CPU HOGGING ---
+            // Forces a context switch so the OS knows the window is responsive
+            //std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
-        glm::mat4 view = camera.GetViewMatrix();
-        glm::mat4 viewProj = projection * view;
-
-        world.Draw(worldShader, viewProj);
-
-        gui.EndFrame();
-
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-
-        // --- PREVENT CPU HOGGING ---
-        // Forces a context switch so the OS knows the window is responsive
-        // std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    
     glfwTerminate();
     return 0;
 }
