@@ -181,7 +181,6 @@ int main() {
     // load the gui and use it to render a quick splash screen
     // --- RENDER SPLASH SCREEN ---
     gui.Init(window); // Stores window pointer for window management
-    
     RenderLoadingScreen(window);
 
 
@@ -197,21 +196,22 @@ int main() {
 
 
 
-    { // NEW SCOPE for destructors calling before glfwTerminate()
+    { //SCOPE for destructors calling before glfwTerminate()
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         
         WorldConfig globalConfig;
         // ... config setup ...
         globalConfig.lodCount = 8; 
-        globalConfig.lodRadius[0] = 10; 
-        globalConfig.lodRadius[1] = 5; 
-        globalConfig.lodRadius[2] = 5; 
-        globalConfig.lodRadius[3] = 5; 
-        globalConfig.lodRadius[4] = 5;
-        globalConfig.lodRadius[5] = 20;
-        globalConfig.lodRadius[6] = 20;
-        globalConfig.lodRadius[7] = 32;
-
+        
+        // Exponential growth: Geometry becomes cheaper at higher LODs, so we draw much further.
+        globalConfig.lodRadius[0] = 10;   // Scale 1   (Detailed area: ~256 blocks)
+        globalConfig.lodRadius[1] = 6;  // Scale 2   (Transition buffer)
+        globalConfig.lodRadius[2] = 6;  // Scale 4   
+        globalConfig.lodRadius[3] = 6;  // Scale 8   
+        globalConfig.lodRadius[4] = 8;  // Scale 16  
+        globalConfig.lodRadius[5] = 12;  // Scale 32  
+        globalConfig.lodRadius[6] = 14;  // Scale 64  
+        globalConfig.lodRadius[7] = 16; // Scale 128 (Horizon: Massive distance)
         // This takes a while but is only run once
         World world(globalConfig);
 
@@ -229,6 +229,7 @@ int main() {
             if (gui.RenderStandardMenu()) {
                 glfwSetWindowShouldClose(window, true);
             }
+            gui.RenderSimpleOverlay();
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -243,9 +244,7 @@ int main() {
             glfwSwapBuffers(window);
             glfwPollEvents();
 
-            // --- PREVENT CPU HOGGING ---
-            // Forces a context switch so the OS knows the window is responsive
-            //std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
         }
     }
 

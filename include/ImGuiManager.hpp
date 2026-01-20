@@ -153,7 +153,7 @@ public:
             ImGui::EndMainMenuBar();
         }
         
-        if (m_ShowOverlay) RenderSimpleOverlay();
+        //if (m_ShowOverlay) RenderSimpleOverlay();
         return exitClicked;
     }
 
@@ -288,7 +288,7 @@ public:
     }
 
     void RenderSimpleOverlay() {
-        if (!m_ShowOverlay) return;
+        //if (!m_ShowOverlay) return;
         const float PAD = 10.0f;
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImVec2 work_pos = viewport->WorkPos; 

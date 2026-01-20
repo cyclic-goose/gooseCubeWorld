@@ -41,7 +41,7 @@ struct WorldConfig {
     float hillAmplitude = 15.0f;  
     float hillFrequency = 1.0f;   
     float mountainAmplitude = 300.0f; 
-    float mountainFrequency = 0.5f; 
+    float mountainFrequency = 0.8f; 
     int seaLevel = 10;            
     bool enableCaves = false;     
     float caveThreshold = 0.5f;   
@@ -415,7 +415,7 @@ public:
         static std::vector<std::pair<int, int>> spiralOffsets;
         static std::once_flag flag;
         std::call_once(flag, [](){
-            int maxR = 64; 
+            int maxR = 96; 
             for (int x = -maxR; x <= maxR; x++) {
                 for (int z = -maxR; z <= maxR; z++) {
                     spiralOffsets.push_back({x, z});
