@@ -14,7 +14,7 @@
 // --- CONFIGURATION ---
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
-const bool START_FULLSCREEN = true; // Change to true to start in fullscreen
+const bool START_FULLSCREEN = true; 
 
 // Camera setup
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
@@ -25,15 +25,15 @@ bool firstMouse = true;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
-// 1. Declare GUI Globally so callbacks can access it
+// 1. GLOBAL GUI MANAGERS
 ImGuiManager gui;
+UIConfig appState; 
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
 
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
-    // 2. Prevent camera movement if in Menu Mode
-    if (!gui.m_GameMode) {
-        firstMouse = true; // Reset this so camera doesn't jump when we resume
+    if (!appState.isGameMode) {
+        firstMouse = true;
         return;
     }
 
@@ -42,39 +42,52 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     lastX = xpos; lastY = ypos;
 }
 
+
 void processInput(GLFWwindow *window, World& world) {
-    // 3. Robust TAB Key Toggle
+    // 1. TAB: Toggle Cursor Lock
     static bool tabPressed = false;
     if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS) {
         if (!tabPressed) {
-            gui.m_GameMode = !gui.m_GameMode;
+            appState.isGameMode = !appState.isGameMode;
             tabPressed = true;
-            if (gui.m_GameMode) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            if (appState.isGameMode) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
             else glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         }
-    } else {
-        tabPressed = false;
+    } else { tabPressed = false; }
+
+    // 2. Click to capture cursor (only if not clicking on ImGui)
+    if (!appState.isGameMode && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+        if (!ImGui::GetIO().WantCaptureMouse) {
+            appState.isGameMode = true;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+        }
     }
 
-    // 4. F11 Fullscreen Toggle
-    static bool f11Pressed = false;
-    if (glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS) {
-        if (!f11Pressed) {
-            gui.ToggleFullscreen();
-            f11Pressed = true;
+    // 3. F2: Toggle Debug Window
+    static bool f2Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS) {
+        if (!f2Pressed) {
+            appState.showDebugPanel = !appState.showDebugPanel;
+            f2Pressed = true;
         }
-    } else {
-        f11Pressed = false;
-    }
+    } else { f2Pressed = false; }
+
+    // 4. M: Toggle World Gen Window
+    static bool mPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS) {
+        if (!mPressed) {
+            appState.showWorldSettings = !appState.showWorldSettings;
+            mPressed = true;
+        }
+    } else { mPressed = false; }
 
     // Standard Exit
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
     
-    // 5. Input only allowed in Game Mode
-    if (gui.m_GameMode) {
+    // Movement
+    if (appState.isGameMode) {
         if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.MovementSpeed = 500.0f;
         else camera.MovementSpeed = 50.0f;
-
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
         if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT, deltaTime);
@@ -83,16 +96,14 @@ void processInput(GLFWwindow *window, World& world) {
         if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
     }
 
-    // Hotkeys that work in both modes
+    // R: Reload shortcut
     static bool rPressed = false;
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !rPressed) {
-        WorldConfig newConfig = world.GetConfig();
-        //newConfig.seed = rand(); // change see upon reload? why
-        std::cout << "[System] Reloading World... Seed: " << newConfig.seed << std::endl;
-        world.Reload(newConfig);
+        world.Reload(appState.editConfig);
         rPressed = true;
     } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) rPressed = false;
 }
+
 
 // a quick one off "splash screen" so the player doesnt think the computer just froze (although it is kind of, its allocating vram)
 void RenderLoadingScreen(GLFWwindow* window) {
@@ -163,13 +174,11 @@ int main() {
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     
-    // 1. Apply Startup Fullscreen Config
     if (START_FULLSCREEN) {
         GLFWmonitor* monitor = glfwGetPrimaryMonitor();
         const GLFWvidmode* mode = glfwGetVideoMode(monitor);
         glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
     }
-    
     
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
@@ -177,15 +186,9 @@ int main() {
     
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
-
-    // load the gui and use it to render a quick splash screen
-    // --- RENDER SPLASH SCREEN ---
-    gui.Init(window); // Stores window pointer for window management
+    gui.Init(window);
     RenderLoadingScreen(window);
 
-
-
-    // pre game loop configurations
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GEQUAL); 
@@ -194,25 +197,20 @@ int main() {
     glCullFace(GL_BACK);
     glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
 
-
-
-    { //SCOPE for destructors calling before glfwTerminate()
+    { 
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         
         WorldConfig globalConfig;
-        // ... config setup ...
         globalConfig.lodCount = 8; 
+        globalConfig.lodRadius[0] = 10;   
+        globalConfig.lodRadius[1] = 6;  
+        globalConfig.lodRadius[2] = 6;   
+        globalConfig.lodRadius[3] = 6;   
+        globalConfig.lodRadius[4] = 8;  
+        globalConfig.lodRadius[5] = 12; 
+        globalConfig.lodRadius[6] = 14; 
+        globalConfig.lodRadius[7] = 16; 
         
-        // Exponential growth: Geometry becomes cheaper at higher LODs, so we draw much further.
-        globalConfig.lodRadius[0] = 10;   // Scale 1   (Detailed area: ~256 blocks)
-        globalConfig.lodRadius[1] = 6;  // Scale 2   (Transition buffer)
-        globalConfig.lodRadius[2] = 6;  // Scale 4   
-        globalConfig.lodRadius[3] = 6;  // Scale 8   
-        globalConfig.lodRadius[4] = 8;  // Scale 16  
-        globalConfig.lodRadius[5] = 12;  // Scale 32  
-        globalConfig.lodRadius[6] = 14;  // Scale 64  
-        globalConfig.lodRadius[7] = 16; // Scale 128 (Horizon: Massive distance)
-        // This takes a while but is only run once
         World world(globalConfig);
 
         while (!glfwWindowShouldClose(window)) {
@@ -224,12 +222,7 @@ int main() {
             world.Update(camera.Position);
 
             gui.BeginFrame();
-            gui.RenderDebugPanel(world); 
-
-            if (gui.RenderStandardMenu()) {
-                glfwSetWindowShouldClose(window, true);
-            }
-            gui.RenderSimpleOverlay();
+            gui.RenderUI(world, appState);
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -238,17 +231,14 @@ int main() {
             glm::mat4 viewProj = projection * view;
 
             world.Draw(worldShader, viewProj);
-
             gui.EndFrame();
 
             glfwSwapBuffers(window);
             glfwPollEvents();
-
-
         }
     }
 
-    gui.Shutdown(); // shutdown gui since its scope is global
+    gui.Shutdown();
     glfwTerminate();
     return 0;
 }

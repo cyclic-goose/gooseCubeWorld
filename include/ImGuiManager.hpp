@@ -9,30 +9,34 @@
 #include <vector>
 #include "world.h"
 
+// --- CONFIGURATION STRUCT ---
+struct UIConfig {
+    bool showDebugPanel = true;    // F2 to toggle
+    bool showWorldSettings = false; // M to toggle
+    bool showOverlay = true;        
+    bool showWireframe = false;
+    bool vsync = false;
+    
+    // Input State
+    bool isGameMode = true;         // TAB to toggle (Mouse Lock)
+
+    // Current settings being tweaked in the GUI
+    WorldConfig editConfig;         
+    bool editConfigInitialized = false;
+};
+
 class ImGuiManager {
 public:
     ImGuiManager() = default;
     
-    // State to track if we are in "Game Mode" (Mouse Locked) or "Menu Mode"
-    bool m_GameMode = true; 
-    
-    // Window State
-    bool m_VSync = false; // Default to true (safe)
-
-    bool m_showWireframe = false;
-
-    // Disable copying
     ImGuiManager(const ImGuiManager&) = delete;
     ImGuiManager& operator=(const ImGuiManager&) = delete;
 
-    ~ImGuiManager() {
-        Shutdown();
-    }
+    ~ImGuiManager() { Shutdown(); }
 
     void Init(GLFWwindow* window, const char* glslVersion = "#version 460") {
         if (m_Initialized) return;
-        
-        m_Window = window; // Store window for resizing/vsync calls
+        m_Window = window;
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -45,12 +49,8 @@ public:
         ImGui_ImplGlfw_InitForOpenGL(window, true);
         ImGui_ImplOpenGL3_Init(glslVersion);
         
-        // Initialize Cache for windowed restore
         glfwGetWindowPos(m_Window, &m_WindowedX, &m_WindowedY);
         glfwGetWindowSize(m_Window, &m_WindowedW, &m_WindowedH);
-
-        // set vsync
-        SetVSync(m_VSync);
 
         m_Initialized = true;
     }
@@ -76,253 +76,51 @@ public:
         m_Initialized = false;
     }
 
-    // --- WINDOW MANAGEMENT HELPERS ---
-
-    bool IsFullscreen() {
-        return glfwGetWindowMonitor(m_Window) != nullptr;
-    }
-
-    void SetFullscreen(bool enable) {
-        if (IsFullscreen() == enable) return;
-
-        if (enable) {
-            // Save current windowed params before switching
-            glfwGetWindowPos(m_Window, &m_WindowedX, &m_WindowedY);
-            glfwGetWindowSize(m_Window, &m_WindowedW, &m_WindowedH);
-
-            GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-            const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-            glfwSetWindowMonitor(m_Window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
-        } else {
-            // Restore windowed params
-            glfwSetWindowMonitor(m_Window, nullptr, m_WindowedX, m_WindowedY, m_WindowedW, m_WindowedH, 0);
+    void RenderUI(World& world, UIConfig& config) {
+        if (!config.editConfigInitialized) {
+            config.editConfig = world.GetConfig();
+            config.editConfigInitialized = true;
         }
-        
-        // Re-apply VSync setting after monitor switch (context might reset)
-        SetVSync(m_VSync);
+
+        static bool lastVsync = config.vsync;
+        if (config.vsync != lastVsync) {
+            glfwSwapInterval(config.vsync ? 1 : 0);
+            lastVsync = config.vsync;
+        }
+
+        // Always render the minimal overlay
+        if (config.showOverlay) RenderSimpleOverlay(config);
+
+        // Hide menus and windows if we are in Game Mode (Locked Mouse)
+        if (!config.isGameMode) {
+            if (config.showDebugPanel) RenderDebugPanel(world, config);
+            if (config.showWorldSettings) RenderWorldSettings(world, config);
+            RenderMenuBar(config);
+        }
     }
 
     void ToggleFullscreen() {
-        SetFullscreen(!IsFullscreen());
-    }
-
-    void SetVSync(bool enable) {
-        m_VSync = enable;
-        glfwSwapInterval(m_VSync ? 1 : 0);
-    }
-
-    // ---------------------------------
-
-    // Returns TRUE if "Exit" is clicked in the menu
-    bool RenderStandardMenu() {
-        bool exitClicked = false;
-        
-        // Don't show interactive menu if we are playing (Game Mode)
-        if (m_GameMode) return false; 
-
-        if (ImGui::BeginMainMenuBar()) {
-            if (ImGui::BeginMenu("File")) {
-                if (ImGui::MenuItem("Exit", "Alt+F4")) exitClicked = true;
-                ImGui::EndMenu();
-            }
-            if (ImGui::BeginMenu("View")) {
-                ImGui::MenuItem("Show Overlay", NULL, &m_ShowOverlay);
-                ImGui::MenuItem("Show Debug Stats", NULL, &m_ShowDebugPanel);
-                ImGui::Separator();
-                if (ImGui::MenuItem("Lock Mouse (Resume Game)", "TAB")) {
-                    m_GameMode = true;
-                }
-                ImGui::EndMenu();
-            }
-            
-            // --- NEW WINDOW MENU ---
-            if (ImGui::BeginMenu("Window")) {
-                // VSync Toggle
-                if (ImGui::MenuItem("VSync (Cap FPS)", NULL, &m_VSync)) {
-                    SetVSync(m_VSync);
-                }
-
-                // Fullscreen Toggle
-                bool fs = IsFullscreen();
-                if (ImGui::MenuItem("Fullscreen", "F11", &fs)) {
-                    SetFullscreen(fs);
-                }
-                ImGui::EndMenu();
-            }
-
-            ImGui::EndMainMenuBar();
-        }
-        
-        //if (m_ShowOverlay) RenderSimpleOverlay();
-        return exitClicked;
-    }
-
-    void RenderDebugPanel(World& world) {
-        if (!m_ShowDebugPanel) return;
-        
-        ImGuiWindowFlags flags = 0;
-        if (m_GameMode) {
-            flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
-            ImGui::SetNextWindowBgAlpha(0.3f); 
+        if (IsFullscreen()) {
+            glfwSetWindowMonitor(m_Window, nullptr, m_WindowedX, m_WindowedY, m_WindowedW, m_WindowedH, 0);
         } else {
-            ImGui::SetNextWindowBgAlpha(0.9f); 
+            glfwGetWindowPos(m_Window, &m_WindowedX, &m_WindowedY);
+            glfwGetWindowSize(m_Window, &m_WindowedW, &m_WindowedH);
+            GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+            const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+            glfwSetWindowMonitor(m_Window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
         }
-
-        ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
-        if (ImGui::Begin("Engine Statistics", &m_ShowDebugPanel, flags)) {
-            
-            // --- INPUT TOGGLE BUTTON ---
-            if (!m_GameMode) {
-                if (ImGui::Button("RESUME GAME (Lock Mouse)", ImVec2(-1, 40))) {
-                    m_GameMode = true;
-                }
-                ImGui::Separator();
-            } else {
-                ImGui::TextColored(ImVec4(1, 1, 0, 1), "[Press TAB to Unlock Mouse]");
-                ImGui::Separator();
-            }
-
-            // 1. PERFORMANCE
-            ImGui::TextColored(ImVec4(0, 1, 1, 1), "Performance");
-            ImGui::Separator();
-            float framerate = ImGui::GetIO().Framerate;
-            ImGui::Text("FPS: %.1f", framerate);
-            ImGui::Text("Frame Time: %.3f ms", 1000.0f / framerate);
-            
-            // Show VSync Status
-            ImGui::TextColored(m_VSync ? ImVec4(0,1,0,1) : ImVec4(1,0,0,1), 
-                "VSync: %s", m_VSync ? "ON (Capped)" : "OFF (Uncapped)");
-
-
-            if (ImGui::Checkbox("VSync (Cap FPS)", &m_VSync)) {
-                SetVSync(m_VSync);
-            }
-
-
-            // 2. MEMORY
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0, 1, 1, 1), "GPU Memory (Best Fit)");
-            ImGui::Separator();
-            
-            size_t used = world.m_gpuMemory->GetUsedMemory();
-            size_t total = world.m_gpuMemory->GetTotalMemory();
-            size_t freeBlocks = world.m_gpuMemory->GetFreeBlockCount();
-            
-            float usedMB = used / (1024.0f * 1024.0f);
-            float totalMB = total / (1024.0f * 1024.0f);
-            float percent = (float)used / (float)total;
-
-            ImGui::Text("VRAM: %.2f / %.2f MB", usedMB, totalMB);
-            ImGui::ProgressBar(percent, ImVec2(-1.0f, 0.0f));
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Fragment Count: %zu", freeBlocks);
-            ImGui::Text("Free Blocks (Frag): %zu", freeBlocks);
-
-            // 3. GEOMETRY
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0, 1, 1, 1), "World / Geometry");
-            ImGui::Separator();
-
-            size_t totalChunks = world.m_chunks.size();
-            size_t activeChunks = 0;
-            size_t totalVertices = 0;
-            
-            for (const auto& pair : world.m_chunks) {
-                ChunkNode* node = pair.second;
-                if (node->state == ChunkState::ACTIVE) {
-                    activeChunks++;
-                    totalVertices += node->vertexCount;
-                }
-            }
-            ImGui::Text("Chunks: %zu (Active: %zu)", totalChunks, activeChunks);
-            ImGui::Text("Vertices: %s", FormatNumber(totalVertices).c_str());
-            if (ImGui::Checkbox("Wireframe Mode", &m_showWireframe)) {
-                if (m_showWireframe) {
-                    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-                } else {
-                    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-                }
-            }
-
-            // 4. THREADING
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0, 1, 1, 1), "Threading & Generation");
-            ImGui::Separator();
-
-            size_t threads = world.m_pool.GetWorkerCount();
-            size_t tasksPending = world.m_pool.GetQueueSize();
-            size_t genQueue = world.m_generatedQueue.size(); 
-            size_t meshQueue = world.m_meshedQueue.size();
-
-            ImGui::Text("Active Threads: %zu", threads);
-            ImGui::Text("ThreadPool Tasks: %zu", tasksPending);
-            ImGui::Text("Generate Queue: %zu", genQueue);
-            ImGui::Text("Upload Queue: %zu", meshQueue);
-
-            // 5. RENDER DISTANCE
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0, 1, 1, 1), "Render Distance");
-            ImGui::Separator();
-
-            int maxDistBlocks = 0;
-            for(int i = 0; i < world.m_config.lodCount; i++) {
-                int scale = 1 << i;
-                int dist = world.m_config.lodRadius[i] * CHUNK_SIZE * scale;
-                if(dist > maxDistBlocks) maxDistBlocks = dist;
-            }
-            float km = (float)maxDistBlocks / 1000.0f;
-            int effectiveChunks = maxDistBlocks / CHUNK_SIZE;
-
-            ImGui::Text("Effective Range: %.2f km", km);
-            ImGui::Text("Max Radius: %d chunks (%d blocks)", effectiveChunks, maxDistBlocks);
-            
-            // 6. CONTROL
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(0, 1, 1, 1), "Control");
-            ImGui::Separator();
-            //bool caves = world.m_config.enableCaves;
-            // if (ImGui::Checkbox("Enable Caves (Needs Reload)", &caves)) {
-            //     // Note: Actual modification needs world setter access, keeping visual for now
-            // }
-        }
-        ImGui::End();
-    }
-
-    void RenderSimpleOverlay() {
-        //if (!m_ShowOverlay) return;
-        const float PAD = 10.0f;
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImVec2 work_pos = viewport->WorkPos; 
-        ImVec2 work_size = viewport->WorkSize;
-        ImVec2 window_pos, window_pos_pivot;
-        
-        window_pos.x = work_pos.x + work_size.x - PAD;
-        window_pos.y = work_pos.y + PAD;
-        window_pos_pivot.x = 1.0f;
-        window_pos_pivot.y = 0.0f;
-
-        ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, window_pos_pivot);
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
-        
-        ImGui::SetNextWindowBgAlpha(0.35f); 
-        if (ImGui::Begin("StatsOverlay", &m_ShowOverlay, window_flags)) {
-            ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-            ImGui::Text("%s", m_GameMode ? "[GAME MODE]" : "[MENU MODE]");
-        }
-        ImGui::End();
     }
 
 private:
     bool m_Initialized = false;
-    bool m_ShowOverlay = true;
-    bool m_ShowDebugPanel = true;
-    
-    // Internal Window state for restoration
     GLFWwindow* m_Window = nullptr;
     int m_WindowedX = 0, m_WindowedY = 0, m_WindowedW = 1280, m_WindowedH = 720;
 
+    bool IsFullscreen() { return glfwGetWindowMonitor(m_Window) != nullptr; }
+
     std::string FormatNumber(size_t n) {
         std::string s = std::to_string(n);
-        int insertPosition = s.length() - 3;
+        int insertPosition = (int)s.length() - 3;
         while (insertPosition > 0) {
             s.insert(insertPosition, ",");
             insertPosition -= 3;
@@ -333,5 +131,130 @@ private:
     void CustomizeStyle() {
         ImGuiStyle& style = ImGui::GetStyle();
         style.WindowRounding = 5.0f;
+        style.FrameRounding = 3.0f;
+        style.WindowPadding = ImVec2(10, 10);
+    }
+
+    void RenderSimpleOverlay(const UIConfig& config) {
+        const float PAD = 10.0f;
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        ImVec2 window_pos = ImVec2(viewport->WorkPos.x + PAD, viewport->WorkPos.y + PAD);
+
+        ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always, ImVec2(0.0f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.35f); 
+        
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
+        
+        if (ImGui::Begin("StatsOverlay", nullptr, flags)) {
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "FPS: %.1f", ImGui::GetIO().Framerate);
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", config.isGameMode ? "[LOCKED]" : "[UNLOCKED]");
+        }
+        ImGui::End();
+    }
+
+    void RenderDebugPanel(World& world, UIConfig& config) {
+        ImGui::SetNextWindowSize(ImVec2(400, 600), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Engine Debug (F2)", &config.showDebugPanel)) {
+            
+            ImGui::TextColored(ImVec4(0, 1, 1, 1), "PERFORMANCE");
+            ImGui::Separator();
+            float fps = ImGui::GetIO().Framerate;
+            ImGui::Text("FPS: %.1f", fps);
+            ImGui::Text("Frame Time: %.3f ms", 1000.0f / fps);
+            ImGui::Checkbox("VSync", &config.vsync);
+            
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0, 1, 1, 1), "GPU MEMORY");
+            ImGui::Separator();
+            size_t used = world.m_gpuMemory->GetUsedMemory();
+            size_t total = world.m_gpuMemory->GetTotalMemory();
+            float usedMB = used / (1024.0f * 1024.0f);
+            float totalMB = total / (1024.0f * 1024.0f);
+            float ratio = (float)used / (float)total;
+            
+            ImGui::Text("VRAM: %.1f / %.1f MB", usedMB, totalMB);
+            ImGui::ProgressBar(ratio, ImVec2(-1.0f, 15.0f));
+
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0, 1, 1, 1), "WORLD GEOMETRY");
+            ImGui::Separator();
+            
+            size_t activeChunks = 0;
+            size_t totalVertices = 0;
+            for (const auto& pair : world.m_chunks) {
+                if (pair.second->state == ChunkState::ACTIVE) {
+                    activeChunks++;
+                    totalVertices += pair.second->vertexCount;
+                }
+            }
+            
+            ImGui::Text("Active Chunks: %zu", activeChunks);
+            ImGui::Text("Total Vertices: %s", FormatNumber(totalVertices).c_str());
+            
+            if (ImGui::Checkbox("Wireframe Mode", &config.showWireframe)) {
+                glPolygonMode(GL_FRONT_AND_BACK, config.showWireframe ? GL_LINE : GL_FILL);
+            }
+
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(0, 1, 1, 1), "THREADING");
+            ImGui::Separator();
+            ImGui::Text("Pool Tasks: %zu", world.m_pool.GetQueueSize());
+            
+            ImGui::End();
+        }
+    }
+
+    void RenderWorldSettings(World& world, UIConfig& config) {
+        ImGui::SetNextWindowSize(ImVec2(400, 550), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("World Generation (M)", &config.showWorldSettings)) {
+            
+            if (ImGui::CollapsingHeader("Terrain Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::DragInt("Seed", &config.editConfig.seed);
+                ImGui::SliderFloat("Noise Scale", &config.editConfig.scale, 0.001f, 0.1f);
+                ImGui::SliderFloat("Hill Amp", &config.editConfig.hillAmplitude, 0.0f, 100.0f);
+                ImGui::SliderFloat("Hill Freq", &config.editConfig.hillFrequency, 0.1f, 5.0f);
+                ImGui::SliderFloat("Mountain Amp", &config.editConfig.mountainAmplitude, 0.0f, 500.0f);
+                ImGui::SliderFloat("Mountain Freq", &config.editConfig.mountainFrequency, 0.1f, 2.0f);
+                ImGui::SliderInt("Sea Level", &config.editConfig.seaLevel, 0, 100);
+            }
+
+            if (ImGui::CollapsingHeader("World Dimensions")) {
+                ImGui::SliderInt("Height (Chunks)", &config.editConfig.worldHeightChunks, 8, 128);
+                ImGui::TextColored(ImVec4(0.7,0.7,0.7,1), "Note: Height changes require full reload.");
+            }
+
+            if (ImGui::CollapsingHeader("LOD Settings")) {
+                ImGui::SliderInt("LOD Count", &config.editConfig.lodCount, 1, 8);
+                for (int i = 0; i < config.editConfig.lodCount; i++) {
+                    std::string label = "LOD " + std::to_string(i) + " Radius";
+                    ImGui::SliderInt(label.c_str(), &config.editConfig.lodRadius[i], 1, 64);
+                }
+            }
+
+            if (ImGui::CollapsingHeader("Caves")) {
+                ImGui::Checkbox("Enable Caves", &config.editConfig.enableCaves);
+                if (config.editConfig.enableCaves) {
+                    ImGui::SliderFloat("Threshold", &config.editConfig.caveThreshold, 0.0f, 1.0f);
+                }
+            }
+            
+            ImGui::Separator();
+            if (ImGui::Button("REGENERATE WORLD (R)", ImVec2(-1, 40))) {
+                world.Reload(config.editConfig);
+            }
+            ImGui::End();
+        }
+    }
+
+    void RenderMenuBar(UIConfig& config) {
+        if (ImGui::BeginMainMenuBar()) {
+            if (ImGui::BeginMenu("Windows")) {
+                ImGui::MenuItem("Debug Stats (F2)", "F2", &config.showDebugPanel);
+                ImGui::MenuItem("World Generation (M)", "M", &config.showWorldSettings);
+                ImGui::MenuItem("HUD Overlay", nullptr, &config.showOverlay);
+                ImGui::EndMenu();
+            }
+            ImGui::EndMainMenuBar();
+        }
     }
 };
