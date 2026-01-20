@@ -38,7 +38,7 @@ struct WorldConfig {
     float scale = 0.02f;          
     float hillAmplitude = 15.0f;  
     float hillFrequency = 1.0f;   
-    float mountainAmplitude = 80.0f; 
+    float mountainAmplitude = 500.0f; 
     float mountainFrequency = 0.5f; 
     int seaLevel = 10;            
     bool enableCaves = false;     
@@ -213,9 +213,7 @@ private:
 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
-    // --- ADDED FOR DEBUGGING ---
-    // Allows ImGuiManager to access private queues/maps for the stats window
-    friend class ImGuiManager; 
+    friend class ImGuiManager;
 
     // FIX: Strict Coverage Check
     // Returns TRUE only if ALL 4 children chunks of the higher detail level are ACTIVE.
@@ -276,6 +274,9 @@ public:
         glDeleteBuffers(1, &m_batchSSBO);
         glDeleteVertexArrays(1, &m_dummyVAO);
     }
+    
+    // Allow read-only access to config for Main loop
+    const WorldConfig& GetConfig() const { return m_config; }
 
     void Update(glm::vec3 cameraPos) {
         if (m_shutdown) return;
@@ -544,7 +545,19 @@ public:
     void Reload(WorldConfig newConfig) {
         m_config = newConfig;
         m_generator = TerrainGenerator(m_config);
-        for (auto& pair : m_chunks) m_chunkPool.Release(pair.second);
+        
+        // --- VRAM LEAK FIX ---
+        // Explicitly free the GPU memory for all current chunks
+        // before releasing them to the pool.
+        for (auto& pair : m_chunks) {
+            ChunkNode* node = pair.second;
+            if (node->gpuOffset != -1) {
+                m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
+                node->gpuOffset = -1;
+            }
+            m_chunkPool.Release(node);
+        }
+        
         m_chunks.clear();
         for(int i=0; i<8; i++) { lastPx[i] = -999; lastPz[i] = -999; }
     }

@@ -11,8 +11,10 @@
 #include "shader.h"
 #include "ImGuiManager.hpp"
 
+// --- CONFIGURATION ---
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
+const bool START_FULLSCREEN = false; // Change to true to start in fullscreen
 
 // Camera setup
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
@@ -22,48 +24,74 @@ float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
-bool keyProcessed = false; 
 
-WorldConfig globalConfig;
+// 1. Declare GUI Globally so callbacks can access it
+ImGuiManager gui;
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
+
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
+    // 2. Prevent camera movement if in Menu Mode
+    if (!gui.m_GameMode) {
+        firstMouse = true; // Reset this so camera doesn't jump when we resume
+        return;
+    }
+
     if (firstMouse) { lastX = xpos; lastY = ypos; firstMouse = false; }
     camera.ProcessMouseMovement(xpos - lastX, lastY - ypos);
     lastX = xpos; lastY = ypos;
 }
 
 void processInput(GLFWwindow *window, World& world) {
+    // 3. Robust TAB Key Toggle
+    static bool tabPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS) {
+        if (!tabPressed) {
+            gui.m_GameMode = !gui.m_GameMode;
+            tabPressed = true;
+            if (gui.m_GameMode) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            else glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        }
+    } else {
+        tabPressed = false;
+    }
+
+    // 4. F11 Fullscreen Toggle
+    static bool f11Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS) {
+        if (!f11Pressed) {
+            gui.ToggleFullscreen();
+            f11Pressed = true;
+        }
+    } else {
+        f11Pressed = false;
+    }
+
+    // Standard Exit
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
     
-    // Speed boost for flying around large maps
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.MovementSpeed = 500.0f;
-    else camera.MovementSpeed = 50.0f;
+    // 5. Input only allowed in Game Mode
+    if (gui.m_GameMode) {
+        if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.MovementSpeed = 500.0f;
+        else camera.MovementSpeed = 50.0f;
 
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT, deltaTime);
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT, deltaTime);
-    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
-    if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
+        if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
+    }
 
-    if (!keyProcessed) {
-        if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) {
-            globalConfig.seed = rand();
-            std::cout << "[System] Reloading World... Seed: " << globalConfig.seed << std::endl;
-            world.Reload(globalConfig);
-            keyProcessed = true;
-        }
-        if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS) {
-            static bool wire = false;
-            wire = !wire;
-            glPolygonMode(GL_FRONT_AND_BACK, wire ? GL_LINE : GL_FILL);
-            keyProcessed = true;
-        }
-    }
-    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE && glfwGetKey(window, GLFW_KEY_TAB) == GLFW_RELEASE) {
-        keyProcessed = false;
-    }
+    // Hotkeys that work in both modes
+    static bool rPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !rPressed) {
+        WorldConfig newConfig = world.GetConfig();
+        newConfig.seed = rand();
+        std::cout << "[System] Reloading World... Seed: " << newConfig.seed << std::endl;
+        world.Reload(newConfig);
+        rPressed = true;
+    } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) rPressed = false;
 }
 
 int main() {
@@ -72,134 +100,83 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Stacked LODs", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
-    // UNLOCK FPS: Disable V-Sync by default
-    glfwSwapInterval(0); 
+    
+    // 1. Apply Startup Fullscreen Config
+    if (START_FULLSCREEN) {
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+    }
+
+    // 2. Default VSync to ON (safe default)
+    // The gui.Init() below will respect the m_VSync default (true) or user can toggle later
+    glfwSwapInterval(1); 
 
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
-    {
-        // 1. REVERSE-Z SETUP (Best for large distances)
-        glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_GEQUAL); 
-        glClearDepth(0.0f);     
+    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_GEQUAL); 
+    glClearDepth(0.0f);     
+    glEnable(GL_CULL_FACE); 
+    glCullFace(GL_BACK);
+    glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
 
-        // 2. CULLING
-        // With "Stacked" LODs, we want normal backface culling.
-        glEnable(GL_CULL_FACE); 
-        glCullFace(GL_BACK);
-        
-        glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
+    Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
+    
+    WorldConfig globalConfig;
+    // ... config setup ...
+    globalConfig.lodCount = 6; 
+    globalConfig.lodRadius[0] = 10; 
+    globalConfig.lodRadius[1] = 10; 
+    globalConfig.lodRadius[2] = 16; 
+    globalConfig.lodRadius[3] = 24; 
+    globalConfig.lodRadius[4] = 32;
+    globalConfig.lodRadius[5] = 20;
 
-        // 3. SHADER
-        Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
-        
-        // 4. CONFIGURATION (LOD CONTROL)
-        globalConfig.seed = 1337;
-        globalConfig.worldHeightChunks = 32;
-        
-        // -- LOD CONTROL SECTION --
-        // lodCount: How many stacked layers to render. 
+    World world(globalConfig);
+    gui.Init(window); // Stores window pointer for window management
 
+    while (!glfwWindowShouldClose(window)) {
+        float currentFrame = (float)glfwGetTime();
+        deltaTime = currentFrame - lastFrame;
+        lastFrame = currentFrame;
 
-        // lodRadius[i]: How many *chunks* out to render for that layer.
-        // Note: Chunks at higher LODs are physically larger.
-        // LOD 0 (Scale 1, 32m):  Radius 12 = 384m range
-        // LOD 1 (Scale 2, 64m):  Radius 12 = 768m range
-        // LOD 2 (Scale 4, 128m): Radius 16 = 2048m range
-        // LOD 3 (Scale 8, 256m): Radius 16 = 4096m range
-        // LOD 4 (Scale 16, 512m): Radius 16 = 8192m range
-        //
-        // Stacking Strategy: Increase radius for higher LODs so they stick out 
-        // from underneath the detailed layers.
-        globalConfig.lodCount = 6; 
-        globalConfig.lodRadius[0] = 10; 
-        globalConfig.lodRadius[1] = 10; 
-        globalConfig.lodRadius[2] = 16; 
-        globalConfig.lodRadius[3] = 24; 
-        globalConfig.lodRadius[4] = 32;
-        globalConfig.lodRadius[5] = 20;
-        //globalConfig.lodRadius[6] = 20;
+        processInput(window, world);
+        world.Update(camera.Position);
 
-        globalConfig.scale = 0.02f;           
-        globalConfig.hillAmplitude = 15.0f;  
-        globalConfig.hillFrequency = 0.9f;   
-        globalConfig.mountainAmplitude = 512.0f; 
-        globalConfig.mountainFrequency = 0.5f; 
-        globalConfig.seaLevel = 10;
-        globalConfig.enableCaves = false;      
-        
-        World world(globalConfig);
-        ImGuiManager gui;
-        gui.Init(window);
+        gui.BeginFrame();
+        gui.RenderDebugPanel(world); 
 
-        // --- CALCULATE RENDER DISTANCE ---
-            int maxDistBlocks = 0;
-            for(int i = 0; i < globalConfig.lodCount; i++) {
-                // Distance = Radius * ChunkSize * Scale
-                int scale = 1 << i;
-                int dist = globalConfig.lodRadius[i] * 32 * scale;
-                if(dist > maxDistBlocks) maxDistBlocks = dist;
-            }
-            int effectiveChunks = maxDistBlocks / 32;
-            float km = (float)maxDistBlocks / 1000.0f;
-            // Format KM to 2 decimal places
-            std::string s_km = std::to_string(km);
-            s_km = s_km.substr(0, s_km.find('.') + 3);
-
-
-        // 5. RENDER LOOP
-        while (!glfwWindowShouldClose(window)) {
-            float currentFrame = (float)glfwGetTime();
-            deltaTime = currentFrame - lastFrame;
-            lastFrame = currentFrame;
-            processInput(window, world);
-
-            world.Update(camera.Position);
-
-            // 1. Start UI Frame
-            gui.BeginFrame();
-
-            // 2. Draw UI (Menu, Overlay, or your own ImGui calls)
-            if (gui.RenderStandardMenu()) {
-                glfwSetWindowShouldClose(window, true);
-            }
-
-            gui.RenderDebugPanel(world);
-
-            // std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + 
-            //     " | Dist: " + std::to_string(effectiveChunks) + " chunks (" + s_km + "km)" +
-            //     " | Pos: " 
-            //     + std::to_string((int)camera.Position.x) + ", " 
-            //     + std::to_string((int)camera.Position.y) + ", " 
-            //     + std::to_string((int)camera.Position.z);
-            // glfwSetWindowTitle(window, title.c_str());
-
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-            // Infinite Projection Matrix (far plane at infinity)
-            glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
-            glm::mat4 view = camera.GetViewMatrix();
-            glm::mat4 viewProj = projection * view;
-
-            // ************* World DRAW call
-            world.Draw(worldShader, viewProj);
-
-
-            // ************* ImGui Draw call
-            gui.EndFrame();
-
-            glfwSwapBuffers(window);
-            glfwPollEvents();
+        if (gui.RenderStandardMenu()) {
+            glfwSetWindowShouldClose(window, true);
         }
-    } 
 
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
+        glm::mat4 view = camera.GetViewMatrix();
+        glm::mat4 viewProj = projection * view;
+
+        world.Draw(worldShader, viewProj);
+
+        gui.EndFrame();
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+
+        // --- PREVENT CPU HOGGING ---
+        // Forces a context switch so the OS knows the window is responsive
+        // std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    
     glfwTerminate();
     return 0;
 }
