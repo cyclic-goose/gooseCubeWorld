@@ -41,25 +41,27 @@ void main() {
     vec3 chunkOffset = chunkPositions[gl_BaseInstance].xyz;
     float scale = chunkPositions[gl_BaseInstance].w;
 
-    vec3 worldPos = (localPos * scale) + chunkOffset;
+    // 1. Calculate True World Position (Used for Texture Coordinates)
+    vec3 trueWorldPos = (localPos * scale) + chunkOffset;
+
+    // 2. Calculate Render Position (Used for Geometry Sinking)
+    vec3 renderPos = trueWorldPos;
 
     // SINKING LOGIC:
-    // If we are drawing a lower-detail chunk, it means the high-detail one is missing.
-    // We sink it slightly to prevent z-fighting if they partially overlap during transition.
-    // However, if strict culling is working, overlap should be minimal.
-    // We sink by a larger amount (scale * 2.0) to be safe.
+    // Only apply to renderPos! This keeps textures locked in place.
     if (scale > 1.0) {
-        worldPos.y -= (scale * 2.0); 
+        renderPos.y -= (scale * 2.0); 
     }
 
     v_Normal = getCubeNormal(normIndex);
     v_TexID = float(texID);
     
-    if (abs(v_Normal.x) > 0.5) v_TexCoord = worldPos.yz * 0.5; 
-    else if (abs(v_Normal.y) > 0.5) v_TexCoord = worldPos.xz * 0.5;
-    else v_TexCoord = worldPos.xy * 0.5;
+    // UV FIX: Use trueWorldPos (stable) and multiplier 1.0 (1 block = 1 tile)
+    if (abs(v_Normal.x) > 0.5) v_TexCoord = trueWorldPos.yz * 1.0; 
+    else if (abs(v_Normal.y) > 0.5) v_TexCoord = trueWorldPos.xz * 1.0;
+    else v_TexCoord = trueWorldPos.xy * 1.0;
 
     v_Color = v_Normal * 0.5 + 0.5; 
 
-    gl_Position = u_ViewProjection * vec4(worldPos, 1.0);
+    gl_Position = u_ViewProjection * vec4(renderPos, 1.0);
 }
