@@ -87,7 +87,7 @@ void processInput(GLFWwindow *window, World& world) {
     static bool rPressed = false;
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !rPressed) {
         WorldConfig newConfig = world.GetConfig();
-        newConfig.seed = rand();
+        //newConfig.seed = rand(); // change see upon reload? why
         std::cout << "[System] Reloading World... Seed: " << newConfig.seed << std::endl;
         world.Reload(newConfig);
         rPressed = true;
@@ -156,9 +156,9 @@ int main() {
             gui.BeginFrame();
             gui.RenderDebugPanel(world); 
 
-            // if (gui.RenderStandardMenu()) {
-            //     glfwSetWindowShouldClose(window, true);
-            // }
+            if (gui.RenderStandardMenu()) {
+                glfwSetWindowShouldClose(window, true);
+            }
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
