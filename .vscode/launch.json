@@ -2,13 +2,13 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug GooseVoxelEngine",
+            "name": "Debug (GooseVoxelEngine)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/build/gooseVoxelEngine",
+            "program": "${workspaceFolder}/build/debug/gooseVoxelEngine",
             "args": [],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build",
+            "cwd": "${workspaceFolder}/build/debug",
             "environment": [],
             "externalConsole": false,
             "MIMode": "gdb",
@@ -19,7 +19,27 @@
                     "ignoreFailures": true
                 }
             ],
-            "preLaunchTask": "CMake: Build"
+            "preLaunchTask": "CMake: Build (Debug)"
+        },
+        {
+            "name": "Release (GooseVoxelEngine)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/release/gooseVoxelEngine",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build/release",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "CMake: Build (Release)"
         }
     ]
 }
