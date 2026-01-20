@@ -44,11 +44,12 @@ void main() {
     vec3 worldPos = (localPos * scale) + chunkOffset;
 
     // SINKING LOGIC:
-    // If scale > 1 (LOD > 0), push the vertex DOWN.
-    // This allows the high-detail chunk (scale 1) to sit "on top" without z-fighting.
-    // The amount to sink depends on scale. Larger scale = deeper sink.
+    // If we are drawing a lower-detail chunk, it means the high-detail one is missing.
+    // We sink it slightly to prevent z-fighting if they partially overlap during transition.
+    // However, if strict culling is working, overlap should be minimal.
+    // We sink by a larger amount (scale * 2.0) to be safe.
     if (scale > 1.0) {
-        worldPos.y -= (scale * 5.0); 
+        worldPos.y -= (scale * 2.0); 
     }
 
     v_Normal = getCubeNormal(normIndex);

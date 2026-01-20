@@ -31,11 +31,7 @@ struct DrawArraysIndirectCommand {
 
 struct WorldConfig {
     int seed = 1337;
-    
-    // FIX 1: Increase World Height to 32 (1024 blocks)
-    // We can afford this now because we won't generate the empty air chunks.
-    int worldHeightChunks = 32;
-    
+    int worldHeightChunks = 48;
     int lodCount = 5; 
     int lodRadius[8] = { 10, 16, 24, 32, 48, 0, 0, 0 }; 
     
@@ -129,15 +125,11 @@ public:
         return m_config.seaLevel + (int)(hillHeight + mountainHeight);
     }
 
-    // FIX 2: Fast Surface Bounds Check
-    // Returns the min and max height for a chunk column region.
-    // This allows us to skip generating chunks that are purely air or purely stone.
     void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) {
         int worldX = cx * CHUNK_SIZE * scale;
         int worldZ = cz * CHUNK_SIZE * scale;
         int size = CHUNK_SIZE * scale;
 
-        // Sample 5 points: 4 corners + center
         int h1 = GetHeight(worldX, worldZ);
         int h2 = GetHeight(worldX + size, worldZ);
         int h3 = GetHeight(worldX, worldZ + size);
@@ -221,24 +213,36 @@ private:
 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
-    bool HasHigherDetail(int cx, int cz, int currentLod) {
+    // FIX: Strict Coverage Check
+    // Returns TRUE only if ALL 4 children chunks of the higher detail level are ACTIVE.
+    // If ANY are missing, we return FALSE so the parent (low detail) chunk is drawn as fallback.
+    bool IsFullyCovered(int cx, int cz, int currentLod) {
         if (currentLod == 0) return false;
+        
         int prevLod = currentLod - 1;
-        int scaleRatio = 2; 
+        int scaleRatio = 2; // LODs are always 2x size
+        
+        // A chunk at (cx, cz) in LOD N covers (2*cx ... 2*cx+1) in LOD N-1
         int minX = cx * scaleRatio;
         int minZ = cz * scaleRatio;
         int maxX = minX + 1; 
         int maxZ = minZ + 1;
 
+        // Check the 2x2 grid
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
-                if (m_chunks.find(ChunkKey(x, 0, z, prevLod)) != m_chunks.end()) {
-                   ChunkNode* n = m_chunks[ChunkKey(x, 0, z, prevLod)];
-                   if(n && n->state == ChunkState::ACTIVE) return true;
-                }
+                int64_t key = ChunkKey(x, 0, z, prevLod);
+                auto it = m_chunks.find(key);
+                
+                // If chunk is missing, generated but not uploaded, or meshing...
+                if (it == m_chunks.end()) return false; // Gap!
+                if (it->second->state != ChunkState::ACTIVE) return false; // Not ready!
             }
         }
-        return false;
+        
+        // If we get here, all 4 quadrants are covered by active high-detail geometry.
+        // We can safely cull this coarse chunk.
+        return true; 
     }
 
 public:
@@ -364,8 +368,11 @@ public:
             if (node->gpuOffset == -1) continue; 
             if (!m_frustum.IsBoxVisible(node->minAABB, node->maxAABB)) continue;
             
-            // Stacked LOD: Draw everything. Z-sinking handles overlap.
-            
+            // FIX: Re-enable Culling, but use the STRICT check
+            if (node->lod > 0) {
+                 if (IsFullyCovered(node->cx, node->cz, node->lod)) continue;
+            }
+
             DrawArraysIndirectCommand cmd;
             cmd.count = (uint32_t)node->vertexCount;
             cmd.instanceCount = 1;
@@ -393,13 +400,11 @@ public:
         glBindVertexArray(0); 
     }
 
-    // FIX 3: VERTICAL CULLING IN QUEUE
     void QueueNewChunks(glm::vec3 cameraPos) {
         std::vector<ChunkRequest> missing;
         missing.reserve(1000); 
         const int MAX_TASKS = 64; 
 
-        // Get camera height block to prioritize nearby vertical chunks
         int camYBlock = (int)cameraPos.y;
 
         for (int lod = 0; lod < m_config.lodCount; lod++) {
@@ -411,26 +416,20 @@ public:
             for (int x = px - r; x <= px + r; x++) {
                 for (int z = pz - r; z <= pz + r; z++) {
                     
-                    // --- OPTIMIZATION START ---
-                    // Determine which Y-levels actually contain terrain.
                     int minH, maxH;
                     m_generator.GetHeightBounds(x, z, scale, minH, maxH);
 
-                    // Convert World Height to Chunk Y Indices
                     int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
                     int chunkYEnd = (maxH / (CHUNK_SIZE * scale)) + 1;
 
-                    // Clamp to world bounds
                     chunkYStart = std::max(0, chunkYStart);
                     chunkYEnd = std::min(m_config.worldHeightChunks - 1, chunkYEnd);
-                    // --- OPTIMIZATION END ---
 
                     for (int y = chunkYStart; y <= chunkYEnd; y++) {
                         int64_t key = ChunkKey(x, y, z, lod);
                         if (m_chunks.find(key) == m_chunks.end()) {
                             int dx = x - px; 
                             int dz = z - pz; 
-                            
                             int chunkWorldY = y * CHUNK_SIZE * scale;
                             int dy = (chunkWorldY - camYBlock) / (CHUNK_SIZE * scale); 
                             
