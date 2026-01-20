@@ -213,6 +213,10 @@ private:
 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
+    // --- ADDED FOR DEBUGGING ---
+    // Allows ImGuiManager to access private queues/maps for the stats window
+    friend class ImGuiManager; 
+
     // FIX: Strict Coverage Check
     // Returns TRUE only if ALL 4 children chunks of the higher detail level are ACTIVE.
     // If ANY are missing, we return FALSE so the parent (low detail) chunk is drawn as fallback.

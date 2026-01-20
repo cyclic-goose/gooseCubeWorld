@@ -88,4 +88,9 @@ public:
     }
 
     GLuint GetID() const { return m_bufferId; }
+
+    // --- ADDED FOR DEBUGGING ---
+    size_t GetUsedMemory() const { return m_used; }
+    size_t GetTotalMemory() const { return m_capacity; }
+    size_t GetFreeBlockCount() const { return m_freeBlocks.size(); }
 };

@@ -59,6 +59,13 @@ public:
             worker.join();
     }
 
+    // --- ADDED FOR DEBUGGING ---
+    size_t GetWorkerCount() const { return workers.size(); }
+    size_t GetQueueSize() {
+        std::unique_lock<std::mutex> lock(queue_mutex);
+        return tasks.size();
+    }
+
 private:
     std::vector<std::thread> workers;
     std::queue<std::function<void()>> tasks;

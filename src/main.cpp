@@ -171,6 +171,8 @@ int main() {
                 glfwSetWindowShouldClose(window, true);
             }
 
+            gui.RenderDebugPanel(world);
+
             // std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + 
             //     " | Dist: " + std::to_string(effectiveChunks) + " chunks (" + s_km + "km)" +
             //     " | Pos: " 
