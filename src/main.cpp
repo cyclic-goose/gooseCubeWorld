@@ -74,6 +74,9 @@ int main() {
     GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: Stacked LODs", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
+    // UNLOCK FPS: Disable V-Sync by default
+    glfwSwapInterval(0); 
+
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -88,7 +91,6 @@ int main() {
 
         // 2. CULLING
         // With "Stacked" LODs, we want normal backface culling.
-        // We removed the skirts, so we don't need to worry about skirt winding.
         glEnable(GL_CULL_FACE); 
         glCullFace(GL_BACK);
         
@@ -103,8 +105,7 @@ int main() {
         
         // -- LOD CONTROL SECTION --
         // lodCount: How many stacked layers to render. 
-        // 5 layers = Scales 1, 2, 4, 8, 16.
-        globalConfig.lodCount = 5; 
+
 
         // lodRadius[i]: How many *chunks* out to render for that layer.
         // Note: Chunks at higher LODs are physically larger.
@@ -116,19 +117,39 @@ int main() {
         //
         // Stacking Strategy: Increase radius for higher LODs so they stick out 
         // from underneath the detailed layers.
-        globalConfig.lodRadius[0] = 12; 
-        globalConfig.lodRadius[1] = 12; 
+        globalConfig.lodCount = 5; 
+        globalConfig.lodRadius[0] = 10; 
+        globalConfig.lodRadius[1] = 10; 
         globalConfig.lodRadius[2] = 16; 
-        globalConfig.lodRadius[3] = 16; 
-        globalConfig.lodRadius[4] = 16; 
+        globalConfig.lodRadius[3] = 24; 
+        globalConfig.lodRadius[4] = 32;
+        //globalConfig.lodRadius[5] = 32;
 
-        globalConfig.scale = 0.08f;           
-        globalConfig.hillAmplitude = 15.0f;   
-        globalConfig.mountainAmplitude = 80.0f; 
+        globalConfig.scale = 0.02f;           
+        globalConfig.hillAmplitude = 15.0f;  
+        globalConfig.hillFrequency = 0.5f;   
+        globalConfig.mountainAmplitude = 2000.0f; 
+        globalConfig.mountainFrequency = 0.1f; 
         globalConfig.seaLevel = 10;
         globalConfig.enableCaves = false;      
         
         World world(globalConfig);
+
+
+        // --- CALCULATE RENDER DISTANCE ---
+            int maxDistBlocks = 0;
+            for(int i = 0; i < globalConfig.lodCount; i++) {
+                // Distance = Radius * ChunkSize * Scale
+                int scale = 1 << i;
+                int dist = globalConfig.lodRadius[i] * 32 * scale;
+                if(dist > maxDistBlocks) maxDistBlocks = dist;
+            }
+            int effectiveChunks = maxDistBlocks / 32;
+            float km = (float)maxDistBlocks / 1000.0f;
+            // Format KM to 2 decimal places
+            std::string s_km = std::to_string(km);
+            s_km = s_km.substr(0, s_km.find('.') + 3);
+
 
         // 5. RENDER LOOP
         while (!glfwWindowShouldClose(window)) {
@@ -139,7 +160,11 @@ int main() {
 
             world.Update(camera.Position);
 
-            std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + " | Pos: " 
+            
+
+            std::string title = "Goose Voxels | FPS: " + std::to_string((int)(1.0f / deltaTime)) + 
+                " | Dist: " + std::to_string(effectiveChunks) + " chunks (" + s_km + "km)" +
+                " | Pos: " 
                 + std::to_string((int)camera.Position.x) + ", " 
                 + std::to_string((int)camera.Position.y) + ", " 
                 + std::to_string((int)camera.Position.z);

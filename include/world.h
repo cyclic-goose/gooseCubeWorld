@@ -31,7 +31,7 @@ struct DrawArraysIndirectCommand {
 
 struct WorldConfig {
     int seed = 1337;
-    int worldHeightChunks = 8;
+    int worldHeightChunks = 12;
     int lodCount = 5; 
 
     // LOD Radii: High detail close, low detail far.
@@ -41,7 +41,7 @@ struct WorldConfig {
     // ...
     int lodRadius[8] = { 10, 16, 24, 32, 48, 0, 0, 0 }; 
     
-    float scale = 0.02f;          
+    float scale = 0.1f;          
     float hillAmplitude = 15.0f;  
     float hillFrequency = 1.0f;   
     float mountainAmplitude = 80.0f; 
@@ -185,24 +185,24 @@ private:
     
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
     ObjectPool<ChunkNode> m_chunkPool;
-    ThreadPool m_pool; 
-
+    
     std::mutex m_queueMutex;
     std::queue<ChunkNode*> m_generatedQueue; 
     std::queue<ChunkNode*> m_meshedQueue;    
     
+    ThreadPool m_pool; 
     int lastPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
     int lastPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
-
+    
     int updateTimer = 0;
     std::atomic<bool> m_shutdown{false};
     Frustum m_frustum;
-
+    
     std::unique_ptr<GpuMemoryManager> m_gpuMemory;
     GLuint m_indirectBuffer; 
     GLuint m_batchSSBO; 
     GLuint m_dummyVAO; 
-
+    
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
 public:
