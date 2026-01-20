@@ -10,9 +10,6 @@
 #include "camera.h"
 #include "shader.h"
 
-// Note: RingBufferSSBO and LinearAllocator are not used in main() for MDI rendering
-// The World class handles its own VRAM memory manager.
-
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 
@@ -72,7 +69,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: MDI", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels: MDI LOD", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
@@ -87,19 +84,27 @@ int main() {
         glDepthFunc(GL_GEQUAL); 
         glClearDepth(0.0f);     
 
-        glDisable(GL_CULL_FACE); 
+        // FIX 2: ENABLE CULL FACE
+        // This is critical. Skirts are geometry that exist *inside* the neighboring chunk.
+        // Without culling, you see the back of the skirt flickering against the front of the neighbor.
+        glEnable(GL_CULL_FACE); 
+        glCullFace(GL_BACK);
+        
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
 
-        // 2. SHADER SETUP
-        // Using the new MDI shaders you created
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         
-        // 3. WORLD CONFIG
         globalConfig.seed = 1337;
-        globalConfig.renderDistance = 32; 
-        globalConfig.worldHeightChunks = 8;
         
-        globalConfig.scale = 0.15f;           
+        globalConfig.lodCount = 4;
+        globalConfig.lodRadius[0] = 12; 
+        globalConfig.lodRadius[1] = 16; 
+        globalConfig.lodRadius[2] = 24; 
+        globalConfig.lodRadius[3] = 32; 
+
+        globalConfig.worldHeightChunks = 4;
+        
+        globalConfig.scale = 0.08f;           
         globalConfig.hillAmplitude = 15.0f;   
         globalConfig.mountainAmplitude = 80.0f; 
         globalConfig.seaLevel = 10;
@@ -123,7 +128,6 @@ int main() {
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-            // Infinite Projection Matrix
             glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;

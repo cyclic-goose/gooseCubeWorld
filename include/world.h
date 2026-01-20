@@ -29,12 +29,13 @@ struct DrawArraysIndirectCommand {
     uint32_t baseInstance;
 };
 
-
-
 struct WorldConfig {
     int seed = 1337;
-    int renderDistance = 16;      
-    int worldHeightChunks = 8;    
+    int worldHeightChunks = 8;
+    int lodCount = 4; 
+
+    // Radii for each LOD ring 
+    int lodRadius[4] = { 12, 12, 16, 16 }; 
     
     float scale = 0.02f;          
     float hillAmplitude = 15.0f;  
@@ -52,28 +53,34 @@ struct ChunkNode {
     Chunk chunk;
     glm::vec3 position;
     int cx, cy, cz; 
+    int lod;      
+    int scale;    
     
     std::vector<PackedVertex> cachedMesh; 
     std::atomic<ChunkState> state{ChunkState::MISSING};
     
-    // GPU Handles
     long long gpuOffset = -1; 
     size_t vertexCount = 0;
 
-    // Bounding Box
     glm::vec3 minAABB;
     glm::vec3 maxAABB;
 
-    void Reset(int x, int y, int z) {
+    void Reset(int x, int y, int z, int lodLevel) {
+        lod = lodLevel;
+        scale = 1 << lod; 
+
         cx = x; cy = y; cz = z;
-        position = glm::vec3(x * CHUNK_SIZE, y * CHUNK_SIZE, z * CHUNK_SIZE);
+        
+        float size = (float)(CHUNK_SIZE * scale);
+        position = glm::vec3(x * size, y * size, z * size);
         
         minAABB = position;
-        maxAABB = position + glm::vec3(CHUNK_SIZE);
+        maxAABB = position + glm::vec3(size);
 
         chunk.worldX = (int)position.x;
         chunk.worldY = (int)position.y;
         chunk.worldZ = (int)position.z;
+        
         state = ChunkState::MISSING;
         cachedMesh.clear();
         chunk.isUniform = false;
@@ -127,11 +134,12 @@ public:
     }
 };
 
-inline int64_t ChunkKey(int x, int y, int z) {
-    uint64_t ux = (uint64_t)(uint32_t)x & 0xFFFFFF; 
-    uint64_t uz = (uint64_t)(uint32_t)z & 0xFFFFFF; 
-    uint64_t uy = (uint64_t)(uint32_t)y & 0xFFFF;   
-    return (ux << 40) | (uz << 16) | uy;
+inline int64_t ChunkKey(int x, int y, int z, int lod) {
+    uint64_t ulod = (uint64_t)(lod & 0x3) << 62;
+    uint64_t ux = (uint64_t)(uint32_t)x & 0xFFFFF; 
+    uint64_t uz = (uint64_t)(uint32_t)z & 0xFFFFF; 
+    uint64_t uy = (uint64_t)(uint32_t)y & 0x3FFFFF;   
+    return ulod | (ux << 42) | (uz << 22) | uy;
 }
 
 struct Frustum {
@@ -171,32 +179,34 @@ private:
     
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
     ObjectPool<ChunkNode> m_chunkPool;
-    // THREAD POOL MUST BE LAST to destroy threads before pool
     ThreadPool m_pool; 
 
     std::mutex m_queueMutex;
     std::queue<ChunkNode*> m_generatedQueue; 
     std::queue<ChunkNode*> m_meshedQueue;    
-    int lastPx = -99999, lastPz = -99999;
+    
+    int lastPx[4] = {-999,-999,-999,-999};
+    int lastPz[4] = {-999,-999,-999,-999};
+
     int updateTimer = 0;
     std::atomic<bool> m_shutdown{false};
     Frustum m_frustum;
 
-    // --- GPU RESOURCES ---
     std::unique_ptr<GpuMemoryManager> m_gpuMemory;
     GLuint m_indirectBuffer; 
     GLuint m_batchSSBO; 
-    
-    // FIX 1: DUMMY VAO FOR CORE PROFILE
     GLuint m_dummyVAO; 
 
-    struct ChunkRequest { int x, y, z; int distSq; };
+    struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
 public:
     World(WorldConfig config) : m_config(config), m_generator(config) {
-        int r = m_config.renderDistance + 5; 
-        size_t maxChunks = (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
-        m_chunkPool.Init(maxChunks);
+        size_t maxChunks = 0;
+        for(int i=0; i<m_config.lodCount; i++) {
+            int r = m_config.lodRadius[i];
+            maxChunks += (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
+        }
+        m_chunkPool.Init(maxChunks + 1000);
 
         m_gpuMemory = std::make_unique<GpuMemoryManager>(512 * 1024 * 1024);
 
@@ -206,7 +216,6 @@ public:
         glCreateBuffers(1, &m_batchSSBO);
         glNamedBufferStorage(m_batchSSBO, maxChunks * sizeof(glm::vec4), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
-        // FIX 1: Create the dummy VAO
         glCreateVertexArrays(1, &m_dummyVAO);
     }
 
@@ -220,18 +229,26 @@ public:
 
     void Update(glm::vec3 cameraPos) {
         if (m_shutdown) return;
-        int px = (int)floor(cameraPos.x / CHUNK_SIZE);
-        int pz = (int)floor(cameraPos.z / CHUNK_SIZE);
-
+        
         ProcessQueues(); 
 
-        if (px != lastPx || pz != lastPz) {
-            UnloadChunks(px, pz);
-            lastPx = px; lastPz = pz;
-        }
         updateTimer++;
         if (updateTimer > 5) {
-            QueueNewChunks(px, pz);
+            bool moved = false;
+            for (int lod = 0; lod < m_config.lodCount; lod++) {
+                int scale = 1 << lod;
+                int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
+                int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+                
+                if (px != lastPx[lod] || pz != lastPz[lod]) {
+                    lastPx[lod] = px;
+                    lastPz[lod] = pz;
+                    moved = true;
+                }
+            }
+
+            if (moved) UnloadChunks(cameraPos);
+            QueueNewChunks(cameraPos);
             updateTimer = 0;
         }
     }
@@ -257,8 +274,6 @@ public:
             if (node->state == ChunkState::MESHING) {
                 if (!node->cachedMesh.empty()) {
                     size_t bytes = node->cachedMesh.size() * sizeof(PackedVertex);
-                    
-                    // FIX 2: Align by 8 bytes (sizeof PackedVertex)
                     long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
                     
                     if (offset != -1) {
@@ -275,13 +290,19 @@ public:
         }
     }
 
-    void UnloadChunks(int px, int pz) {
-        int r = m_config.renderDistance + 4; 
+    void UnloadChunks(glm::vec3 cameraPos) {
         std::vector<int64_t> toRemove;
         
         for (auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
-            if (abs(node->cx - px) > r || abs(node->cz - pz) > r) {
+            int lod = node->lod;
+            int scale = node->scale;
+            int limit = m_config.lodRadius[lod] + 2; 
+
+            int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
+            int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+
+            if (abs(node->cx - camX) > limit || abs(node->cz - camZ) > limit) {
                 ChunkState s = node->state.load();
                 if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
                     if (node->gpuOffset != -1) {
@@ -315,13 +336,11 @@ public:
             DrawArraysIndirectCommand cmd;
             cmd.count = (uint32_t)node->vertexCount;
             cmd.instanceCount = 1;
-            
-            // MDI requires the offset index to be aligned to the stride of the data
             cmd.first = (uint32_t)(node->gpuOffset / sizeof(PackedVertex)); 
             cmd.baseInstance = instanceID; 
 
             commands.push_back(cmd);
-            batchOffsets.push_back(glm::vec4(node->position, 0.0f));
+            batchOffsets.push_back(glm::vec4(node->position, (float)node->scale));
             
             instanceID++;
         }
@@ -337,32 +356,46 @@ public:
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_batchSSBO);
 
-        // FIX 1: Bind the valid dummy VAO (Do not bind 0!)
         glBindVertexArray(m_dummyVAO);
-        
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_indirectBuffer);
         glMultiDrawArraysIndirect(GL_TRIANGLES, 0, (GLsizei)commands.size(), 0);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
-        
-        glBindVertexArray(0); // Clean up after
+        glBindVertexArray(0); 
     }
 
-    void QueueNewChunks(int px, int pz) {
-        int r = m_config.renderDistance;
-        int h = m_config.worldHeightChunks;
-        
+    void QueueNewChunks(glm::vec3 cameraPos) {
         std::vector<ChunkRequest> missing;
-        missing.reserve(2000); 
+        missing.reserve(1000); 
 
-        for (int x = px - r; x <= px + r; x++) {
-            for (int z = pz - r; z <= pz + r; z++) {
-                for (int y = 0; y < h; y++) {
-                    int64_t key = ChunkKey(x, y, z);
-                    if (m_chunks.find(key) == m_chunks.end()) {
-                        int dx = x - px;
-                        int dz = z - pz;
-                        int distSq = dx*dx + dz*dz; 
-                        missing.push_back({x, y, z, distSq});
+        const int MAX_TASKS = 32; 
+
+        for (int lod = 0; lod < m_config.lodCount; lod++) {
+            int scale = 1 << lod;
+            int r = m_config.lodRadius[lod];
+            
+            int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
+            int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+
+            int innerR = -1;
+            if (lod > 0) {
+                innerR = m_config.lodRadius[lod-1] / 2;
+            }
+
+            for (int x = px - r; x <= px + r; x++) {
+                for (int z = pz - r; z <= pz + r; z++) {
+                    
+                    if (lod > 0) {
+                         if (abs(x - px) <= innerR && abs(z - pz) <= innerR) continue;
+                    }
+
+                    for (int y = 0; y < m_config.worldHeightChunks; y++) {
+                        int64_t key = ChunkKey(x, y, z, lod);
+                        if (m_chunks.find(key) == m_chunks.end()) {
+                            int dx = x - px;
+                            int dz = z - pz;
+                            int distSq = dx*dx + dz*dz; 
+                            missing.push_back({x, y, z, lod, distSq + (lod * 10000)});
+                        }
                     }
                 }
             }
@@ -372,17 +405,15 @@ public:
             return a.distSq < b.distSq;
         });
 
-        const int MAX_NEW_TASKS = 64; 
         int queued = 0;
-
         for (const auto& req : missing) {
-            if (queued >= MAX_NEW_TASKS) break;
+            if (queued >= MAX_TASKS) break;
 
-            int64_t key = ChunkKey(req.x, req.y, req.z);
+            int64_t key = ChunkKey(req.x, req.y, req.z, req.lod);
             if (m_chunks.find(key) == m_chunks.end()) {
                 ChunkNode* newNode = m_chunkPool.Acquire();
                 if (newNode) {
-                    newNode->Reset(req.x, req.y, req.z);
+                    newNode->Reset(req.x, req.y, req.z, req.lod);
                     m_chunks[key] = newNode;
                     newNode->state = ChunkState::GENERATING;
                     m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
@@ -394,26 +425,30 @@ public:
 
     void Task_Generate(ChunkNode* node) {
         if (m_shutdown) return;
-        FillChunk(node->chunk, node->cx, node->cy, node->cz);
+        FillChunk(node->chunk, node->cx, node->cy, node->cz, node->scale);
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_generatedQueue.push(node);
     }
 
     void Task_Mesh(ChunkNode* node) {
         LinearAllocator<PackedVertex> threadAllocator(200000); 
-        MeshChunk(node->chunk, threadAllocator, false);
+        MeshChunk(node->chunk, threadAllocator, node->scale, false);
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
         std::lock_guard<std::mutex> lock(m_queueMutex);
         m_meshedQueue.push(node);
     }
 
-    void FillChunk(Chunk& chunk, int cx, int cy, int cz) {
-        chunk.worldX = cx * CHUNK_SIZE;
-        chunk.worldY = cy * CHUNK_SIZE;
-        chunk.worldZ = cz * CHUNK_SIZE;
+    // UPDATED: Added Terracing (Height Quantization)
+    void FillChunk(Chunk& chunk, int cx, int cy, int cz, int scale) {
+        chunk.worldX = cx * CHUNK_SIZE * scale;
+        chunk.worldY = cy * CHUNK_SIZE * scale;
+        chunk.worldZ = cz * CHUNK_SIZE * scale;
 
         int chunkBottomY = chunk.worldY;
-        int chunkTopY = chunk.worldY + CHUNK_SIZE;
+        int chunkTopY = chunk.worldY + (CHUNK_SIZE * scale);
+
+        bool isFarLOD = scale >= 4; 
+        bool isMidLOD = scale >= 2;
 
         int heights[CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED];
         int minHeight = 99999;
@@ -421,9 +456,19 @@ public:
 
         for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
             for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
-                float wx = (float)(chunk.worldX + (x - 1));
-                float wz = (float)(chunk.worldZ + (z - 1));
+                float wx = (float)(chunk.worldX + (x - 1) * scale);
+                float wz = (float)(chunk.worldZ + (z - 1) * scale);
+                
                 int h = m_generator.GetHeight(wx, wz);
+
+                // FIX 1: TERRACING
+                // Snap height to a multiple of 'scale'. 
+                // This makes the noise "step" like rice terraces.
+                // The Greedy Mesher loves this and will merge the flat tops.
+                if (scale > 1) {
+                    h = (h / scale) * scale;
+                }
+                
                 heights[x][z] = h;
                 if (h < minHeight) minHeight = h;
                 if (h > maxHeight) maxHeight = h;
@@ -438,20 +483,32 @@ public:
         for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
             for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
                 int height = heights[x][z]; 
-                int localMaxY = std::min(height - chunkBottomY + 2, CHUNK_SIZE_PADDED - 1);
+                int localMaxY = (height - chunkBottomY) / scale;
+                localMaxY = std::min(localMaxY + 2, CHUNK_SIZE_PADDED - 1);
+                
                 if (localMaxY < 0) continue; 
 
                 for (int y = 0; y <= localMaxY; y++) {
-                    int wy = chunk.worldY + (y - 1); 
+                    int wy = chunk.worldY + (y - 1) * scale; 
+                    
                     uint8_t blockID = 1; 
-                    if (wy <= height) {
-                        if (wy == 0) blockID = 3; 
-                        else if (wy == height) {
-                            if (wy > 55) blockID = 4; else if (wy > 35) blockID = 1; else blockID = 2;
-                        } else if (wy > height - 4) {
-                            if (wy > 55) blockID = 4; else if (wy > 35) blockID = 1; else blockID = 5;
+                    if (isFarLOD) {
+                        blockID = 1; 
+                    } else {
+                        if (wy <= height) {
+                            if (wy == 0) blockID = 3; 
+                            else if (wy >= height - scale) { 
+                                if (wy > 55) blockID = 4; else if (wy > 35) blockID = 1; else blockID = 2;
+                            } else if (wy > height - (4 * scale)) {
+                                if (wy > 55) blockID = 4; else if (wy > 35) blockID = 1; else blockID = 5;
+                            }
                         }
-                        if (m_generator.IsCave((float)(chunk.worldX + (x-1)), (float)wy, (float)(chunk.worldZ + (z-1)))) blockID = 0;
+                    }
+
+                    if (wy <= height) {
+                        if (!isMidLOD) {
+                            if (m_generator.IsCave((float)(chunk.worldX + (x-1)*scale), (float)wy, (float)(chunk.worldZ + (z-1)*scale))) blockID = 0;
+                        }
                         chunk.Set(x, y, z, blockID);
                     }
                 }
@@ -464,6 +521,6 @@ public:
         m_generator = TerrainGenerator(m_config);
         for (auto& pair : m_chunks) m_chunkPool.Release(pair.second);
         m_chunks.clear();
-        lastPx = -99999;
+        for(int i=0; i<4; i++) { lastPx[i] = -999; lastPz[i] = -999; }
     }
 };

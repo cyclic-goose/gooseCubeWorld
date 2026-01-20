@@ -1,13 +1,11 @@
 #version 460 core
 
-// Binding 0: Giant Geometry Heap (The VRAM Manager)
 layout (std430, binding = 0) readonly buffer VoxelData {
     uvec2 packedVertices[];
 };
 
-// Binding 1: Chunk Position Lookup (Per Draw Command)
 layout (std430, binding = 1) readonly buffer ChunkOffsets {
-    vec4 chunkPositions[]; // .w is padding/unused
+    vec4 chunkPositions[]; 
 };
 
 uniform mat4 u_ViewProjection;
@@ -30,30 +28,28 @@ vec3 getCubeNormal(int i) {
 void main() {
     uvec2 rawData = packedVertices[gl_VertexID];
     
-    // Unpack Position (0-63)
-    float x = float(bitfieldExtract(rawData.x, 0,  6));
-    float y = float(bitfieldExtract(rawData.x, 6,  6));
-    float z = float(bitfieldExtract(rawData.x, 12, 6));
+    // UPDATED UNPACKING: 8 bits per component, -64 offset
+    float x = float(bitfieldExtract(rawData.x, 0,  8)) - 64.0;
+    float y = float(bitfieldExtract(rawData.x, 8,  8)) - 64.0;
+    float z = float(bitfieldExtract(rawData.x, 16, 8)) - 64.0;
     
-    // Unpack Normals & Texture
-    int normIndex = int(bitfieldExtract(rawData.x, 18, 3));
+    int normIndex = int(bitfieldExtract(rawData.x, 24, 3));
     int texID = int(bitfieldExtract(rawData.y, 0, 16));
 
     vec3 localPos = vec3(x, y, z);
     
-    // MDI MAGIC:
-    // gl_BaseInstance is set by the Indirect Command Buffer in C++.
-    // It points to the index in 'chunkPositions' for this specific chunk.
     vec3 chunkOffset = chunkPositions[gl_BaseInstance].xyz;
-    vec3 worldPos = localPos + chunkOffset;
+    float scale = chunkPositions[gl_BaseInstance].w;
+
+    vec3 worldPos = (localPos * scale) + chunkOffset;
 
     v_Normal = getCubeNormal(normIndex);
     v_TexID = float(texID);
     
-    // Simple Tri-planar UVs
-    if (abs(v_Normal.x) > 0.5) v_TexCoord = localPos.yz;
-    else if (abs(v_Normal.y) > 0.5) v_TexCoord = localPos.xz;
-    else v_TexCoord = localPos.xy;
+    // Tri-planar UVs
+    if (abs(v_Normal.x) > 0.5) v_TexCoord = worldPos.yz * 0.5; 
+    else if (abs(v_Normal.y) > 0.5) v_TexCoord = worldPos.xz * 0.5;
+    else v_TexCoord = worldPos.xy * 0.5;
 
     v_Color = v_Normal * 0.5 + 0.5; 
 

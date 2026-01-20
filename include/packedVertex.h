@@ -2,35 +2,31 @@
 #include <cstdint>
 #include <cmath>
 
-// Matches shader: uvec2 packedVertices[];
 struct PackedVertex {
-    uint32_t d0; // x, y, z, normal
-    uint32_t d1; // textureId, (ao unused in shader currently)
+    uint32_t d0; 
+    uint32_t d1; 
 
     PackedVertex() : d0(0), d1(0) {}
 
-    // Compress data into 2 integers
+    // UPDATED: Now uses 8 bits per axis with +64 offset to handle negative values (skirts)
     PackedVertex(float x, float y, float z, float face, float ao, uint32_t textureId) {
-        uint32_t ix = (uint32_t)x;
-        uint32_t iy = (uint32_t)y;
-        uint32_t iz = (uint32_t)z;
+        // Offset to handle negative coordinates (e.g. skirts going down)
+        // Range: -64.0 to +191.0 covers 0..32 chunk + skirts
+        uint32_t ix = (uint32_t)(x + 64.0f);
+        uint32_t iy = (uint32_t)(y + 64.0f);
+        uint32_t iz = (uint32_t)(z + 64.0f);
         uint32_t iface = (uint32_t)face;
         
-        // Packing scheme matching VERT_PRIMARY.glsl:
-        // x: bits 0-5   (6 bits)
-        // y: bits 6-11  (6 bits)
-        // z: bits 12-17 (6 bits)
-        // norm: bits 18-20 (3 bits)
-        d0 = (ix & 0x3F) | 
-             ((iy & 0x3F) << 6) | 
-             ((iz & 0x3F) << 12) | 
-             ((iface & 0x7) << 18);
+        // Packing scheme:
+        // x: bits 0-7   (8 bits)
+        // y: bits 8-15  (8 bits)
+        // z: bits 16-23 (8 bits)
+        // norm: bits 24-26 (3 bits)
+        d0 = (ix & 0xFF) | 
+             ((iy & 0xFF) << 8) | 
+             ((iz & 0xFF) << 16) | 
+             ((iface & 0x7) << 24);
 
-        // d1: Texture ID in lower 16 bits
         d1 = (textureId & 0xFFFF);
-        
-        // (Optional) Pack AO into upper bits of d1 if you add it to shader later
-        // uint32_t iao = (uint32_t)(ao * 3.0f); // map 0-1 to 0-3
-        // d1 |= (iao & 0x3) << 16;
     }
 };
