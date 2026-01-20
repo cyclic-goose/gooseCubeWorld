@@ -127,9 +127,9 @@ int main() {
 
         globalConfig.scale = 0.02f;           
         globalConfig.hillAmplitude = 15.0f;  
-        globalConfig.hillFrequency = 0.5f;   
+        globalConfig.hillFrequency = 0.9f;   
         globalConfig.mountainAmplitude = 2000.0f; 
-        globalConfig.mountainFrequency = 0.1f; 
+        globalConfig.mountainFrequency = 0.5f; 
         globalConfig.seaLevel = 10;
         globalConfig.enableCaves = false;      
         
