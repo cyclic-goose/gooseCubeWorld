@@ -14,7 +14,7 @@
 // --- CONFIGURATION ---
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
-const bool START_FULLSCREEN = false; // Change to true to start in fullscreen
+const bool START_FULLSCREEN = true; // Change to true to start in fullscreen
 
 // Camera setup
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);

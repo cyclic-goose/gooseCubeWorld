@@ -19,6 +19,8 @@ public:
     // Window State
     bool m_VSync = false; // Default to true (safe)
 
+    bool m_showWireframe = false;
+
     // Disable copying
     ImGuiManager(const ImGuiManager&) = delete;
     ImGuiManager& operator=(const ImGuiManager&) = delete;
@@ -191,6 +193,12 @@ public:
             ImGui::TextColored(m_VSync ? ImVec4(0,1,0,1) : ImVec4(1,0,0,1), 
                 "VSync: %s", m_VSync ? "ON (Capped)" : "OFF (Uncapped)");
 
+
+            if (ImGui::Checkbox("VSync (Cap FPS)", &m_VSync)) {
+                SetVSync(m_VSync);
+            }
+
+
             // 2. MEMORY
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "GPU Memory (Best Fit)");
@@ -227,6 +235,13 @@ public:
             }
             ImGui::Text("Chunks: %zu (Active: %zu)", totalChunks, activeChunks);
             ImGui::Text("Vertices: %s", FormatNumber(totalVertices).c_str());
+            if (ImGui::Checkbox("Wireframe Mode", &m_showWireframe)) {
+                if (m_showWireframe) {
+                    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                } else {
+                    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                }
+            }
 
             // 4. THREADING
             ImGui::Spacing();
@@ -264,10 +279,10 @@ public:
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "Control");
             ImGui::Separator();
-            bool caves = world.m_config.enableCaves;
-            if (ImGui::Checkbox("Enable Caves (Needs Reload)", &caves)) {
-                // Note: Actual modification needs world setter access, keeping visual for now
-            }
+            //bool caves = world.m_config.enableCaves;
+            // if (ImGui::Checkbox("Enable Caves (Needs Reload)", &caves)) {
+            //     // Note: Actual modification needs world setter access, keeping visual for now
+            // }
         }
         ImGui::End();
     }
