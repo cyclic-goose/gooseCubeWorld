@@ -55,7 +55,8 @@ struct WorldConfig {
     float mountainFrequency = 0.26f; 
     int seaLevel = 90;            
     bool enableCaves = false;     
-    float caveThreshold = 0.5f;   
+    float caveThreshold = 0.5f; 
+    float VRAM_HEAP_ALLOCATION_MB = 1024;
 };
 
 // ================================================================================================
@@ -304,7 +305,7 @@ public:
         size_t capacity = maxChunks + 5000; 
         
         m_chunkPool.Init(capacity); 
-        m_gpuMemory = std::make_unique<GpuMemoryManager>(1024 * 1024 * 1024); // 1GB Voxel Heap
+        m_gpuMemory = std::make_unique<GpuMemoryManager>(config.VRAM_HEAP_ALLOCATION_MB * 1024 * 1024); // 1GB Voxel Heap
 
         m_culler = std::make_unique<GpuCuller>(capacity);
         glCreateVertexArrays(1, &m_dummyVAO);

@@ -9,6 +9,7 @@
 #include <vector>
 #include "world.h"
 #include "camera.h"
+#include "profiler.h"
 
 // --- CONFIGURATION STRUCT ---
 struct UIConfig {
@@ -82,7 +83,8 @@ public:
         m_Initialized = false;
     }
 
-    void RenderUI(World& world, UIConfig& config, const Camera& camera) {
+    void RenderUI(World& world, UIConfig& config, const Camera& camera, const float VRAM_HEAP_SIZE_MB) {
+        Engine::Profiler::ScopedTimer timer("ImGui::Render");
         if (!config.editConfigInitialized) {
             config.editConfig = world.GetConfig();
             config.editConfigInitialized = true;
@@ -103,7 +105,7 @@ public:
         //     if (config.showWorldSettings) RenderWorldSettings(world, config);
         //     RenderMenuBar(config);
         // }
-        if (config.showDebugPanel) RenderDebugPanel(world, config);
+        if (config.showDebugPanel) RenderDebugPanel(world, config, VRAM_HEAP_SIZE_MB);
         if (config.showWorldSettings) RenderWorldSettings(world, config);
     }
 
@@ -164,7 +166,7 @@ private:
         ImGui::End();
     }
 
-    void RenderDebugPanel(World& world, UIConfig& config) {
+    void RenderDebugPanel(World& world, UIConfig& config, const float VRAM_HEAP_SIZE_MB) {
         ImGuiWindowFlags flags = 0;
         if (config.isGameMode) {
             flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
@@ -190,8 +192,8 @@ private:
             ImGui::Separator();
             size_t used = world.m_gpuMemory->GetUsedMemory();
             size_t total = world.m_gpuMemory->GetTotalMemory();
-            float usedMB = used / (1024.0f * 1024.0f);
-            float totalMB = total / (1024.0f * 1024.0f);
+            float usedMB = (used / 1024.0f / 1024.0f);
+            float totalMB = VRAM_HEAP_SIZE_MB;
             float ratio = (float)used / (float)total;
             
             ImGui::Text("VRAM: %.1f / %.1f MB", usedMB, totalMB);
