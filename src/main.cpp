@@ -253,7 +253,7 @@ int main() {
             // ********* PROFILER UPDATE ********* // 
             // Inside main loop, before rendering:
             Engine::Profiler::Get().Update();
-
+            //Engine::Profiler::ScopedTimer timer("ENTIRE MAIN THREAD");
             // Inside your GUI rendering block:
             // ********* PROFILER UPDATE ********* // 
             

@@ -318,6 +318,7 @@ public:
     const WorldConfig& GetConfig() const { return m_config; }
 
     void Update(glm::vec3 cameraPos) {
+        //Engine::Profiler::ScopedTimer timer("World Update Total: ");
         if (m_shutdown) return;
         ProcessQueues(); 
         
@@ -329,6 +330,7 @@ public:
 
     void ProcessQueues() {
         if(m_shutdown) return;
+        Engine::Profiler::ScopedTimer timer("Chunk Queue Updating");
         std::vector<ChunkNode*> nodesToMesh;
         std::vector<ChunkNode*> nodesToUpload;
         
@@ -385,6 +387,7 @@ public:
     }
 
     void UnloadChunks(glm::vec3 cameraPos, int targetLod) {
+        Engine::Profiler::ScopedTimer timer("Chunk Unloading");
         if(m_shutdown) return;
         std::vector<int64_t> toRemove;
         bool anyRemoved = false;
@@ -483,13 +486,13 @@ public:
     }
 
     void QueueNewChunks(glm::vec3 cameraPos, int targetLod) {
-        Engine::Profiler::ScopedTimer timer("Chunk Queuing");
+        Engine::Profiler::ScopedTimer timer("New Chunk Queuing");
         if (m_shutdown) return;
 
         static std::vector<std::pair<int, int>> spiralOffsets;
         static std::once_flag flag;
         std::call_once(flag, [](){
-            int maxR = 96; 
+            int maxR = 128; 
             for (int x = -maxR; x <= maxR; x++) {
                 for (int z = -maxR; z <= maxR; z++) {
                     spiralOffsets.push_back({x, z});

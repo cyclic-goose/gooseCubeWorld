@@ -18,6 +18,8 @@ struct UIConfig {
     bool showWireframe = false;
     bool vsync = false;
     bool lockFrustum = false;
+    float FPS_OVERLAY_FONT_SCALE = 1.35f;
+    float DEBUG_FONT_SCALE = 1.4f;
     
     // Input State
     bool isGameMode = true;         // TAB to toggle (Mouse Lock)
@@ -150,10 +152,10 @@ private:
         ImGui::SetNextWindowBgAlpha(0.35f); 
         
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoInputs;
-        
         if (ImGui::Begin("StatsOverlay", nullptr, flags)) {
+            ImGui::SetWindowFontScale(config.FPS_OVERLAY_FONT_SCALE);
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "FPS: %.1f", ImGui::GetIO().Framerate);
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[TAB] Mouse Lock/Unlock | [F2] Debug Menu | [M] World Settings");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[TAB] Mouse Lock/Unlock | [F2] Debug Menu\n [M] World Settings    | [P] Profiler");
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", config.isGameMode ? "[MOUSE LOCKED]" : "[MOUSE UNLOCKED]");
             ImGui::Separator();
             ImGui::Text("XYZ: %.1f, %.1f, %.1f", camera.Position.x, camera.Position.y, camera.Position.z);
@@ -170,9 +172,12 @@ private:
         } else {
             ImGui::SetNextWindowBgAlpha(0.85f); 
         }
-        ImGui::SetNextWindowSize(ImVec2(400, 600), ImGuiCond_FirstUseEver);
+
+        ImGui::SetNextWindowPos(ImVec2(14,184), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(400,600), ImGuiCond_FirstUseEver);
+
         if (ImGui::Begin("Engine Debug (F2)", &config.showDebugPanel, flags)) {
-            
+            ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "PERFORMANCE");
             ImGui::Separator();
             float fps = ImGui::GetIO().Framerate;
@@ -230,11 +235,12 @@ private:
         ImGuiWindowFlags flags = 0;
         if (config.isGameMode) {
             flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
-            ImGui::SetNextWindowBgAlpha(0.2f);
+            ImGui::SetNextWindowBgAlpha(0.75f);
         }
-        ImGui::SetNextWindowSize(ImVec2(400, 550), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(16,801), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(593,550), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("World Generation (M)", &config.showWorldSettings)) {
-            
+            ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
             if (ImGui::CollapsingHeader("Terrain Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::DragInt("Seed", &config.editConfig.seed);
                 ImGui::SliderFloat("Noise Scale", &config.editConfig.scale, 0.001f, 0.1f);

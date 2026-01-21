@@ -6,6 +6,8 @@
 #include <mutex>
 #include <chrono>
 #include <array>
+#include <thread>
+#include <sstream>
 #include <glad/glad.h>
 #include <imgui.h>
 
@@ -23,8 +25,10 @@ struct TimerData {
     float max = 0.0f;
     float avg = 0.0f;
     float current = 0.0f;
+    std::thread::id lastThreadId; // Track which thread submitted this
 
-    void Update(float timeMs) {
+    void Update(float timeMs, std::thread::id tid) {
+        lastThreadId = tid;
         current = timeMs;
         history[historyOffset] = timeMs;
         historyOffset = (historyOffset + 1) % PROFILER_HISTORY_SIZE;
@@ -57,6 +61,9 @@ public:
 
     // Master Toggle: If false, timers return immediately for zero overhead
     bool m_Enabled = false; 
+    
+    // Track the Main Thread ID to distinguish UI elements
+    std::thread::id m_MainThreadId;
 
     // Helper to flip state from Input (e.g., 'P' key)
     void Toggle() {
@@ -78,15 +85,16 @@ public:
             if (active) {
                 auto end = std::chrono::high_resolution_clock::now();
                 float duration = std::chrono::duration<float, std::milli>(end - start).count();
-                Profiler::Get().StoreCPU(name, duration);
+                // Capture the current thread ID upon completion
+                Profiler::Get().StoreCPU(name, duration, std::this_thread::get_id());
             }
         }
     };
 
-    void StoreCPU(const char* name, float durationMs) {
+    void StoreCPU(const char* name, float durationMs, std::thread::id tid) {
         // Thread-safe for background mesh tasks
         std::lock_guard<std::mutex> lock(m_Mutex);
-        m_CpuTimers[name].Update(durationMs);
+        m_CpuTimers[name].Update(durationMs, tid);
     }
 
     // --- GPU Profiling (OpenGL Queries) ---
@@ -119,6 +127,11 @@ public:
     void Update() {
         if (!m_Enabled) return;
 
+        // Capture Main Thread ID (Update is always called from Main)
+        if (m_MainThreadId == std::thread::id()) {
+            m_MainThreadId = std::this_thread::get_id();
+        }
+
         m_FrameIndex++;
         int readIndex = m_FrameIndex % PROFILER_GPU_QUERY_BUFFERS;
 
@@ -135,8 +148,8 @@ public:
                 
                 if (available) {
                     glGetQueryObjectui64v(query, GL_QUERY_RESULT, &elapsed);
-                    // Convert nanoseconds to milliseconds
-                    timer.data.Update(elapsed / 1000000.0f);
+                    // Convert nanoseconds to milliseconds, GPU is always Main Thread context
+                    timer.data.Update(elapsed / 1000000.0f, m_MainThreadId);
                     timer.queryPending[readIndex] = false;
                 }
             }
@@ -168,8 +181,11 @@ public:
             flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs | ImGuiWindowFlags_NoNav;
             ImGui::SetNextWindowBgAlpha(0.75f); // Transparent when locked
         }
+        ImGui::SetNextWindowPos(ImVec2(1919,29), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(609,646), ImGuiCond_FirstUseEver);
 
         if (ImGui::Begin("Profiler Stats", nullptr, flags)) {
+            ImGui::SetWindowFontScale(1.4f);
             // FPS & Frame Time Display
             float fps = ImGui::GetIO().Framerate;
             float frameMs = 1000.0f / (fps > 0.0f ? fps : 60.0f);
@@ -189,13 +205,11 @@ public:
             ImGui::Separator();
             
             // Helper to draw list
-            auto RenderTimerList = [](auto& timers, const char* label, ImVec4 color) {
+            auto RenderTimerList = [&](auto& timers, const char* label, ImVec4 color) {
                 if (ImGui::CollapsingHeader(label, ImGuiTreeNodeFlags_DefaultOpen)) {
                     for (auto& [name, entry] : timers) {
                         // entry is either TimerData or GPUTimer
                         const TimerData* d = nullptr;
-                        // SFINAE or simple check not needed if we know types, 
-                        // but here we mix types in the lambda. 
                         // Hacky cast approach for clean code:
                         if constexpr (std::is_same_v<std::decay_t<decltype(entry)>, TimerData>) {
                             d = &entry;
@@ -203,9 +217,21 @@ public:
                             d = &entry.data;
                         }
 
+                        // Thread ID Check
+                        bool isMain = (d->lastThreadId == m_MainThreadId);
+
                         ImGui::PushID(name.c_str());
                         ImGui::Columns(2);
+                        
+                        // Name Column with Thread Indicator
                         ImGui::Text("%s", name.c_str());
+                        ImGui::SameLine();
+                        if (isMain) {
+                            ImGui::TextColored(ImVec4(0.5f, 1.0f, 1.0f, 0.7f), "[MAIN]");
+                        } else {
+                            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 0.7f), "[WORKER]");
+                        }
+
                         ImGui::NextColumn();
                         ImGui::TextColored(color, "%.3f ms", d->avg);
                         ImGui::NextColumn();
@@ -233,9 +259,6 @@ private:
     Profiler() = default;
     
     ~Profiler() {
-        // Safe fallback in case Shutdown() wasn't called manually.
-        // Note: If context is already gone, glDeleteQueries inside Shutdown might still be unsafe,
-        // but checking queries[0] != 0 helps.
         Shutdown();
     }
 
