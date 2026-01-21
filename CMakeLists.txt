@@ -87,7 +87,7 @@ endif()
 target_link_libraries(gooseVoxelEngine PRIVATE 
     FastNoise2
     glfw 
-    glm    # Fixes: fatal error: glm/glm.hpp: No such file
+    glm   
     ${GLFW_LIBRARIES}
 )
 
