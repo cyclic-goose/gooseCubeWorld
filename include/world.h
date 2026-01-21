@@ -25,7 +25,8 @@
 #include "threadpool.h"
 #include "chunk_pool.h"
 #include "gpu_memory.h"
-#include "packedVertex.h" 
+#include "packedVertex.h"
+#include "profiler.h"
 
 // --- GPU STRUCTURES ---
 
@@ -418,9 +419,15 @@ public:
         if(m_shutdown) return;
 
         // 1. Update Candidate Buffer if chunks loaded/unloaded
-        SyncCandidatesToGPU();
+        {
+            Engine::Profiler::ScopedTimer cpuTimer("CPU: Sync Candidates");
+            SyncCandidatesToGPU();
+        }
 
         if (m_cpuCandidates.empty()) return;
+
+        // GPU: Culling Pass
+        Engine::Profiler::Get().BeginGPU("GPU: Culling Compute"); ////////////////////// Profile To GPU Barrier
 
         // 2. Reset Atomic Counter (Visible Count)
         const GLuint zero = 0;
@@ -444,6 +451,15 @@ public:
         // 4. Memory Barrier
         glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_ATOMIC_COUNTER_BARRIER_BIT);
 
+        Engine::Profiler::Get().EndGPU();                       ////////////////////// Profile To GPU Barrier
+
+
+
+        // ******************* GPU: Rendering Pass ****************** //
+        Engine::Profiler::Get().BeginGPU("GPU: Geometry Draw");
+
+
+
         // 5. Draw using the RENDERING matrix
         shader.use();
         glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
@@ -460,9 +476,14 @@ public:
         glBindBuffer(GL_PARAMETER_BUFFER, 0);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
         glBindVertexArray(0); 
+
+
+        Engine::Profiler::Get().EndGPU();
+        // ******************* GPU: Rendering Pass ****************** //
     }
 
     void QueueNewChunks(glm::vec3 cameraPos, int targetLod) {
+        Engine::Profiler::ScopedTimer timer("Chunk Queuing");
         if (m_shutdown) return;
 
         static std::vector<std::pair<int, int>> spiralOffsets;
@@ -482,7 +503,7 @@ public:
         auto startTime = std::chrono::high_resolution_clock::now();
         std::vector<ChunkRequest> missing;
         missing.reserve(200); 
-        const int MAX_TASKS =  64; 
+        const int MAX_TASKS =  128; 
 
         int camYBlock = (int)cameraPos.y;
         int lod = targetLod;
@@ -546,6 +567,9 @@ public:
 
     void Task_Mesh(ChunkNode* node) {
         if (m_shutdown) return;
+        // RAII Timer: Starts now, Ends when function returns
+        Engine::Profiler::ScopedTimer timer("Mesh Generation"); 
+
         LinearAllocator<PackedVertex> threadAllocator(1000000); 
         MeshChunk(node->chunk, threadAllocator, false);
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());

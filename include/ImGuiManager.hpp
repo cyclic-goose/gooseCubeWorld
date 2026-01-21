@@ -17,6 +17,7 @@ struct UIConfig {
     bool showOverlay = true;        
     bool showWireframe = false;
     bool vsync = false;
+    bool lockFrustum = false;
     
     // Input State
     bool isGameMode = true;         // TAB to toggle (Mouse Lock)
@@ -94,12 +95,14 @@ public:
         // Always render the minimal overlay
         if (config.showOverlay) RenderSimpleOverlay(config, camera);
 
-        // Hide menus and windows if we are in Game Mode (Locked Mouse)
-        if (!config.isGameMode) {
-            if (config.showDebugPanel) RenderDebugPanel(world, config);
-            if (config.showWorldSettings) RenderWorldSettings(world, config);
-            RenderMenuBar(config);
-        }
+        // // Hide menus and windows if we are in Game Mode (Locked Mouse)
+        // if (!config.isGameMode) {
+        //     if (config.showDebugPanel) RenderDebugPanel(world, config);
+        //     if (config.showWorldSettings) RenderWorldSettings(world, config);
+        //     RenderMenuBar(config);
+        // }
+        if (config.showDebugPanel) RenderDebugPanel(world, config);
+        if (config.showWorldSettings) RenderWorldSettings(world, config);
     }
 
     void ToggleFullscreen() {
@@ -150,7 +153,8 @@ private:
         
         if (ImGui::Begin("StatsOverlay", nullptr, flags)) {
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "FPS: %.1f", ImGui::GetIO().Framerate);
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", config.isGameMode ? "[LOCKED]" : "[UNLOCKED]");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[TAB] Mouse Lock/Unlock | [F2] Debug Menu | [M] World Settings");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", config.isGameMode ? "[MOUSE LOCKED]" : "[MOUSE UNLOCKED]");
             ImGui::Separator();
             ImGui::Text("XYZ: %.1f, %.1f, %.1f", camera.Position.x, camera.Position.y, camera.Position.z);
             ImGui::Text("Angle: Y:%.1f P:%.1f", camera.Yaw, camera.Pitch);
@@ -162,7 +166,7 @@ private:
         ImGuiWindowFlags flags = 0;
         if (config.isGameMode) {
             flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
-            ImGui::SetNextWindowBgAlpha(0.2f); // Faintly visible while playing
+            ImGui::SetNextWindowBgAlpha(0.75f); // Faintly visible while playing
         } else {
             ImGui::SetNextWindowBgAlpha(0.85f); 
         }
@@ -208,6 +212,8 @@ private:
             if (ImGui::Checkbox("Wireframe Mode", &config.showWireframe)) {
                 glPolygonMode(GL_FRONT_AND_BACK, config.showWireframe ? GL_LINE : GL_FILL);
             }
+            ImGui::Checkbox("Lock Frustum (F)", &config.lockFrustum);
+            if (config.lockFrustum) ImGui::TextColored(ImVec4(1,0,0,1), "FRUSTUM LOCKED");
 
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "THREADING");

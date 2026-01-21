@@ -10,6 +10,7 @@
 #include "camera.h"
 #include "shader.h"
 #include "ImGuiManager.hpp"
+#include "profiler.h"
 
 // --- CONFIGURATION ---
 const unsigned int SCR_WIDTH = 1920;
@@ -30,9 +31,12 @@ bool lockFrustum = false;
 bool fKeyPressed = false;
 glm::mat4 lockedCullMatrix;
 
-// 1. GLOBAL GUI MANAGERS
+// GLOBAL GUI MANAGERS
 ImGuiManager gui;
 UIConfig appState; 
+
+
+
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
 
@@ -41,7 +45,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
         firstMouse = true;
         return;
     }
-
+    
     if (firstMouse) { lastX = xpos; lastY = ypos; firstMouse = false; }
     camera.ProcessMouseMovement(xpos - lastX, lastY - ypos);
     lastX = xpos; lastY = ypos;
@@ -59,7 +63,7 @@ void processInput(GLFWwindow *window, World& world) {
             else glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
         }
     } else { tabPressed = false; }
-
+    
     // 2. Click to capture cursor (only if not clicking on ImGui)
     if (!appState.isGameMode && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
         if (!ImGui::GetIO().WantCaptureMouse) {
@@ -67,7 +71,7 @@ void processInput(GLFWwindow *window, World& world) {
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
     }
-
+    
     // 3. F2: Toggle Debug Window
     static bool f2Pressed = false;
     if (glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS) {
@@ -76,7 +80,17 @@ void processInput(GLFWwindow *window, World& world) {
             f2Pressed = true;
         }
     } else { f2Pressed = false; }
-
+    
+    
+    // P: Toggle Profiler Window
+    static bool pPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
+        if (!pPressed) {
+            Engine::Profiler::Get().Toggle();
+            pPressed = true;
+        }
+    } else { pPressed = false; }
+    
     // 4. M: Toggle World Gen Window
     static bool mPressed = false;
     if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS) {
@@ -85,7 +99,7 @@ void processInput(GLFWwindow *window, World& world) {
             mPressed = true;
         }
     } else { mPressed = false; }
-
+    
     // Standard Exit
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
     
@@ -100,23 +114,24 @@ void processInput(GLFWwindow *window, World& world) {
         if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
         if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
     }
-
+    
     // R: Reload shortcut
     static bool rPressed = false;
     if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !rPressed) {
         world.Reload(appState.editConfig);
         rPressed = true;
     } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) rPressed = false;
-
+    
     // 5. F: Freeze Frustum
     if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS) {
         if (!fKeyPressed) {
-            lockFrustum = !lockFrustum;
+            //lockFrustum = !lockFrustum;
+            appState.lockFrustum = !appState.lockFrustum;
             fKeyPressed = true;
             std::cout << "[DEBUG] Frustum Lock: " << (lockFrustum ? "ON" : "OFF") << std::endl;
         }
     } else { fKeyPressed = false; }
-
+    
 }
 
 
@@ -132,10 +147,10 @@ void RenderLoadingScreen(GLFWwindow* window) {
         
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-
+        
         // 2. Draw UI
         gui.BeginFrame();
-
+        
         ImVec2 center = ImGui::GetMainViewport()->GetCenter();
         ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
         
@@ -147,7 +162,7 @@ void RenderLoadingScreen(GLFWwindow* window) {
         ImGui::Text("Allocating VRAM Buffers (approx 900000GB)...");
         ImGui::Text("Allocating Threadpool...");
         ImGui::Text("Please Wait...");
-
+        
         // --- VERSION WINDOW (Anchored Relative to Main) ---
         // Calculate position: Right edge of main box, 5 pixels down
         // CAPTURE GEOMETRY: Get the bottom-right corner of this window
@@ -156,17 +171,17 @@ void RenderLoadingScreen(GLFWwindow* window) {
         ImVec2 versionPos;
         versionPos.x = mainPos.x + mainSize.x; 
         versionPos.y = mainPos.y + mainSize.y + 5.0f; 
-
+        
         // Pivot (1.0f, 0.0f) = Top-Right of the version text
         // This aligns the right edge of the text with the right edge of the box above it
         ImGui::SetNextWindowPos(versionPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
         ImGui::SetNextWindowBgAlpha(0.0f); 
         
         ImGui::Begin("Version", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.1.0-alpha"); 
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.2.1-alpha"); 
         ImGui::End();
         ImGui::End();
-
+        
         gui.EndFrame();
         
         // 3. Swap and Poll
@@ -180,11 +195,12 @@ void RenderLoadingScreen(GLFWwindow* window) {
 }
 
 int main() {
+    
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-
+    
     GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
@@ -200,7 +216,7 @@ int main() {
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
-
+    
     gui.Init(window);
     RenderLoadingScreen(window);
 
@@ -234,39 +250,47 @@ int main() {
             deltaTime = currentFrame - lastFrame;
             lastFrame = currentFrame;
 
+            // ********* PROFILER UPDATE ********* // 
+            // Inside main loop, before rendering:
+            Engine::Profiler::Get().Update();
+
+            // Inside your GUI rendering block:
+            // ********* PROFILER UPDATE ********* // 
+            
             processInput(window, world);
             world.Update(camera.Position);
-
+            
             gui.BeginFrame();
-            // --- DEBUG UI EXTENSION ---
-            ImGui::Begin("Debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-            ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
-            ImGui::Checkbox("Lock Frustum (F)", &lockFrustum);
-            if (lockFrustum) ImGui::TextColored(ImVec4(1,0,0,1), "FRUSTUM LOCKED");
-            ImGui::End();
+            Engine::Profiler::Get().DrawUI(appState.isGameMode);
 
-            gui.RenderUI(world, appState, camera);
-
+            
+            // CLEAR 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
+            
+            // Recalc mvp
             glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
-
+            
             // Handle Frustum Locking Logic
-            if (!lockFrustum) {
+            if (!appState.lockFrustum) {
                 lockedCullMatrix = viewProj;
             }
-
+            
+            // RENDER WORLD
             // Draw with separate ViewProj for Rendering and Culling
             world.Draw(worldShader, viewProj, lockedCullMatrix);
+
+
+            // Render GUI
+            gui.RenderUI(world, appState, camera);
             gui.EndFrame();
 
             glfwSwapBuffers(window);
             glfwPollEvents();
         }
     }
-
+    Engine::Profiler::Get().Shutdown();
     gui.Shutdown();
     glfwTerminate();
     return 0;
