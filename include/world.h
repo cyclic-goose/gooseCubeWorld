@@ -351,8 +351,8 @@ public:
     // ================================================================================================
 
     void Update(glm::vec3 cameraPos) {
-        Engine::Profiler::ScopedTimer timer("World::Update Total");
         if (m_shutdown) return;
+        Engine::Profiler::ScopedTimer timer("World::Update Total");
         
         // --- AUTO-DEFRAG / RELOAD ---
         // Checks fragmentation of the persistent mapped buffer.
@@ -467,17 +467,17 @@ public:
         int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
         int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
 
-        // OPTIMIZATION: Coordinate Caching
+        // OPTIMIZATION: Coordinate Caching ////////// removing for now, caching might change new children results
         // If we remain in the same chunk coordinate, the set of chunks to unload is identical. Skip.
-        if (camX == lastUnloadPx[targetLod] && camZ == lastUnloadPz[targetLod]) {
-            return;
-        }
+        // if (camX == lastUnloadPx[targetLod] && camZ == lastUnloadPz[targetLod]) {
+        //     return;
+        // }
 
-        lastUnloadPx[targetLod] = camX;
-        lastUnloadPz[targetLod] = camZ;
+        // lastUnloadPx[targetLod] = camX;
+        // lastUnloadPz[targetLod] = camZ;
         
         std::vector<int64_t> toRemove;
-        
+    
         {
             std::shared_lock<std::shared_mutex> lock(m_chunksMutex);
             for (auto& pair : m_chunks) {
@@ -487,29 +487,32 @@ public:
                 int dx = abs(node->cx - camX);
                 int dz = abs(node->cz - camZ);
                 
-                // 1. UNLOAD TOO FAR (Outer Radius)
-                int outerLimit = m_config.lodRadius[targetLod]; // If you see gaps, add 1 or two here but has a high probability of causing z-fighting/flickering
-                bool shouldRemove = false;
+                // 1. UNLOAD TOO FAR (Outer Radius) -> Unload immediately
+                int outerLimit = m_config.lodRadius[targetLod]; 
                 if (dx > outerLimit || dz > outerLimit) {
-                    shouldRemove = true;
-                }
-
-                // 2. UNLOAD TOO CLOSE (Inner Radius / Donut Hole)
-                // Strict boundary logic prevents "Z-Fighting" between LOD layers.
-                if (targetLod > 0) {
-                    int prevRadius = m_config.lodRadius[targetLod - 1];
-                    // Radius of LOD(n-1) in LOD(n) coordinates is exactly half.
-                    int innerBoundary = ((prevRadius+1)/ 2);
-                    
-                    if (dx < innerBoundary && dz < innerBoundary) {
-                        shouldRemove = true;
-                    }
-                }
-
-                if (shouldRemove) {
                     ChunkState s = node->state.load();
                     if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
                         toRemove.push_back(pair.first);
+                    }
+                    continue;
+                }
+
+                // 2. UNLOAD TOO CLOSE (Inner Radius / Transition to Higher Detail)
+                if (targetLod > 0) {
+                    int prevRadius = m_config.lodRadius[targetLod - 1];
+                    int innerBoundary = ((prevRadius + 1) / 2);
+                    
+                    if (dx < innerBoundary && dz < innerBoundary) {
+                        // CRITICAL FIX: Only unload if the high-res replacements are ready.
+                        // This prevents the "Hole" / Flash.
+                        if (AreChildrenReady(node->cx, node->cy, node->cz, targetLod)) {
+                            ChunkState s = node->state.load();
+                            if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
+                                toRemove.push_back(pair.first);
+                            }
+                        }
+                        // Else: Do nothing. Keep this low-res chunk rendered for one more frame.
+                        // It will overlap with the generating children, but that is better than a hole.
                     }
                 }
             }
@@ -700,14 +703,93 @@ public:
                  shader.setInt("u_Textures", 0);
             }
 
-            m_culler->DrawIndirect(m_dummyVAO);
+            // --- Z-FIGHTING FIX ---
+            // Enable Polygon Offset to handle overlapping geometry cleanly.
+            // GL_POLYGON_OFFSET_FILL pushes geometry back. 
+            // Since we are drawing all LODs at once, this is a "Global" fix.
+            // Ideally, you'd split the MDI call by LOD and increase the factor for each.
+            glEnable(GL_POLYGON_OFFSET_FILL);
+            glPolygonOffset(1.0f, 1.0f);
+
+            m_culler->DrawIndirect(m_dummyVAO); ////////////////// ******************** PRIMARY WORLD DRAW CALL **************** ///////////////////
+            glDisable(GL_POLYGON_OFFSET_FILL);
+
             Engine::Profiler::Get().EndGPU();
         }
     }
 
+
+
+    // ================================================================================================
+    //                                         RESET / RELOAD
+    // ================================================================================================
+
+    void Reload(WorldConfig newConfig) {
+        Engine::Profiler::ScopedTimer timer("World::Reload");
+        m_config = newConfig;
+        
+        // Reset Generator
+        m_generator = std::make_unique<DefaultGenerator>(m_config);
+        
+        {
+            std::unique_lock<std::shared_mutex> lock(m_chunksMutex);
+            for (auto& pair : m_chunks) {
+                ChunkNode* node = pair.second;
+                if (node->gpuOffset != -1) {
+                    m_culler->RemoveChunk(node->id); 
+                    m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
+                    node->gpuOffset = -1;
+                }
+                m_chunkPool.Release(node);
+            }
+            m_chunks.clear();
+        }
+
+        // Reset tracking vars
+        for(int i=0; i<8; i++) { 
+            lastPx[i] = -999; 
+            lastPz[i] = -999; 
+            lastUnloadPx[i] = -999;
+            lastUnloadPz[i] = -999;
+            m_lodComplete[i] = false; 
+        }
+    }
+
+
+
     // ================================================================================================
     //                                      WORKER TASKS
     // ================================================================================================
+private:
+    bool AreChildrenReady(int cx, int cy, int cz, int lod) {
+        if (lod == 0) return true; // Lowest LOD has no children
+        
+        int childLod = lod - 1;
+        // A chunk at LOD N (coord x) covers LOD N-1 coords [2x, 2x+1]
+        int startX = cx * 2;
+        int startY = cy * 2;
+        int startZ = cz * 2;
+
+        // Check all 8 children
+        for (int x = 0; x < 2; x++) {
+            for (int y = 0; y < 2; y++) {
+                for (int z = 0; z < 2; z++) {
+                    int64_t key = ChunkKey(startX + x, startY + y, startZ + z, childLod);
+                    
+                    // Note: We are already holding a Read Lock (shared_lock) in UnloadChunks,
+                    // so calling find() here is thread-safe.
+                    auto it = m_chunks.find(key);
+                    
+                    // If child is missing or still generating/meshing, we are NOT ready.
+                    if (it == m_chunks.end() || it->second->state != ChunkState::ACTIVE) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
 
     void Task_Generate(ChunkNode* node) {
         if (m_shutdown) return;
@@ -803,38 +885,5 @@ public:
         }
     }
 
-    // ================================================================================================
-    //                                         RESET / RELOAD
-    // ================================================================================================
 
-    void Reload(WorldConfig newConfig) {
-        Engine::Profiler::ScopedTimer timer("World::Reload");
-        m_config = newConfig;
-        
-        // Reset Generator
-        m_generator = std::make_unique<DefaultGenerator>(m_config);
-        
-        {
-            std::unique_lock<std::shared_mutex> lock(m_chunksMutex);
-            for (auto& pair : m_chunks) {
-                ChunkNode* node = pair.second;
-                if (node->gpuOffset != -1) {
-                    m_culler->RemoveChunk(node->id); 
-                    m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
-                    node->gpuOffset = -1;
-                }
-                m_chunkPool.Release(node);
-            }
-            m_chunks.clear();
-        }
-
-        // Reset tracking vars
-        for(int i=0; i<8; i++) { 
-            lastPx[i] = -999; 
-            lastPz[i] = -999; 
-            lastUnloadPx[i] = -999;
-            lastUnloadPz[i] = -999;
-            m_lodComplete[i] = false; 
-        }
-    }
 };
