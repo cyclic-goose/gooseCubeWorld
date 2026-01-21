@@ -1,5 +1,9 @@
 #pragma once
 
+// ================================================================================================
+//                                       INCLUDES
+// ================================================================================================
+
 #include <vector>
 #include <cmath>
 #include <algorithm>
@@ -30,12 +34,20 @@
 #include "profiler.h"
 #include "gpu_culler.h" 
 
-// --- CONFIG ---
+// ================================================================================================
+//                                     CONFIGURATION
+// ================================================================================================
+
 struct WorldConfig {
     int seed = 1337;
     int worldHeightChunks = 32;
     int lodCount = 5; 
+    
+    // LOD Radii: Defines the distance for each Detail Level.
+    // Index 0 = Highest Detail (LOD 0), Index 4 = Lowest Detail.
     int lodRadius[8] = { 10, 16, 24, 32, 48, 0, 0, 0 }; 
+    
+    // Terrain Parameters
     float scale = 0.08f;          
     float hillAmplitude = 100.0f;  
     float hillFrequency = 4.0f;   
@@ -45,6 +57,136 @@ struct WorldConfig {
     bool enableCaves = false;     
     float caveThreshold = 0.5f;   
 };
+
+// ================================================================================================
+//                                  TERRAIN GENERATOR INTERFACE
+// ================================================================================================
+// GUIDE: To implement a new Terrain Generator:
+// 1. Create a class that inherits from ITerrainGenerator.
+// 2. Implement Init(), GetHeight(), and GetBlock().
+// 3. In World::World(), replace 'm_generator = std::make_unique<DefaultGenerator>(m_config);'
+//    with your new class.
+// ================================================================================================
+
+class ITerrainGenerator {
+public:
+    virtual ~ITerrainGenerator() = default;
+    
+    // Called once on World init
+    virtual void Init() = 0; 
+    
+    // Used for LOD calculations and height culling
+    virtual int GetHeight(float x, float z) const = 0;
+    
+    // Used for actual voxel placement. Return Block ID (0 = Air).
+    virtual uint8_t GetBlock(float x, float y, float z, int heightAtXZ, int lodScale) const = 0;
+    
+    // Helper for Quadtree/LOD bounding boxes
+    virtual void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) = 0;
+};
+
+// ================================================================================================
+//                                  DEFAULT GENERATOR (FastNoise)
+// ================================================================================================
+
+class DefaultGenerator : public ITerrainGenerator {
+private:
+    FastNoise::SmartNode<> m_baseNoise;
+    FastNoise::SmartNode<> m_mountainNoise;
+    FastNoise::SmartNode<> m_caveNoise;
+    WorldConfig m_config;
+
+public:
+    DefaultGenerator(WorldConfig config) : m_config(config) { Init(); }
+
+    void Init() override {
+        // 1. Base Rolling Hills
+        auto fnPerlin = FastNoise::New<FastNoise::Perlin>();
+        auto fnFractal = FastNoise::New<FastNoise::FractalFBm>();
+        fnFractal->SetSource(fnPerlin);
+        fnFractal->SetOctaveCount(4);
+        m_baseNoise = fnFractal;
+
+        // 2. Sharp Mountains
+        auto fnSimplex = FastNoise::New<FastNoise::Simplex>();
+        auto fnFractal2 = FastNoise::New<FastNoise::FractalFBm>();
+        fnFractal2->SetSource(fnSimplex);
+        fnFractal2->SetOctaveCount(3);
+        m_mountainNoise = fnFractal2;
+
+        // 3. Caves (3D Noise)
+        m_caveNoise = FastNoise::New<FastNoise::Perlin>();
+    }
+
+    int GetHeight(float x, float z) const override {
+        float nx = x * m_config.scale;
+        float nz = z * m_config.scale;
+        
+        // Base Terrain
+        float baseVal = m_baseNoise->GenSingle2D(nx * m_config.hillFrequency, nz * m_config.hillFrequency, m_config.seed);
+        float hillHeight = baseVal * m_config.hillAmplitude;
+        
+        // Mountains
+        float mountainVal = m_mountainNoise->GenSingle2D(nx * m_config.mountainFrequency, nz * m_config.mountainFrequency, m_config.seed + 1);
+        mountainVal = std::abs(mountainVal); 
+        mountainVal = std::pow(mountainVal, 2.0f); 
+        float mountainHeight = mountainVal * m_config.mountainAmplitude;
+        
+        return m_config.seaLevel + (int)(hillHeight + mountainHeight);
+    }
+
+    // --- TEXTURE / BLOCK DEFINITION ---
+    // GUIDE: Map your logic to Texture IDs here.
+    // blockID 1 = Grass, 2 = Dirt, 3 = Stone, 4 = Snow, etc.
+    // These IDs correspond to the layer index in your Texture Array.
+    uint8_t GetBlock(float x, float y, float z, int heightAtXZ, int lodScale) const override {
+        int wy = (int)y;
+        
+        // Cave Check
+        if (m_config.enableCaves && lodScale == 1) { // Only caves at LOD 0
+             float val = m_caveNoise->GenSingle3D(x * 0.02f, y * 0.04f, z * 0.02f, m_config.seed);
+             if (val > m_config.caveThreshold) return 0; // Air
+        }
+
+        if (wy > heightAtXZ) return 0; // Air above terrain
+
+        // Surface Logic
+        if (wy == heightAtXZ) {
+            // Top Block
+            if (wy > 55) return 4; // Snow
+            if (wy > 35) return 1; // Grass
+            return 2;              // Sand/Dirt
+        } 
+        else if (wy > heightAtXZ - (4 * lodScale)) {
+            // Sub-surface (4 blocks deep)
+            if (wy > 55) return 4; // Snow
+            if (wy > 35) return 2; // Dirt
+            return 5;              // SandStone
+        }
+        
+        return 3; // Deep Stone
+    }
+
+    void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) override {
+        int worldX = cx * CHUNK_SIZE * scale;
+        int worldZ = cz * CHUNK_SIZE * scale;
+        int size = CHUNK_SIZE * scale;
+
+        // Sample 5 points (corners + center) for rough AABB calculation
+        int h1 = GetHeight(worldX, worldZ);
+        int h2 = GetHeight(worldX + size, worldZ);
+        int h3 = GetHeight(worldX, worldZ + size);
+        int h4 = GetHeight(worldX + size, worldZ + size);
+        int h5 = GetHeight(worldX + size/2, worldZ + size/2);
+
+        minH = std::min({h1, h2, h3, h4, h5});
+        maxH = std::max({h1, h2, h3, h4, h5});
+    }
+};
+
+// ================================================================================================
+//                                       CHUNK STRUCTURES
+// ================================================================================================
 
 enum class ChunkState { MISSING, GENERATING, GENERATED, MESHING, MESHED, ACTIVE };
 
@@ -89,66 +231,7 @@ struct ChunkNode {
     }
 };
 
-class TerrainGenerator {
-private:
-    FastNoise::SmartNode<> m_baseNoise;
-    FastNoise::SmartNode<> m_mountainNoise;
-    FastNoise::SmartNode<> m_caveNoise;
-    WorldConfig m_config;
-
-public:
-    TerrainGenerator(WorldConfig config) : m_config(config) { Init(); }
-
-    void Init() {
-        auto fnPerlin = FastNoise::New<FastNoise::Perlin>();
-        auto fnFractal = FastNoise::New<FastNoise::FractalFBm>();
-        fnFractal->SetSource(fnPerlin);
-        fnFractal->SetOctaveCount(4);
-        m_baseNoise = fnFractal;
-
-        auto fnSimplex = FastNoise::New<FastNoise::Simplex>();
-        auto fnFractal2 = FastNoise::New<FastNoise::FractalFBm>();
-        fnFractal2->SetSource(fnSimplex);
-        fnFractal2->SetOctaveCount(3);
-        m_mountainNoise = fnFractal2;
-
-        m_caveNoise = FastNoise::New<FastNoise::Perlin>();
-    }
-
-    int GetHeight(float x, float z) const {
-        float nx = x * m_config.scale;
-        float nz = z * m_config.scale;
-        float baseVal = m_baseNoise->GenSingle2D(nx * m_config.hillFrequency, nz * m_config.hillFrequency, m_config.seed);
-        float hillHeight = baseVal * m_config.hillAmplitude;
-        float mountainVal = m_mountainNoise->GenSingle2D(nx * m_config.mountainFrequency, nz * m_config.mountainFrequency, m_config.seed + 1);
-        mountainVal = std::abs(mountainVal); 
-        mountainVal = std::pow(mountainVal, 2.0f); 
-        float mountainHeight = mountainVal * m_config.mountainAmplitude;
-        return m_config.seaLevel + (int)(hillHeight + mountainHeight);
-    }
-
-    void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) {
-        int worldX = cx * CHUNK_SIZE * scale;
-        int worldZ = cz * CHUNK_SIZE * scale;
-        int size = CHUNK_SIZE * scale;
-
-        int h1 = GetHeight(worldX, worldZ);
-        int h2 = GetHeight(worldX + size, worldZ);
-        int h3 = GetHeight(worldX, worldZ + size);
-        int h4 = GetHeight(worldX + size, worldZ + size);
-        int h5 = GetHeight(worldX + size/2, worldZ + size/2);
-
-        minH = std::min({h1, h2, h3, h4, h5});
-        maxH = std::max({h1, h2, h3, h4, h5});
-    }
-
-    bool IsCave(float x, float y, float z) const {
-        if (!m_config.enableCaves) return false;
-        float val = m_caveNoise->GenSingle3D(x * 0.02f, y * 0.04f, z * 0.02f, m_config.seed);
-        return val > m_config.caveThreshold;
-    }
-};
-
+// Helper for hashing chunk coordinates
 inline int64_t ChunkKey(int x, int y, int z, int lod) {
     uint64_t ulod = (uint64_t)(lod & 0x7) << 61; 
     uint64_t ux = (uint64_t)(uint32_t)x & 0xFFFFF; 
@@ -157,62 +240,73 @@ inline int64_t ChunkKey(int x, int y, int z, int lod) {
     return ulod | (ux << 41) | (uz << 21) | uy;
 }
 
+// ================================================================================================
+//                                          WORLD CLASS
+// ================================================================================================
+
 class World {
 private:
     WorldConfig m_config;
-    TerrainGenerator m_generator;
+    std::unique_ptr<ITerrainGenerator> m_generator;
     
+    // --- CHUNK STORAGE ---
     // Protected by m_chunksMutex
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
     std::shared_mutex m_chunksMutex; // R/W Lock for the map
 
     ObjectPool<ChunkNode> m_chunkPool;
 
+    // --- ASYNC QUEUES ---
     std::mutex m_queueMutex;
     std::queue<ChunkNode*> m_generatedQueue; 
     std::queue<ChunkNode*> m_meshedQueue;    
     
     ThreadPool m_pool; 
 
-    // Used for tracking movement per LOD
+    // --- LOD TRACKING ---
     int lastPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
     int lastPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
-    
-    // [OPTIMIZATION] Separate tracking for Unloading to prevent redundant O(N) scans
     int lastUnloadPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
     int lastUnloadPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
-
     bool m_lodComplete[8] = {false};
 
     int m_frameCounter = 0; 
     std::atomic<bool> m_shutdown{false};
 
+    // --- GPU RESOURCES ---
     std::unique_ptr<GpuMemoryManager> m_gpuMemory;
-
-    // --- GPU DRIVEN CULLING ---
     std::unique_ptr<GpuCuller> m_culler;
     GLuint m_dummyVAO = 0; 
+    
+    // TEXTURE ARRAY HANDLE
+    // Bind your GL_TEXTURE_2D_ARRAY here via SetTextureArray()
+    GLuint m_textureArrayID = 0;
 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
     friend class ImGuiManager;
 
 public:
-    World(WorldConfig config) : m_config(config), m_generator(config) {
+    // ================================================================================================
+    //                                     LIFECYCLE
+    // ================================================================================================
+
+    World(WorldConfig config) : m_config(config) {
+        // PLUG IN: Swapping generators
+        // To use a custom generator, change this line:
+        m_generator = std::make_unique<DefaultGenerator>(m_config);
+
         size_t maxChunks = 0;
         for(int i=0; i<m_config.lodCount; i++) {
             int r = m_config.lodRadius[i];
             maxChunks += (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
         }
-        // Buffer extra capacity for transitions
         size_t capacity = maxChunks + 5000; 
         
         m_chunkPool.Init(capacity); 
         m_gpuMemory = std::make_unique<GpuMemoryManager>(1024 * 1024 * 1024); // 1GB Voxel Heap
 
-        // Initialize the new GPU Culler
         m_culler = std::make_unique<GpuCuller>(capacity);
-
         glCreateVertexArrays(1, &m_dummyVAO);
     }
 
@@ -225,16 +319,24 @@ public:
         if (m_dummyVAO) { glDeleteVertexArrays(1, &m_dummyVAO); m_dummyVAO = 0; }
         m_culler.reset();
     }
+
+    void SetTextureArray(GLuint textureID) {
+        m_textureArrayID = textureID;
+    }
     
     const WorldConfig& GetConfig() const { return m_config; }
 
+    // ================================================================================================
+    //                                     MAIN UPDATE LOOP
+    // ================================================================================================
+
     void Update(glm::vec3 cameraPos) {
+        Engine::Profiler::ScopedTimer timer("World::Update");
         if (m_shutdown) return;
         
         // --- AUTO-DEFRAG / RELOAD ---
-        // If fragmentation gets too high, force a reload to clean the GPU heap.
-        // NOTE: Assumes GpuMemoryManager has GetFragmentationRatio(). 
-        // If not, please implement it or remove this check.
+        // Checks fragmentation of the persistent mapped buffer.
+        // If fragmentation > 60%, we wipe and reload to prevent allocation failures.
         if (m_gpuMemory->GetFragmentationRatio() > 0.6f) { 
              Reload(m_config);
              return;
@@ -242,9 +344,9 @@ public:
 
         ProcessQueues(); 
         
-        // --- OPTIMIZATION: Process ALL LODs every frame ---
-        // Iterate from 0 (closest) to N. This ensures nearest chunks are queued first
-        // in the FIFO thread pool, effectively prioritizing them.
+        // --- PRIORITY UPDATING ---
+        // We iterate from LOD 0 (Nearest) to LOD N (Farthest).
+        // This ensures High-Res chunks near the player are queued FIRST.
         for(int i = 0; i < m_config.lodCount; i++) {
             UnloadChunks(cameraPos, i);
             QueueNewChunks(cameraPos, i);
@@ -253,25 +355,30 @@ public:
         m_frameCounter++;
     }
 
+    // ================================================================================================
+    //                                  ASYNC TASK PROCESSING
+    // ================================================================================================
+
     void ProcessQueues() {
         if(m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("Chunk Queue Updating");
+        Engine::Profiler::ScopedTimer timer("World::ProcessQueues");
+        
         std::vector<ChunkNode*> nodesToMesh;
         std::vector<ChunkNode*> nodesToUpload;
         
+        // 1. HARVEST RESULTS
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
             
-            // INCREASED LIMITS:
-            // "Enable everything to queue as much as possible"
-            int limitGen = 1024; // Was 512
+            // Limit throughput to prevent frame stutters, but keep it high to clear backlog.
+            int limitGen = 1024; 
             while (!m_generatedQueue.empty() && limitGen > 0) {
                 nodesToMesh.push_back(m_generatedQueue.front());
                 m_generatedQueue.pop();
                 limitGen--;
             }
             
-            int limitUpload = 512; // Was 256
+            int limitUpload = 512; 
             while (!m_meshedQueue.empty() && limitUpload > 0) {
                 nodesToUpload.push_back(m_meshedQueue.front());
                 m_meshedQueue.pop();
@@ -279,9 +386,11 @@ public:
             }
         }
 
+        // 2. DISPATCH MESHING TASKS
         for (ChunkNode* node : nodesToMesh) {
             if(m_shutdown) return; 
             if (node->state == ChunkState::GENERATING) {
+                // Uniform chunks (all air/solid) don't need meshing
                 if (node->chunk.isUniform && node->chunk.uniformID == 0) {
                     node->state = ChunkState::ACTIVE;
                 } else {
@@ -291,12 +400,16 @@ public:
             }
         }
 
+        // 3. UPLOAD TO GPU
+        // This runs on the Main Thread (OpenGL Context required for non-persistent mapped buffers, 
+        // though we use persistent mapping here so it's just a memcpy).
         for (ChunkNode* node : nodesToUpload) {
             if(m_shutdown) return; 
             if (node->state == ChunkState::MESHING) {
                 if (!node->cachedMesh.empty()) {
                     size_t bytes = node->cachedMesh.size() * sizeof(PackedVertex);
                     long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
+                    
                     if (offset != -1) {
                         m_gpuMemory->Upload(offset, node->cachedMesh.data(), bytes);
                         node->gpuOffset = offset;
@@ -304,6 +417,7 @@ public:
                         node->cachedMesh.clear(); 
                         node->cachedMesh.shrink_to_fit();
                         
+                        // Register with GPU Driven Culler
                         m_culler->AddOrUpdateChunk(
                             node->id, 
                             node->minAABB, 
@@ -318,22 +432,24 @@ public:
         }
     }
 
+    // ================================================================================================
+    //                                     LOD MANAGEMENT
+    // ================================================================================================
+
     void UnloadChunks(glm::vec3 cameraPos, int targetLod) {
-        //Engine::Profiler::ScopedTimer timer("Chunk Unloading");
         if(m_shutdown) return;
+        Engine::Profiler::ScopedTimer timer("World::UnloadChunks");
         
         int scale = 1 << targetLod;
         int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
         int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
 
-        // --- OPTIMIZATION: Early Exit ---
-        // If we haven't crossed a chunk boundary for this LOD since last check, 
-        // the set of chunks to unload (based on distance) cannot have changed.
+        // OPTIMIZATION: Coordinate Caching
+        // If we remain in the same chunk coordinate, the set of chunks to unload is identical. Skip.
         if (camX == lastUnloadPx[targetLod] && camZ == lastUnloadPz[targetLod]) {
             return;
         }
 
-        // Update tracking
         lastUnloadPx[targetLod] = camX;
         lastUnloadPz[targetLod] = camZ;
         
@@ -348,23 +464,21 @@ public:
                 int dx = abs(node->cx - camX);
                 int dz = abs(node->cz - camZ);
                 
-                // Outer limit for this LOD
+                // 1. UNLOAD TOO FAR (Outer Radius)
                 int outerLimit = m_config.lodRadius[targetLod] + 3; 
-
                 bool shouldRemove = false;
-
-                // 1. Unload if outside the Outer Ring
                 if (dx > outerLimit || dz > outerLimit) {
                     shouldRemove = true;
                 }
 
-                // 2. Unload if inside the Inner Ring (Concentric Rings / Donut)
+                // 2. UNLOAD TOO CLOSE (Inner Radius / Donut Hole)
+                // Strict boundary logic prevents "Z-Fighting" between LOD layers.
                 if (targetLod > 0) {
                     int prevRadius = m_config.lodRadius[targetLod - 1];
+                    // Radius of LOD(n-1) in LOD(n) coordinates is exactly half.
                     int innerBoundary = (prevRadius / 2);
-                    int safeZone = innerBoundary - 2; 
-
-                    if (dx < safeZone && dz < safeZone) {
+                    
+                    if (dx < innerBoundary && dz < innerBoundary) {
                         shouldRemove = true;
                     }
                 }
@@ -385,8 +499,9 @@ public:
                 if (it != m_chunks.end()) {
                     ChunkNode* node = it->second;
                     if (node->gpuOffset != -1) {
+                        // Deregister from GPU Culler
                         m_culler->RemoveChunk(node->id);
-
+                        // Free VRAM
                         m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
                         node->gpuOffset = -1;
                     }
@@ -397,31 +512,9 @@ public:
         }
     }
 
-    void Draw(Shader& shader, const glm::mat4& renderViewProj, const glm::mat4& cullViewProj) {
-        if(m_shutdown) return;
-
-        // [NEW] GPU DRIVEN PIPELINE
-
-        // 1. Compute Pass
-        Engine::Profiler::Get().BeginGPU("GPU: Culling Compute"); 
-        m_culler->Cull(cullViewProj, m_gpuMemory->GetID());
-        Engine::Profiler::Get().EndGPU();                       
-
-        // 2. Render Pass
-        Engine::Profiler::Get().BeginGPU("GPU: Geometry Draw");
-
-        shader.use();
-        glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
-        
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
-        m_culler->DrawIndirect(m_dummyVAO);
-
-        Engine::Profiler::Get().EndGPU();
-    }
-
     void QueueNewChunks(glm::vec3 cameraPos, int targetLod) {
         if (m_shutdown) return;
-        //Engine::Profiler::ScopedTimer timer("New Chunk Queuing:");
+        Engine::Profiler::ScopedTimer timer("World::QueueNewChunks");
         
         int lod = targetLod;
         int scale = 1 << lod;
@@ -436,6 +529,8 @@ public:
             lastPz[lod] = pz;
         }
 
+        // --- SPIRAL GENERATION ---
+        // Generates coordinates from center outward.
         static std::vector<std::pair<int, int>> spiralOffsets;
         static std::once_flag flag;
         std::call_once(flag, [](){
@@ -454,22 +549,25 @@ public:
         int r = m_config.lodRadius[lod];
         int rSq = r * r; 
 
-        // Ring Logic Calculation
+        // Donut Logic: Where does the hole start?
         int minR = 0;
         if (lod > 0) {
             int prevR = m_config.lodRadius[lod - 1];
-            minR = (prevR / 2);
-            minR = std::max(0, minR - 1);
+            minR = (prevR / 2); 
         }
 
         std::shared_lock<std::shared_mutex> readLock(m_chunksMutex);
 
         for (const auto& offset : spiralOffsets) {
             int distSq = offset.first*offset.first + offset.second*offset.second;
+            
+            // Optimization: Stop iterating if outside radius
             if (distSq > (rSq * 2 + 100)) break; 
+            
+            // Box check for exact radius
             if (std::abs(offset.first) > r || std::abs(offset.second) > r) continue;
 
-            // Ring Check: Skip if strictly inside the inner ring
+            // Donut Check: Skip if inside the hole (covered by higher detail LOD)
             if (lod > 0) {
                  if (std::abs(offset.first) < minR && std::abs(offset.second) < minR) continue;
             }
@@ -477,8 +575,9 @@ public:
             int x = px + offset.first;
             int z = pz + offset.second;
             
+            // Height Culling: Only generate chunks that actually contain terrain surface
             int minH, maxH;
-            m_generator.GetHeightBounds(x, z, scale, minH, maxH);
+            m_generator->GetHeightBounds(x, z, scale, minH, maxH);
             
             int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
             int chunkYEnd = (maxH / (CHUNK_SIZE * scale)) + 1;
@@ -487,11 +586,15 @@ public:
 
             for (int y = chunkYStart; y <= chunkYEnd; y++) {
                 int64_t key = ChunkKey(x, y, z, lod);
+                
+                // If chunk doesn't exist, queue it
                 if (m_chunks.find(key) == m_chunks.end()) {
                     int dx = x - px; 
                     int dz = z - pz; 
                     int chunkWorldY = y * CHUNK_SIZE * scale;
                     int dy = (chunkWorldY - (int)cameraPos.y) / (CHUNK_SIZE * scale); 
+                    
+                    // Simple distance metric for sorting queue
                     int distMetric = dx*dx + dz*dz + (dy*dy); 
                     missing.push_back({x, y, z, lod, distMetric});
                 }
@@ -499,6 +602,7 @@ public:
         }
         readLock.unlock();
 
+        // Sort by distance (nearest first)
         std::sort(missing.begin(), missing.end(), [](const ChunkRequest& a, const ChunkRequest& b){ return a.distSq < b.distSq; });
 
         int queued = 0;
@@ -508,6 +612,7 @@ public:
             std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
             for (const auto& req : missing) {
                 if (queued >= MAX_TASKS) break;
+                
                 int64_t key = ChunkKey(req.x, req.y, req.z, req.lod);
                 if (m_chunks.find(key) == m_chunks.end()) {
                     ChunkNode* newNode = m_chunkPool.Acquire();
@@ -515,6 +620,8 @@ public:
                         newNode->Reset(req.x, req.y, req.z, req.lod);
                         newNode->id = key; 
                         m_chunks[key] = newNode;
+                        
+                        // Start Thread Task
                         newNode->state = ChunkState::GENERATING;
                         m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
                         queued++;
@@ -527,9 +634,56 @@ public:
         else m_lodComplete[lod] = false;
     }
 
+    // ================================================================================================
+    //                                         RENDERING
+    // ================================================================================================
+
+    void Draw(Shader& shader, const glm::mat4& renderViewProj, const glm::mat4& cullViewProj) {
+        if(m_shutdown) return;
+        //Engine::Profiler::ScopedTimer timer("World::Draw");
+
+        // 1. COMPUTE PASS (CULLING)
+        // Filters visible chunks into the Indirect Buffer
+        {
+            //Engine::Profiler::ScopedTimer timerGPU("GPU: Culling Compute"); 
+            m_culler->Cull(cullViewProj, m_gpuMemory->GetID());
+        }
+
+        // 2. GEOMETRY PASS
+        // MultiDrawIndirect using the buffer generated above
+        {
+            Engine::Profiler::ScopedTimer timerGPU("GPU: Geometry Draw");
+
+            shader.use();
+            glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
+            
+            // Bind Persistent Vertex Storage (SSBO Binding 0)
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
+            
+            // --- TEXTURE ARRAY BINDING ---
+            // Ensure your shader has: uniform sampler2DArray u_Textures;
+            // And you bind it to Texture Unit 0.
+            if (m_textureArrayID != 0) {
+                 glActiveTexture(GL_TEXTURE0);
+                 glBindTexture(GL_TEXTURE_2D_ARRAY, m_textureArrayID);
+                 shader.setInt("u_Textures", 0);
+            }
+
+            m_culler->DrawIndirect(m_dummyVAO);
+            //Engine::Profiler::EndGPU();
+        }
+    }
+
+    // ================================================================================================
+    //                                      WORKER TASKS
+    // ================================================================================================
+
     void Task_Generate(ChunkNode* node) {
         if (m_shutdown) return;
+        Engine::Profiler::ScopedTimer timer("Task: Generate");
+        
         FillChunk(node->chunk, node->cx, node->cy, node->cz, node->scale);
+        
         std::lock_guard<std::mutex> lock(m_queueMutex);
         if (m_shutdown) return;
         m_generatedQueue.push(node);
@@ -537,25 +691,29 @@ public:
 
     void Task_Mesh(ChunkNode* node) {
         if (m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("Mesh Generation"); 
+        Engine::Profiler::ScopedTimer timer("Task: Mesh"); 
 
         LinearAllocator<PackedVertex> threadAllocator(1000000); 
         MeshChunk(node->chunk, threadAllocator, false);
+        
+        // Copy to node storage
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
+        
         std::lock_guard<std::mutex> lock(m_queueMutex);
         if (m_shutdown) return;
         m_meshedQueue.push(node);
     }
 
+    // Delegates logic to the Abstract Terrain Generator
     void FillChunk(Chunk& chunk, int cx, int cy, int cz, int scale) {
         chunk.worldX = cx * CHUNK_SIZE * scale;
         chunk.worldY = cy * CHUNK_SIZE * scale;
         chunk.worldZ = cz * CHUNK_SIZE * scale;
+        
         int chunkBottomY = chunk.worldY;
         int chunkTopY = chunk.worldY + (CHUNK_SIZE * scale);
-        bool isFarLOD = scale >= 4; 
-        bool isMidLOD = scale >= 2;
 
+        // Pre-calculate heights for optimization
         int heights[CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED];
         int minHeight = 99999;
         int maxHeight = -99999;
@@ -564,43 +722,49 @@ public:
             for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
                 float wx = (float)(chunk.worldX + (x - 1) * scale);
                 float wz = (float)(chunk.worldZ + (z - 1) * scale);
-                int h = m_generator.GetHeight(wx, wz);
-                if (scale > 1) { h = (h / scale) * scale; }
+                
+                int h = m_generator->GetHeight(wx, wz);
+                if (scale > 1) { h = (h / scale) * scale; } // Snap to grid for LOD
+                
                 heights[x][z] = h;
                 if (h < minHeight) minHeight = h;
                 if (h > maxHeight) maxHeight = h;
             }
         }
 
-        if (maxHeight < chunkBottomY) { chunk.FillUniform(0); return; } 
-        if (minHeight > chunkTopY && !m_config.enableCaves) { chunk.FillUniform(1); return; } 
+        // Fast Fail: Empty Air
+        if (maxHeight < chunkBottomY) { 
+            chunk.FillUniform(0); 
+            return; 
+        } 
+        
+        // Fast Fail: Solid Underground (only if caves disabled)
+        if (minHeight > chunkTopY && !m_config.enableCaves) { 
+            chunk.FillUniform(1); 
+            return; 
+        } 
 
         std::memset(chunk.voxels, 0, sizeof(chunk.voxels));
         
+        // Voxel Fill Loop
         for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
             for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
                 int height = heights[x][z]; 
+                
+                // Convert world height to local Y index
                 int localMaxY = (height - chunkBottomY) / scale;
                 localMaxY = std::min(localMaxY + 2, CHUNK_SIZE_PADDED - 1);
+                
                 if (localMaxY < 0) continue; 
 
                 for (int y = 0; y <= localMaxY; y++) {
                     int wy = chunk.worldY + (y - 1) * scale; 
-                    uint8_t blockID = 1; 
-                    if (isFarLOD) { blockID = 1; } else {
-                        if (wy <= height) {
-                            if (wy == 0) blockID = 3; 
-                            else if (wy >= height - scale) { 
-                                if (wy > 55) blockID = 4; else if (wy > 35) blockID = 1; else blockID = 2;
-                            } else if (wy > height - (4 * scale)) {
-                                if (wy > 55) blockID = 4; else if (wy > 35) blockID = 1; else blockID = 5;
-                            }
-                        }
-                    }
-                    if (wy <= height) {
-                        if (!isMidLOD) {
-                            if (m_generator.IsCave((float)(chunk.worldX + (x-1)*scale), (float)wy, (float)(chunk.worldZ + (z-1)*scale))) blockID = 0;
-                        }
+                    float wx = (float)(chunk.worldX + (x - 1) * scale);
+                    float wz = (float)(chunk.worldZ + (z - 1) * scale);
+
+                    uint8_t blockID = m_generator->GetBlock(wx, (float)wy, wz, height, scale);
+                    
+                    if (blockID != 0) {
                         chunk.Set(x, y, z, blockID);
                     }
                 }
@@ -608,9 +772,16 @@ public:
         }
     }
 
+    // ================================================================================================
+    //                                         RESET / RELOAD
+    // ================================================================================================
+
     void Reload(WorldConfig newConfig) {
+        Engine::Profiler::ScopedTimer timer("World::Reload");
         m_config = newConfig;
-        m_generator = TerrainGenerator(m_config);
+        
+        // Reset Generator
+        m_generator = std::make_unique<DefaultGenerator>(m_config);
         
         {
             std::unique_lock<std::shared_mutex> lock(m_chunksMutex);
@@ -626,6 +797,7 @@ public:
             m_chunks.clear();
         }
 
+        // Reset tracking vars
         for(int i=0; i<8; i++) { 
             lastPx[i] = -999; 
             lastPz[i] = -999; 
