@@ -414,7 +414,7 @@ public:
         if (anyRemoved) m_chunksDirty = true;
     }
 
-    void Draw(Shader& shader, const glm::mat4& viewProj) {
+    void Draw(Shader& shader, const glm::mat4& renderViewProj, const glm::mat4& cullViewProj) {
         if(m_shutdown) return;
 
         // 1. Update Candidate Buffer if chunks loaded/unloaded
@@ -426,9 +426,9 @@ public:
         const GLuint zero = 0;
         glNamedBufferSubData(m_atomicCounterBuffer, 0, sizeof(GLuint), &zero);
         
-        // 3. Dispatch Compute Shader
+        // 3. Dispatch Compute Shader using the CULLING matrix
         m_cullShader->use();
-        m_cullShader->setMat4("u_ViewProjection", glm::value_ptr(viewProj));
+        m_cullShader->setMat4("u_ViewProjection", glm::value_ptr(cullViewProj));
         m_cullShader->setUInt("u_Count", (GLuint)m_cpuCandidates.size());
 
         // Bind Buffers
@@ -444,9 +444,9 @@ public:
         // 4. Memory Barrier
         glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_ATOMIC_COUNTER_BARRIER_BIT);
 
-        // 5. Draw
+        // 5. Draw using the RENDERING matrix
         shader.use();
-        glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
+        glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
         
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_batchSSBO);
