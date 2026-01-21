@@ -235,7 +235,7 @@ int main() {
         
         WorldConfig globalConfig;
         globalConfig.lodCount = 8; 
-        globalConfig.lodRadius[0] = 10;   
+        globalConfig.lodRadius[0] = 3;   
         globalConfig.lodRadius[1] = 6;  
         globalConfig.lodRadius[2] = 6;   
         globalConfig.lodRadius[3] = 6;   

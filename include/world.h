@@ -331,7 +331,7 @@ public:
     // ================================================================================================
 
     void Update(glm::vec3 cameraPos) {
-        Engine::Profiler::ScopedTimer timer("World::Update");
+        Engine::Profiler::ScopedTimer timer("World::Update Total");
         if (m_shutdown) return;
         
         // --- AUTO-DEFRAG / RELOAD ---
@@ -645,8 +645,10 @@ public:
         // 1. COMPUTE PASS (CULLING)
         // Filters visible chunks into the Indirect Buffer
         {
+            Engine::Profiler::ScopedTimer timerGPU("GPU: Frustum Culling");
             //Engine::Profiler::ScopedTimer timerGPU("GPU: Culling Compute"); 
             m_culler->Cull(cullViewProj, m_gpuMemory->GetID());
+            Engine::Profiler::Get().EndGPU();
         }
 
         // 2. GEOMETRY PASS
@@ -670,7 +672,7 @@ public:
             }
 
             m_culler->DrawIndirect(m_dummyVAO);
-            //Engine::Profiler::EndGPU();
+            Engine::Profiler::Get().EndGPU();
         }
     }
 
