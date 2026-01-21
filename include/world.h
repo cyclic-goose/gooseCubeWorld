@@ -224,14 +224,18 @@ public:
     const WorldConfig& GetConfig() const { return m_config; }
 
     void Update(glm::vec3 cameraPos) {
-        //Engine::Profiler::ScopedTimer timer("World Update Total: ");
         if (m_shutdown) return;
         ProcessQueues(); 
         
-        int lodToUpdate = m_frameCounter % m_config.lodCount;
+        // --- OPTIMIZATION: Process ALL LODs every frame ---
+        // Iterate from 0 (closest) to N. This ensures nearest chunks are queued first
+        // in the FIFO thread pool, effectively prioritizing them.
+        for(int i = 0; i < m_config.lodCount; i++) {
+            UnloadChunks(cameraPos, i);
+            QueueNewChunks(cameraPos, i);
+        }
+        
         m_frameCounter++;
-        UnloadChunks(cameraPos, lodToUpdate);
-        QueueNewChunks(cameraPos, lodToUpdate);
     }
 
     void ProcessQueues() {
@@ -242,13 +246,17 @@ public:
         
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
-            int limitGen = 64; 
+            
+            // INCREASED LIMITS:
+            // Process significantly more items per frame to clear the backlog
+            int limitGen = 512; 
             while (!m_generatedQueue.empty() && limitGen > 0) {
                 nodesToMesh.push_back(m_generatedQueue.front());
                 m_generatedQueue.pop();
                 limitGen--;
             }
-            int limitUpload = 64; 
+            
+            int limitUpload = 256; 
             while (!m_meshedQueue.empty() && limitUpload > 0) {
                 nodesToUpload.push_back(m_meshedQueue.front());
                 m_meshedQueue.pop();
@@ -282,7 +290,6 @@ public:
                         node->cachedMesh.shrink_to_fit();
                         
                         // [NEW] REGISTER WITH GPU CULLER
-                        // We do this ONCE when the chunk becomes ready, not every frame.
                         m_culler->AddOrUpdateChunk(
                             node->id, 
                             node->minAABB, 
@@ -298,8 +305,8 @@ public:
     }
 
     void UnloadChunks(glm::vec3 cameraPos, int targetLod) {
-        Engine::Profiler::ScopedTimer timer("Chunk Unloading");
         if(m_shutdown) return;
+        Engine::Profiler::ScopedTimer timer("Chunk Unloading");
         std::vector<int64_t> toRemove;
         
         {
@@ -326,17 +333,11 @@ public:
                 }
 
                 // 2. Unload if inside the Inner Ring (Concentric Rings / Donut)
-                // If we are LOD > 0, we must clear space for LOD-1.
                 if (targetLod > 0) {
-                    // Radius of the previous LOD in *this* LOD's coordinates.
-                    // Divide by 2 because Scale[L] = 2 * Scale[L-1]
                     int prevRadius = m_config.lodRadius[targetLod - 1];
                     int innerBoundary = (prevRadius / 2);
-                    
-                    // Optimization: Overlap by 1-2 chunks to prevent holes/flickering at the seam
                     int safeZone = innerBoundary - 2; 
 
-                    // If strictly inside the safe zone (closer than the overlap), unload it
                     if (dx < safeZone && dz < safeZone) {
                         shouldRemove = true;
                     }
@@ -358,7 +359,6 @@ public:
                 if (it != m_chunks.end()) {
                     ChunkNode* node = it->second;
                     if (node->gpuOffset != -1) {
-                        // [NEW] REMOVE FROM GPU CULLER
                         m_culler->RemoveChunk(node->id);
 
                         m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
@@ -378,11 +378,7 @@ public:
 
         // 1. Compute Pass
         Engine::Profiler::Get().BeginGPU("GPU: Culling Compute"); 
-        
-        // Pass the Voxel Heap SSBO ID just in case (though currently Culler uses its own internal buffers)
-        // We pass the ViewProj to cull against.
         m_culler->Cull(cullViewProj, m_gpuMemory->GetID());
-        
         Engine::Profiler::Get().EndGPU();                       
 
         // 2. Render Pass
@@ -391,10 +387,7 @@ public:
         shader.use();
         glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
         
-        // Bind the Voxel Heap (Geometry) to Binding 0
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
-        
-        // Culler handles Indirect Buffer, Parameter Buffer, and Offset Buffer binding internally
         m_culler->DrawIndirect(m_dummyVAO);
 
         Engine::Profiler::Get().EndGPU();
@@ -439,9 +432,7 @@ public:
         int minR = 0;
         if (lod > 0) {
             int prevR = m_config.lodRadius[lod - 1];
-            // Scale conversion: Prev LOD radius in Current LOD units is Half.
             minR = (prevR / 2);
-            // Apply slight overlap (e.g., 1 unit) to ensure continuity
             minR = std::max(0, minR - 1);
         }
 
@@ -485,7 +476,8 @@ public:
         std::sort(missing.begin(), missing.end(), [](const ChunkRequest& a, const ChunkRequest& b){ return a.distSq < b.distSq; });
 
         int queued = 0;
-        int MAX_TASKS = 128;
+        int MAX_TASKS = 2000; // Increased massively from 128
+        
         if (!missing.empty()) {
             std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
             for (const auto& req : missing) {
