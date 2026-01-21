@@ -277,6 +277,8 @@ private:
     int m_frameCounter = 0; 
     std::atomic<bool> m_shutdown{false};
 
+    bool m_freezeLODs = false; // Toggle to pause chunk updates
+
     // --- GPU RESOURCES ---
     std::unique_ptr<GpuMemoryManager> m_gpuMemory;
     std::unique_ptr<GpuCuller> m_culler;
@@ -334,6 +336,9 @@ public:
         m_config.cubeDebugMode = mode;
     }
 
+    void SetLODFreeze(bool freeze) { m_freezeLODs = freeze; }
+    bool GetLODFreeze() const { return m_freezeLODs; }
+
     // // Toggles between 0 and 1
     // void ToggleViewNormals() { 
     //     m_config.viewNormals = !m_config.viewNormals; 
@@ -358,6 +363,9 @@ public:
         }
 
         ProcessQueues(); 
+
+        // Skip Chunk Loading/Unloading if frozen
+        if (m_freezeLODs) return; 
         
         // --- PRIORITY UPDATING ---
         // We iterate from LOD 0 (Nearest) to LOD N (Farthest).

@@ -57,7 +57,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
 
 
 void processInput(GLFWwindow *window, World& world) {
-    // 1. TAB: Toggle Cursor Lock
+    // TAB: Toggle Cursor Lock
     static bool tabPressed = false;
     if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS) {
         if (!tabPressed) {
@@ -68,7 +68,7 @@ void processInput(GLFWwindow *window, World& world) {
         }
     } else { tabPressed = false; }
     
-    // 2. Click to capture cursor (only if not clicking on ImGui)
+    // Click to capture cursor (only if not clicking on ImGui)
     if (!appState.isGameMode && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
         if (!ImGui::GetIO().WantCaptureMouse) {
             appState.isGameMode = true;
@@ -76,7 +76,7 @@ void processInput(GLFWwindow *window, World& world) {
         }
     }
     
-    // 3. F2: Toggle Debug Window
+    // F2: Toggle Debug Window
     static bool f2Pressed = false;
     if (glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS) {
         if (!f2Pressed) {
@@ -95,7 +95,7 @@ void processInput(GLFWwindow *window, World& world) {
         }
     } else { pPressed = false; }
     
-    // 4. M: Toggle World Gen Window
+    // M: Toggle World Gen Window
     static bool mPressed = false;
     if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS) {
         if (!mPressed) {
@@ -126,7 +126,7 @@ void processInput(GLFWwindow *window, World& world) {
         rPressed = true;
     } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) rPressed = false;
     
-    // 5. F: Freeze Frustum
+    // F: Freeze Frustum
     if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS) {
         if (!fKeyPressed) {
             //lockFrustum = !lockFrustum;
@@ -135,6 +135,17 @@ void processInput(GLFWwindow *window, World& world) {
             std::cout << "[DEBUG] Frustum Lock: " << (lockFrustum ? "ON" : "OFF") << std::endl;
         }
     } else { fKeyPressed = false; }
+
+    // O: Toggle LOD Update Freeze (Observation Mode)
+    static bool oPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) {
+        if (!oPressed) {
+            bool current = world.GetLODFreeze();
+            world.SetLODFreeze(!current);
+            std::cout << "[DEBUG] LOD Freeze: " << (!current ? "ON" : "OFF") << std::endl;
+            oPressed = true;
+        }
+    } else { oPressed = false; }
     
 }
 
@@ -189,12 +200,12 @@ void RenderLoadingScreen(GLFWwindow* window, const float HEAP_SIZE_FOR_DISPLAYIN
         
         gui.EndFrame();
         
-        // 3. Swap and Poll
+        // Swap and Poll
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
     
-    // 4. Force synchronization before hanging the CPU
+    // Force synchronization before hanging the CPU
     glFinish(); 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
@@ -244,11 +255,11 @@ int main() {
         globalConfig.lodCount = 7;
         globalConfig.lodRadius[0] = 3;   
         globalConfig.lodRadius[1] = 6;  
-        globalConfig.lodRadius[2] = 6;   
-        globalConfig.lodRadius[3] = 6;   
-        globalConfig.lodRadius[4] = 6;  
-        globalConfig.lodRadius[5] = 12; 
-        globalConfig.lodRadius[6] = 12; 
+        globalConfig.lodRadius[2] = 7;   
+        globalConfig.lodRadius[3] = 8;   
+        globalConfig.lodRadius[4] = 9;  
+        globalConfig.lodRadius[5] = 10; 
+        globalConfig.lodRadius[6] = 11; 
         globalConfig.lodRadius[7] = 12; 
         
         // Higher LOD in general more expensive
