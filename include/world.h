@@ -537,7 +537,7 @@ public:
         }
     }
 
-        // ================================================================================================
+    // ================================================================================================
     //                             ASYNC LOD SYSTEM
     // ================================================================================================
 
@@ -672,9 +672,9 @@ public:
     void UpdateLODs_Async(glm::vec3 cameraPos) {
         
         {
+            Engine::Profiler::ScopedTimer timer("World::ApplyLODs");
             std::lock_guard<std::mutex> lock(m_lodResultMutex);
             if (m_pendingLODResult) {
-                Engine::Profiler::ScopedTimer timer("World::ApplyLODs");
                 
                 std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
 
@@ -864,7 +864,7 @@ private:
 
     void Task_Generate(ChunkNode* node) {
         if (m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("Task: Generate");
+        Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Generate");
         
         FillChunk(node->chunk, node->cx, node->cy, node->cz, node->scale);
         
@@ -875,7 +875,7 @@ private:
 
     void Task_Mesh(ChunkNode* node) {
         if (m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("Task: Mesh"); 
+        Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Mesh"); 
 
         LinearAllocator<PackedVertex> threadAllocator(1000000); 
         MeshChunk(node->chunk, threadAllocator, false);
