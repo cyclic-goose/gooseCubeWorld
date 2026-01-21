@@ -207,6 +207,7 @@ int main() {
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GEQUAL); 
+    //glDepthFunc(GL_LEQUAL);
     glClearDepth(0.0f);     
     glEnable(GL_CULL_FACE); 
     glCullFace(GL_BACK);
