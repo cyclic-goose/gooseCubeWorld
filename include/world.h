@@ -37,12 +37,12 @@ struct WorldConfig {
     int lodCount = 5; 
     int lodRadius[8] = { 10, 16, 24, 32, 48, 0, 0, 0 }; 
     
-    float scale = 0.02f;          
-    float hillAmplitude = 15.0f;  
-    float hillFrequency = 1.0f;   
-    float mountainAmplitude = 300.0f; 
-    float mountainFrequency = 0.8f; 
-    int seaLevel = 10;            
+    float scale = 0.08f;          
+    float hillAmplitude = 100.0f;  
+    float hillFrequency = 4.0f;   
+    float mountainAmplitude = 500.0f; 
+    float mountainFrequency = 0.26f; 
+    int seaLevel = 90;            
     bool enableCaves = false;     
     float caveThreshold = 0.5f;   
 };

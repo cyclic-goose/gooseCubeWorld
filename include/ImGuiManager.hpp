@@ -53,6 +53,8 @@ public:
         glfwGetWindowPos(m_Window, &m_WindowedX, &m_WindowedY);
         glfwGetWindowSize(m_Window, &m_WindowedW, &m_WindowedH);
 
+        glfwSwapInterval(0);
+
         m_Initialized = true;
     }
 
@@ -230,11 +232,11 @@ private:
             if (ImGui::CollapsingHeader("Terrain Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
                 ImGui::DragInt("Seed", &config.editConfig.seed);
                 ImGui::SliderFloat("Noise Scale", &config.editConfig.scale, 0.001f, 0.1f);
-                ImGui::SliderFloat("Hill Amp", &config.editConfig.hillAmplitude, 0.0f, 100.0f);
-                ImGui::SliderFloat("Hill Freq", &config.editConfig.hillFrequency, 0.1f, 5.0f);
-                ImGui::SliderFloat("Mountain Amp", &config.editConfig.mountainAmplitude, 0.0f, 500.0f);
-                ImGui::SliderFloat("Mountain Freq", &config.editConfig.mountainFrequency, 0.1f, 2.0f);
-                ImGui::SliderInt("Sea Level", &config.editConfig.seaLevel, 0, 100);
+                ImGui::SliderFloat("Hill Amp", &config.editConfig.hillAmplitude, 0.0f, 500.0f);
+                ImGui::SliderFloat("Hill Freq", &config.editConfig.hillFrequency, 0.05f, 10.0f);
+                ImGui::SliderFloat("Mountain Amp", &config.editConfig.mountainAmplitude, 0.0f, 8000.0f);
+                ImGui::SliderFloat("Mountain Freq", &config.editConfig.mountainFrequency, 0.01f, 0.2f);
+                ImGui::SliderInt("Sea Level", &config.editConfig.seaLevel, 0, 500);
             }
 
             if (ImGui::CollapsingHeader("World Dimensions")) {
