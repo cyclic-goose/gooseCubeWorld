@@ -31,7 +31,20 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
+# 1.4 STB (Header-only, no CMakeLists.txt)
+# Since stb has no CMakeLists.txt, we must populate it manually rather than using MakeAvailable
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG        master
+)
+FetchContent_GetProperties(stb)
+if(NOT stb_POPULATED)
+    FetchContent_Populate(stb)
+endif()
+
 # --- 2. Source Files ---
+# Note: This will now pick up src/vendor/stb_impl.cpp automatically
 file(GLOB_RECURSE SOURCES 
     "src/*.cpp" 
     "src/vendor/glad.c" 
@@ -49,7 +62,7 @@ target_include_directories(gooseVoxelEngine PRIVATE
     src/vendor/imgui
     src/vendor/imgui/backends
     ${glfw_SOURCE_DIR}/include
-    # GLM target handles its own includes, but we link it below
+    ${stb_SOURCE_DIR} # Includes the path to the fetched stb headers
 )
 
 # --- 5. Optimizations ---
