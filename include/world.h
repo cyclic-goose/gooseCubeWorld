@@ -207,12 +207,19 @@ private:
     GLuint m_batchSSBO = 0;           
     GLuint m_candidateSSBO = 0;       
     GLuint m_atomicCounterBuffer = 0; 
+    GLuint m_cullResultBuffer = 0;  // Added for async readback
     
     GLuint m_dummyVAO = 0; 
     std::unique_ptr<Shader> m_cullShader;
 
     std::vector<ChunkCandidate> m_cpuCandidates; 
-    bool m_chunksDirty = true;        
+    bool m_chunksDirty = true; 
+    
+    // GPU Statistics
+    //GLuint m_queryPrimitives = 0;
+    //size_t m_drawnVertices = 0; // Updated asynchronously
+    
+    GLuint m_drawnChunks = 0;
 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
@@ -298,6 +305,14 @@ public:
         glCreateBuffers(1, &m_atomicCounterBuffer);
         glNamedBufferStorage(m_atomicCounterBuffer, sizeof(GLuint), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
+        // Result buffer for readback (Map Read Bit is good practice for downloads, though we use glGetNamedBufferSubData)
+        glCreateBuffers(1, &m_cullResultBuffer);
+        glNamedBufferStorage(m_cullResultBuffer, sizeof(GLuint), nullptr, GL_DYNAMIC_STORAGE_BIT);
+
+        // Initialize to 0
+        const GLuint zero = 0;
+        glNamedBufferSubData(m_cullResultBuffer, 0, sizeof(GLuint), &zero);
+
         glCreateVertexArrays(1, &m_dummyVAO);
 
         m_cullShader = std::make_unique<Shader>("./resources/CULL_FRUSTUM.glsl");
@@ -314,6 +329,7 @@ public:
         if (m_candidateSSBO) { glDeleteBuffers(1, &m_candidateSSBO); m_candidateSSBO = 0; }
         if (m_atomicCounterBuffer) { glDeleteBuffers(1, &m_atomicCounterBuffer); m_atomicCounterBuffer = 0; }
         if (m_dummyVAO) { glDeleteVertexArrays(1, &m_dummyVAO); m_dummyVAO = 0; }
+        if (m_cullResultBuffer) { glDeleteBuffers(1, &m_cullResultBuffer); m_cullResultBuffer = 0; }
         
         if (m_cullShader) { 
             glDeleteProgram(m_cullShader->ID); 
@@ -459,6 +475,11 @@ public:
         // GPU: Culling Pass
         Engine::Profiler::Get().BeginGPU("GPU: Culling Compute"); 
 
+        // --- ASYNC STATS READBACK ---
+        // Read the atomic counter from the PREVIOUS frame's execution.
+        // This avoids stalling the CPU waiting for the current frame's Compute Shader.
+        glGetNamedBufferSubData(m_cullResultBuffer, 0, sizeof(GLuint), &m_drawnChunks);
+
         const GLuint zero = 0;
         glNamedBufferSubData(m_atomicCounterBuffer, 0, sizeof(GLuint), &zero);
         
@@ -476,14 +497,36 @@ public:
 
         glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_ATOMIC_COUNTER_BARRIER_BIT);
 
+
+        // --- COPY STATS ---
+        // Copy the resulting atomic counter (drawn count) to the result buffer.
+        // We read this buffer in the NEXT frame.
+        glCopyNamedBufferSubData(m_atomicCounterBuffer, m_cullResultBuffer, 0, 0, sizeof(GLuint));
+
         Engine::Profiler::Get().EndGPU();                       
 
+
+
+
+        
         // ******************* GPU: Rendering Pass ****************** //
         Engine::Profiler::Get().BeginGPU("GPU: Geometry Draw");
 
         shader.use();
         glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
         
+        // // ********************* MIGHT ADD OVERHEAD ************************* //
+        // // --- RETRIEVE QUERY RESULTS (No Stall) ---
+        // // We retrieve the result from the *previous* frame or earlier
+        // GLuint64 params = 0;
+        // glGetQueryObjectui64v(m_queryPrimitives, GL_QUERY_RESULT_AVAILABLE, &params);
+        // if (params == GL_TRUE) {
+        //     glGetQueryObjectui64v(m_queryPrimitives, GL_QUERY_RESULT, &params);
+        //     m_drawnVertices = (size_t)(params * 3); // Approx 3 verts per primitive
+        // }
+        // // ********************* MIGHT ADD OVERHEAD ************************* //
+
+
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_batchSSBO);
 
@@ -491,7 +534,19 @@ public:
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_indirectBuffer);
         glBindBuffer(GL_PARAMETER_BUFFER, m_atomicCounterBuffer);
 
+        // ********************* MIGHT ADD OVERHEAD ************************* //
+        // START QUERY
+        // glBeginQuery(GL_PRIMITIVES_GENERATED, m_queryPrimitives);
+
+        // ********************* MIGHT ADD OVERHEAD ************************* //
+
         glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_cpuCandidates.size(), 0);
+
+
+        // ********************* MIGHT ADD OVERHEAD ************************* //
+        // END QUERY
+        // glEndQuery(GL_PRIMITIVES_GENERATED);
+        // ********************* MIGHT ADD OVERHEAD ************************* //
 
         glBindBuffer(GL_PARAMETER_BUFFER, 0);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
