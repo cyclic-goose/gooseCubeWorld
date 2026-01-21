@@ -272,11 +272,11 @@ int main() {
         // Your shader subtracts 1 from the ID (max(0, TexID - 1))
         // So BlockID 1 maps to Array Index 0.
         std::vector<std::string> texturePaths = {
-            "resources/textures/ij.png",   // ID 1
-            "resources/textures/ij.png",    // ID 2
-            "resources/textures/ij.png",   // ID 3
-            "resources/textures/ij.png",    // ID 4
-            "resources/textures/ij.png"     // ID 5
+            "resources/textures/dirt1.jpg",   // ID 1
+            "resources/textures/dirt1.jpg",    // ID 2
+            "resources/textures/dirt1.jpg",   // ID 3
+            "resources/textures/dirt1.jpg",    // ID 4
+            "resources/textures/dirt1.jpg"     // ID 5
         };
 
         // Ensure you have these images in resources/textures/ !
