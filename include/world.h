@@ -267,6 +267,23 @@ private:
     
     ThreadPool m_pool; 
 
+    // --- ASYNC LOD UPDATING ---
+    // Struct to hold results from the calculation worker
+    struct ChunkRequest { int x, y, z; int lod; int distSq; };
+    struct LODUpdateResult {
+        std::vector<ChunkRequest> chunksToLoad;
+        std::vector<int64_t> chunksToUnload;
+        size_t loadIndex = 0;
+    };
+    
+    std::atomic<bool> m_isLODWorkerRunning { false };
+    std::mutex m_lodResultMutex;
+    std::unique_ptr<LODUpdateResult> m_pendingLODResult = nullptr;
+    glm::vec3 m_lastLODCalculationPos = glm::vec3(-9999.0f); // For optimization
+    
+    // ------------------------------------
+
+
     // --- LOD TRACKING ---
     int lastPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
     int lastPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
@@ -288,9 +305,78 @@ private:
     // Bind your GL_TEXTURE_2D_ARRAY here via SetTextureArray()
     GLuint m_textureArrayID = 0;
 
-    struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
     friend class ImGuiManager;
+
+
+    // Checks if the 8 sub-chunks of this parent are fully active (visible).
+    // Used to prevent holes when unloading parents.
+    bool AreChildrenReady(int cx, int cy, int cz, int lod) {
+        if (lod == 0) return true; // LOD 0 has no children
+        
+        int childLod = lod - 1;
+        int scale = 1 << childLod; // Scale of the children
+        
+        int startX = cx * 2;
+        int startY = cy * 2;
+        int startZ = cz * 2;
+
+        for (int x = 0; x < 2; x++) {
+            for (int z = 0; z < 2; z++) {
+                
+                // Optimization: Compute bounds for this column once
+                // This determines if children in this column SHOULD exist.
+                int minH, maxH;
+                m_generator->GetHeightBounds((startX + x), (startZ + z), scale, minH, maxH);
+                int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
+                int chunkYEnd = (maxH / (CHUNK_SIZE * scale)) + 1;
+
+                for (int y = 0; y < 2; y++) {
+                    int64_t key = ChunkKey(startX + x, startY + y, startZ + z, childLod);
+                    auto it = m_chunks.find(key);
+                    
+                    if (it != m_chunks.end()) {
+                         // Child is in pipeline. Must be ACTIVE (visible).
+                         if (it->second->state.load() != ChunkState::ACTIVE) return false;
+                    } else {
+                        // Child is missing from map.
+                        // Is it missing because it's empty air (Valid), or pending load (Invalid)?
+                        int myY = startY + y;
+                        if (myY >= chunkYStart && myY <= chunkYEnd) {
+                            // It lies within terrain bounds, so it SHOULD exist.
+                            // Since it's missing, it hasn't loaded yet.
+                            return false; 
+                        }
+                        // Else: It's outside terrain bounds (Air/Deep Underground). Treat as Ready.
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    // --- HELPER: Is Parent Active? ---
+    // Checks if the Parent chunk (Lower Detail) is ready.
+    // Used to prevent holes when unloading children (moving away).
+    bool IsParentReady(int cx, int cy, int cz, int lod) {
+        if (lod >= m_config.lodCount - 1) return true; // Lowest LOD has no parent
+        
+        int parentLod = lod + 1;
+        // Integer division >> 1 works correctly for our coord system (spatial subdivision)
+        int px = cx >> 1;
+        int py = cy >> 1;
+        int pz = cz >> 1;
+
+        int64_t key = ChunkKey(px, py, pz, parentLod);
+        auto it = m_chunks.find(key);
+        
+        // If parent missing or not active, we are NOT ready to unload.
+        // Waiting prevents a hole in the world.
+        if (it == m_chunks.end() || it->second->state.load() != ChunkState::ACTIVE) {
+            return false;
+        }
+        return true;
+    }
 
     //bool m_viewNormals = false;
 
@@ -367,13 +453,9 @@ public:
         // Skip Chunk Loading/Unloading if frozen
         if (m_freezeLODs) return; 
         
-        // --- PRIORITY UPDATING ---
-        // We iterate from LOD 0 (Nearest) to LOD N (Farthest).
-        // This ensures High-Res chunks near the player are queued FIRST.
-        for(int i = 0; i < m_config.lodCount; i++) {
-            UnloadChunks(cameraPos, i);
-            QueueNewChunks(cameraPos, i);
-        }
+        // --- [CHANGE] ASYNC DISPATCH ---
+        // Instead of calculating LODs on main thread, we delegate to worker.
+        UpdateLODs_Async(cameraPos);
         
         m_frameCounter++;
     }
@@ -455,108 +537,63 @@ public:
         }
     }
 
-    // ================================================================================================
-    //                                     LOD MANAGEMENT
+        // ================================================================================================
+    //                             ASYNC LOD SYSTEM
     // ================================================================================================
 
-    void UnloadChunks(glm::vec3 cameraPos, int targetLod) {
+    // This runs on the WORKER THREAD. Does the math, touches no GPU.
+    void Task_CalculateLODs(glm::vec3 cameraPos) {
         if(m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("World::UnloadChunks");
-        
-        int scale = 1 << targetLod;
-        int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
-        int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+        Engine::Profiler::ScopedTimer timer("[ASYNC] World::LOD Calc");
+        auto result = std::make_unique<LODUpdateResult>();
 
-        // OPTIMIZATION: Coordinate Caching ////////// removing for now, caching might change new children results
-        // If we remain in the same chunk coordinate, the set of chunks to unload is identical. Skip.
-        // if (camX == lastUnloadPx[targetLod] && camZ == lastUnloadPz[targetLod]) {
-        //     return;
-        // }
+        // 1. SNAPSHOT STATE (Read-Only Lock)
+        std::shared_lock<std::shared_mutex> readLock(m_chunksMutex);
 
-        // lastUnloadPx[targetLod] = camX;
-        // lastUnloadPz[targetLod] = camZ;
-        
-        std::vector<int64_t> toRemove;
-    
-        {
-            std::shared_lock<std::shared_mutex> lock(m_chunksMutex);
-            for (auto& pair : m_chunks) {
-                ChunkNode* node = pair.second;
-                if (node->lod != targetLod) continue;
+        // --- PART A: CALCULATE UNLOADS ---
+        for (const auto& pair : m_chunks) {
+            ChunkNode* node = pair.second;
+            int lod = node->lod;
+            int scale = 1 << lod;
+            
+            int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
+            int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+            
+            int dx = abs(node->cx - camX);
+            int dz = abs(node->cz - camZ);
+            
+            bool shouldUnload = false;
+
+            // 1. Outer Radius (Too Far - Transition to LOWER detail)
+            if (dx > m_config.lodRadius[lod] || dz > m_config.lodRadius[lod]) {
+                 // [FIX] Wait for Parent (Lower Detail) to be ready before unloading this child.
+                 // This overlaps them, preventing the flash/hole.
+                 if (IsParentReady(node->cx, node->cy, node->cz, lod)) {
+                     shouldUnload = true;
+                 }
+            }
+            // 2. Inner Radius (Too Close - Transition to HIGHER detail)
+            else if (lod > 0) {
+                int prevRadius = m_config.lodRadius[lod - 1];
+                int innerBoundary = ((prevRadius + 1) / 2);
                 
-                int dx = abs(node->cx - camX);
-                int dz = abs(node->cz - camZ);
-                
-                // 1. UNLOAD TOO FAR (Outer Radius) -> Unload immediately
-                int outerLimit = m_config.lodRadius[targetLod]; 
-                if (dx > outerLimit || dz > outerLimit) {
-                    ChunkState s = node->state.load();
-                    if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
-                        toRemove.push_back(pair.first);
+                if (dx < innerBoundary && dz < innerBoundary) {
+                    // [FIX] Wait for Children (Higher Detail) to be ready before unloading this parent.
+                    if (AreChildrenReady(node->cx, node->cy, node->cz, lod)) {
+                        shouldUnload = true;
                     }
-                    continue;
                 }
+            }
 
-                // 2. UNLOAD TOO CLOSE (Inner Radius / Transition to Higher Detail)
-                if (targetLod > 0) {
-                    int prevRadius = m_config.lodRadius[targetLod - 1];
-                    int innerBoundary = ((prevRadius + 1) / 2);
-                    
-                    if (dx < innerBoundary && dz < innerBoundary) {
-                        // CRITICAL FIX: Only unload if the high-res replacements are ready.
-                        // This prevents the "Hole" / Flash.
-                        if (AreChildrenReady(node->cx, node->cy, node->cz, targetLod)) {
-                            ChunkState s = node->state.load();
-                            if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
-                                toRemove.push_back(pair.first);
-                            }
-                        }
-                        // Else: Do nothing. Keep this low-res chunk rendered for one more frame.
-                        // It will overlap with the generating children, but that is better than a hole.
-                    }
+            if (shouldUnload) {
+                ChunkState s = node->state.load();
+                if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
+                    result->chunksToUnload.push_back(pair.first);
                 }
             }
         }
 
-        if (!toRemove.empty()) {
-            std::unique_lock<std::shared_mutex> lock(m_chunksMutex);
-            for (auto k : toRemove) {
-                auto it = m_chunks.find(k);
-                if (it != m_chunks.end()) {
-                    ChunkNode* node = it->second;
-                    if (node->gpuOffset != -1) {
-                        // Deregister from GPU Culler
-                        m_culler->RemoveChunk(node->id);
-                        // Free VRAM
-                        m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
-                        node->gpuOffset = -1;
-                    }
-                    m_chunkPool.Release(node);
-                    m_chunks.erase(it);
-                }
-            }
-        }
-    }
-
-    void QueueNewChunks(glm::vec3 cameraPos, int targetLod) {
-        if (m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("World::QueueNewChunks");
-        
-        int lod = targetLod;
-        int scale = 1 << lod;
-        int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
-        int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
-
-        if (px == lastPx[lod] && pz == lastPz[lod] && m_lodComplete[lod]) return;
-
-        if (px != lastPx[lod] || pz != lastPz[lod]) {
-            m_lodComplete[lod] = false;
-            lastPx[lod] = px;
-            lastPz[lod] = pz;
-        }
-
-        // --- SPIRAL GENERATION ---
-        // Generates coordinates from center outward.
+        // --- PART B: CALCULATE LOADS ---
         static std::vector<std::pair<int, int>> spiralOffsets;
         static std::once_flag flag;
         std::call_once(flag, [](){
@@ -571,93 +608,131 @@ public:
             });
         });
 
-        std::vector<ChunkRequest> missing;
-        int r = m_config.lodRadius[lod];
-        int rSq = r * r; 
-
-        // Donut Logic: Where does the hole start?
-        int minR = 0;
-        if (lod > 0) {
-            int prevR = m_config.lodRadius[lod - 1];
-            minR = ((prevR +1 )/ 2); 
-        }
-
-        std::shared_lock<std::shared_mutex> readLock(m_chunksMutex);
-
-        for (const auto& offset : spiralOffsets) {
-            int distSq = offset.first*offset.first + offset.second*offset.second;
+        for(int lod = 0; lod < m_config.lodCount; lod++) {
+            int scale = 1 << lod;
+            int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
+            int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
             
-            // Optimization: Stop iterating if outside radius
-            if (distSq > (rSq * 2 + 100)) break; 
+            int r = m_config.lodRadius[lod];
+            int rSq = r * r; 
             
-            // Box check for exact radius
-            if (std::abs(offset.first) > r || std::abs(offset.second) > r) continue;
-
-            // Donut Check: Skip if inside the hole (covered by higher detail LOD)
+            int minR = 0;
             if (lod > 0) {
-                 if (std::abs(offset.first) < minR && std::abs(offset.second) < minR) continue;
+                int prevR = m_config.lodRadius[lod - 1];
+                minR = ((prevR + 1) / 2); 
             }
 
-            int x = px + offset.first;
-            int z = pz + offset.second;
-            
-            // Height Culling: Only generate chunks that actually contain terrain surface
-            int minH, maxH;
-            m_generator->GetHeightBounds(x, z, scale, minH, maxH);
-            
-            int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
-            int chunkYEnd = (maxH / (CHUNK_SIZE * scale)) + 1;
-            chunkYStart = std::max(0, chunkYStart);
-            chunkYEnd = std::min(m_config.worldHeightChunks - 1, chunkYEnd);
-
-            for (int y = chunkYStart; y <= chunkYEnd; y++) {
-                int64_t key = ChunkKey(x, y, z, lod);
+            for (const auto& offset : spiralOffsets) {
+                int distSq = offset.first*offset.first + offset.second*offset.second;
+                if (distSq > (rSq * 2 + 100)) break; 
                 
-                // If chunk doesn't exist, queue it
-                if (m_chunks.find(key) == m_chunks.end()) {
-                    int dx = x - px; 
-                    int dz = z - pz; 
-                    int chunkWorldY = y * CHUNK_SIZE * scale;
-                    int dy = (chunkWorldY - (int)cameraPos.y) / (CHUNK_SIZE * scale); 
-                    
-                    // Simple distance metric for sorting queue
-                    int distMetric = dx*dx + dz*dz + (dy*dy); 
-                    missing.push_back({x, y, z, lod, distMetric});
+                if (std::abs(offset.first) > r || std::abs(offset.second) > r) continue;
+
+                // Donut Check
+                if (lod > 0) {
+                     if (std::abs(offset.first) < minR && std::abs(offset.second) < minR) continue;
                 }
-            }
-        }
-        readLock.unlock();
 
-        // Sort by distance (nearest first)
-        std::sort(missing.begin(), missing.end(), [](const ChunkRequest& a, const ChunkRequest& b){ return a.distSq < b.distSq; });
-
-        int queued = 0;
-        int MAX_TASKS = 2000; 
-        
-        if (!missing.empty()) {
-            std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
-            for (const auto& req : missing) {
-                if (queued >= MAX_TASKS) break;
+                int x = px + offset.first;
+                int z = pz + offset.second;
                 
-                int64_t key = ChunkKey(req.x, req.y, req.z, req.lod);
-                if (m_chunks.find(key) == m_chunks.end()) {
-                    ChunkNode* newNode = m_chunkPool.Acquire();
-                    if (newNode) {
-                        newNode->Reset(req.x, req.y, req.z, req.lod);
-                        newNode->id = key; 
-                        m_chunks[key] = newNode;
+                // Height Cull
+                int minH, maxH;
+                m_generator->GetHeightBounds(x, z, scale, minH, maxH);
+                int chunkYStart = std::max(0, (minH / (CHUNK_SIZE * scale)) - 1); 
+                int chunkYEnd = std::min(m_config.worldHeightChunks - 1, (maxH / (CHUNK_SIZE * scale)) + 1);
+
+                for (int y = chunkYStart; y <= chunkYEnd; y++) {
+                    int64_t key = ChunkKey(x, y, z, lod);
+                    
+                    if (m_chunks.find(key) == m_chunks.end()) {
+                        int dx = x - px; 
+                        int dz = z - pz; 
+                        int chunkWorldY = y * CHUNK_SIZE * scale;
+                        int dy = (chunkWorldY - (int)cameraPos.y) / (CHUNK_SIZE * scale); 
+                        int distMetric = dx*dx + dz*dz + (dy*dy); 
                         
-                        // Start Thread Task
-                        newNode->state = ChunkState::GENERATING;
-                        m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
-                        queued++;
+                        result->chunksToLoad.push_back({x, y, z, lod, distMetric});
                     }
                 }
             }
         }
+        
+        readLock.unlock(); 
 
-        if (queued < MAX_TASKS) m_lodComplete[lod] = true;
-        else m_lodComplete[lod] = false;
+        std::sort(result->chunksToLoad.begin(), result->chunksToLoad.end(), 
+            [](const ChunkRequest& a, const ChunkRequest& b){ return a.distSq < b.distSq; });
+
+        std::lock_guard<std::mutex> lock(m_lodResultMutex);
+        m_pendingLODResult = std::move(result);
+        m_isLODWorkerRunning = false;
+    }
+
+    // This runs on the MAIN THREAD. Commits the results.
+    void UpdateLODs_Async(glm::vec3 cameraPos) {
+        
+        {
+            std::lock_guard<std::mutex> lock(m_lodResultMutex);
+            if (m_pendingLODResult) {
+                Engine::Profiler::ScopedTimer timer("World::ApplyLODs");
+                
+                std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
+
+                if (m_pendingLODResult->loadIndex == 0) {
+                    for (int64_t key : m_pendingLODResult->chunksToUnload) {
+                        auto it = m_chunks.find(key);
+                        if (it != m_chunks.end()) {
+                            ChunkNode* node = it->second;
+                            if (node->gpuOffset != -1) {
+                                m_culler->RemoveChunk(node->id);
+                                m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
+                                node->gpuOffset = -1;
+                            }
+                            m_chunkPool.Release(node);
+                            m_chunks.erase(it);
+                        }
+                    }
+                }
+
+                int queued = 0;
+                int MAX_PER_FRAME = 50; 
+                
+                size_t& idx = m_pendingLODResult->loadIndex;
+                const auto& loadList = m_pendingLODResult->chunksToLoad;
+
+                while (idx < loadList.size() && queued < MAX_PER_FRAME) {
+                    const auto& req = loadList[idx];
+                    idx++;
+                    
+                    int64_t key = ChunkKey(req.x, req.y, req.z, req.lod);
+                    if (m_chunks.find(key) == m_chunks.end()) {
+                        ChunkNode* newNode = m_chunkPool.Acquire();
+                        if (newNode) {
+                            newNode->Reset(req.x, req.y, req.z, req.lod);
+                            newNode->id = key; 
+                            m_chunks[key] = newNode;
+                            
+                            newNode->state = ChunkState::GENERATING;
+                            m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
+                            queued++;
+                        }
+                    }
+                }
+                
+                if (idx >= loadList.size()) {
+                    m_pendingLODResult = nullptr;
+                }
+            }
+        }
+
+        if (!m_isLODWorkerRunning && !m_pendingLODResult) {
+            float distSq = glm::dot(cameraPos - m_lastLODCalculationPos, cameraPos - m_lastLODCalculationPos);
+            if (distSq > 64.0f) { 
+                m_lastLODCalculationPos = cameraPos;
+                m_isLODWorkerRunning = true;
+                m_pool.enqueue([this, cameraPos](){ this->Task_CalculateLODs(cameraPos); });
+            }
+        }
     }
 
     // ================================================================================================
@@ -725,10 +800,9 @@ public:
     // ================================================================================================
 
     void Reload(WorldConfig newConfig) {
-        Engine::Profiler::ScopedTimer timer("World::Reload");
+        //Engine::Profiler::ScopedTimer timer("World::Reload");
         m_config = newConfig;
         
-        // Reset Generator
         m_generator = std::make_unique<DefaultGenerator>(m_config);
         
         {
@@ -746,13 +820,9 @@ public:
         }
 
         // Reset tracking vars
-        for(int i=0; i<8; i++) { 
-            lastPx[i] = -999; 
-            lastPz[i] = -999; 
-            lastUnloadPx[i] = -999;
-            lastUnloadPz[i] = -999;
-            m_lodComplete[i] = false; 
-        }
+        // [FIX] Reset position to negative infinity to force immediate update on next frame
+        m_lastLODCalculationPos = glm::vec3(-99999.0f);
+        m_pendingLODResult = nullptr;
     }
 
 
@@ -761,34 +831,35 @@ public:
     //                                      WORKER TASKS
     // ================================================================================================
 private:
-    bool AreChildrenReady(int cx, int cy, int cz, int lod) {
-        if (lod == 0) return true; // Lowest LOD has no children
+// older version, new version is at the top
+    // bool AreChildrenReady(int cx, int cy, int cz, int lod) {
+    //     if (lod == 0) return true; // Lowest LOD has no children
         
-        int childLod = lod - 1;
-        // A chunk at LOD N (coord x) covers LOD N-1 coords [2x, 2x+1]
-        int startX = cx * 2;
-        int startY = cy * 2;
-        int startZ = cz * 2;
+    //     int childLod = lod - 1;
+    //     // A chunk at LOD N (coord x) covers LOD N-1 coords [2x, 2x+1]
+    //     int startX = cx * 2;
+    //     int startY = cy * 2;
+    //     int startZ = cz * 2;
 
-        // Check all 8 children
-        for (int x = 0; x < 2; x++) {
-            for (int y = 0; y < 2; y++) {
-                for (int z = 0; z < 2; z++) {
-                    int64_t key = ChunkKey(startX + x, startY + y, startZ + z, childLod);
+    //     // Check all 8 children
+    //     for (int x = 0; x < 2; x++) {
+    //         for (int y = 0; y < 2; y++) {
+    //             for (int z = 0; z < 2; z++) {
+    //                 int64_t key = ChunkKey(startX + x, startY + y, startZ + z, childLod);
                     
-                    // Note: We are already holding a Read Lock (shared_lock) in UnloadChunks,
-                    // so calling find() here is thread-safe.
-                    auto it = m_chunks.find(key);
+    //                 // Note: We are already holding a Read Lock (shared_lock) in UnloadChunks,
+    //                 // so calling find() here is thread-safe.
+    //                 auto it = m_chunks.find(key);
                     
-                    // If child is missing or still generating/meshing, we are NOT ready.
-                    if (it == m_chunks.end() || it->second->state != ChunkState::ACTIVE) {
-                        return false;
-                    }
-                }
-            }
-        }
-        return true;
-    }
+    //                 // If child is missing or still generating/meshing, we are NOT ready.
+    //                 if (it == m_chunks.end() || it->second->state != ChunkState::ACTIVE) {
+    //                     return false;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     return true;
+    // }
 
 
     void Task_Generate(ChunkNode* node) {
