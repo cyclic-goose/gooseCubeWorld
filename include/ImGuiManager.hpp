@@ -215,12 +215,12 @@ private:
             ImGui::Text("Resident Vertices: %s", FormatNumber(totalVertices).c_str());
             //ImGui::TextColored(ImVec4(0,1,0,1), "Drawn Vertices:    %s", FormatNumber(world.m_drawnVertices).c_str());
 
-            size_t culledChunks = 0;
-            if (activeChunks > world.m_drawnChunks) {
-                culledChunks = activeChunks - world.m_drawnChunks;
-            }
-            ImGui::Text("Drawn Chunks:  %s", FormatNumber(world.m_drawnChunks).c_str());
-            ImGui::Text("Culled Chunks: %s", FormatNumber(culledChunks).c_str());
+            // size_t culledChunks = 0;
+            // if (activeChunks > world.m_drawnChunks) {
+            //     culledChunks = activeChunks - world.m_drawnChunks;
+            // }
+            // ImGui::Text("Drawn Chunks:  %s", FormatNumber(world.m_drawnChunks).c_str());
+            //ImGui::Text("Culled Chunks: %s", FormatNumber(culledChunks).c_str());
             
             if (ImGui::Checkbox("Wireframe Mode", &config.showWireframe)) {
                 glPolygonMode(GL_FRONT_AND_BACK, config.showWireframe ? GL_LINE : GL_FILL);

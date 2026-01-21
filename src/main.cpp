@@ -159,7 +159,8 @@ void RenderLoadingScreen(GLFWwindow* window) {
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "Cyclic Goose Voxel Engine");
         ImGui::SetWindowFontScale(2.0f);
         ImGui::Separator();
-        ImGui::Text("Allocating VRAM Buffers (approx 900000GB)...");
+        ImGui::Text("Reserving Memory...");
+        ImGui::Text("Allocating VRAM Buffers...");
         ImGui::Text("Allocating Threadpool...");
         ImGui::Text("Please Wait...");
         
@@ -178,7 +179,7 @@ void RenderLoadingScreen(GLFWwindow* window) {
         ImGui::SetNextWindowBgAlpha(0.0f); 
         
         ImGui::Begin("Version", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.2.1-alpha"); 
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.2.6-alpha"); 
         ImGui::End();
         ImGui::End();
         
