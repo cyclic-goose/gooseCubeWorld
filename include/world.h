@@ -525,7 +525,7 @@ public:
                         // Register with GPU Driven Culler
                         m_culler->AddOrUpdateChunk(
                             node->id, 
-                            node->minAABB, 
+                            node->minAABB,
                             (float)node->scale, 
                             (size_t)(offset / sizeof(PackedVertex)), 
                             node->vertexCount
