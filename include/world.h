@@ -739,59 +739,41 @@ public:
     //                                         RENDERING
     // ================================================================================================
 
-    void Draw(Shader& shader, const glm::mat4& renderViewProj, const glm::mat4& cullViewProj) {
+    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& proj, GLuint depthPyramidTex) {
         if(m_shutdown) return;
-        //Engine::Profiler::ScopedTimer timer("World::Draw");
 
-        // 1. COMPUTE PASS (CULLING)
-        // Filters visible chunks into the Indirect Buffer
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
-            //Engine::Profiler::ScopedTimer timerGPU("GPU: Culling Compute"); 
-            m_culler->Cull(cullViewProj, m_gpuMemory->GetID());
+            m_culler->Cull(viewProj, proj, depthPyramidTex);
             Engine::Profiler::Get().EndGPU();
         }
 
-        // 2. GEOMETRY PASS
-        // MultiDrawIndirect using the buffer generated above
         {
             Engine::Profiler::Get().BeginGPU("GPU: MDI DRAW"); 
 
             shader.use();
-            glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
-
-            // View normals by activating Frag shader debug uniform
-            // 0 = Normal, 1 = Debug Normals
+            glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
             glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config.cubeDebugMode);
             
-            // Bind Persistent Vertex Storage (SSBO Binding 0)
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
 
-            
-            
-            // --- TEXTURE ARRAY BINDING ---
-            // Ensure your shader has: uniform sampler2DArray u_Textures;
-            // And you bind it to Texture Unit 0.
             if (m_textureArrayID != 0) {
                  glActiveTexture(GL_TEXTURE0);
                  glBindTexture(GL_TEXTURE_2D_ARRAY, m_textureArrayID);
                  shader.setInt("u_Textures", 0);
             }
 
-            // --- Z-FIGHTING FIX ---
-            // Enable Polygon Offset to handle overlapping geometry cleanly.
-            // GL_POLYGON_OFFSET_FILL pushes geometry back. 
-            // Since we are drawing all LODs at once, this is a "Global" fix.
-            // Ideally, you'd split the MDI call by LOD and increase the factor for each.
             glEnable(GL_POLYGON_OFFSET_FILL);
             glPolygonOffset(1.0f, 1.0f);
 
-            m_culler->DrawIndirect(m_dummyVAO); ////////////////// ******************** PRIMARY WORLD DRAW CALL **************** ///////////////////
+            m_culler->DrawIndirect(m_dummyVAO); 
             glDisable(GL_POLYGON_OFFSET_FILL);
 
             Engine::Profiler::Get().EndGPU();
         }
     }
+
+    GpuCuller* GetCuller() { return m_culler.get(); }
 
 
 

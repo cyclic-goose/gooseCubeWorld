@@ -2,6 +2,7 @@
 #include "shader.h"
 #include <iostream>
 #include <glm/gtc/type_ptr.hpp>
+#include <cmath>
 
 struct DrawArraysIndirectCommand {
     uint32_t count;
@@ -13,13 +14,20 @@ struct DrawArraysIndirectCommand {
 GpuCuller::GpuCuller(size_t maxChunks) : m_maxChunks(maxChunks) {
     InitBuffers();
     
-    // Initialize Free List
-    // We fill it in reverse so slot 0 is used first, just for neatness
     for (size_t i = 0; i < m_maxChunks; ++i) {
         m_freeSlots.push((uint32_t)(m_maxChunks - 1 - i));
     }
 
     m_cullShader = std::make_unique<Shader>("./resources/CULL_COMPUTE.glsl");
+    m_hizShader = std::make_unique<Shader>("./resources/HI_Z_DOWN.glsl");
+
+    // Create a sampler that forces Nearest Mipmap Nearest.
+    // This is crucial. Linear filtering blurs depth values, destroying the conservative "Min" property.
+    glCreateSamplers(1, &m_depthSampler);
+    glSamplerParameteri(m_depthSampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glSamplerParameteri(m_depthSampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glSamplerParameteri(m_depthSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(m_depthSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
 GpuCuller::~GpuCuller() {
@@ -28,61 +36,49 @@ GpuCuller::~GpuCuller() {
     if (m_visibleChunkBuffer) glDeleteBuffers(1, &m_visibleChunkBuffer);
     if (m_atomicCounterBuffer) glDeleteBuffers(1, &m_atomicCounterBuffer);
     if (m_resultBuffer) glDeleteBuffers(1, &m_resultBuffer);
+    if (m_depthSampler) glDeleteSamplers(1, &m_depthSampler);
 }
 
 void GpuCuller::InitBuffers() {
-    // 1. Global Chunk Buffer (Persistent Input)
     glCreateBuffers(1, &m_globalChunkBuffer);
     glNamedBufferStorage(m_globalChunkBuffer, m_maxChunks * sizeof(ChunkGpuData), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
-    // 2. Indirect Draw Buffer (Output)
     glCreateBuffers(1, &m_indirectBuffer);
     glNamedBufferStorage(m_indirectBuffer, m_maxChunks * sizeof(DrawArraysIndirectCommand), nullptr, 0);
 
-    // 3. Visible Chunk Offsets (Output to Vertex Shader)
     glCreateBuffers(1, &m_visibleChunkBuffer);
     glNamedBufferStorage(m_visibleChunkBuffer, m_maxChunks * sizeof(glm::vec4), nullptr, 0);
 
-    // 4. Atomic Counter
     glCreateBuffers(1, &m_atomicCounterBuffer);
     glNamedBufferStorage(m_atomicCounterBuffer, sizeof(GLuint), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
-    // 5. Result Buffer (Readback)
     glCreateBuffers(1, &m_resultBuffer);
     glNamedBufferStorage(m_resultBuffer, sizeof(GLuint), nullptr, GL_DYNAMIC_STORAGE_BIT);
     
-    // Initialize result to 0
     uint32_t zero = 0;
     glNamedBufferSubData(m_resultBuffer, 0, sizeof(GLuint), &zero);
 }
 
 uint32_t GpuCuller::AddOrUpdateChunk(int64_t chunkID, const glm::vec3& minAABB, float scale, size_t firstVertex, size_t vertexCount) {
     uint32_t slot;
-    
     auto it = m_chunkSlots.find(chunkID);
     if (it != m_chunkSlots.end()) {
         slot = it->second;
     } else {
-        if (m_freeSlots.empty()) {
-            std::cerr << "[GpuCuller] Error: Out of GPU Chunk slots! Increase MaxChunks." << std::endl;
-            return 0; // Fallback
-        }
+        if (m_freeSlots.empty()) return 0;
         slot = m_freeSlots.top();
         m_freeSlots.pop();
         m_chunkSlots[chunkID] = slot;
     }
 
-    // Prepare Data
     ChunkGpuData data;
     data.minAABB_scale = glm::vec4(minAABB, scale);
-    data.maxAABB_pad = glm::vec4(minAABB + (float)(32 * scale), 0.0f); // Assuming CHUNK_SIZE=32, calculate max
+    data.maxAABB_pad = glm::vec4(minAABB + (float)(32 * scale), 0.0f); 
     data.firstVertex = (uint32_t)firstVertex;
-    data.vertexCount = (uint32_t)vertexCount; // Non-zero vertex count marks slot as ACTIVE
+    data.vertexCount = (uint32_t)vertexCount;
     data.pad1 = 0; data.pad2 = 0;
 
-    // Upload Single Struct (Fast enough for streaming updates)
     glNamedBufferSubData(m_globalChunkBuffer, slot * sizeof(ChunkGpuData), sizeof(ChunkGpuData), &data);
-
     return slot;
 }
 
@@ -94,50 +90,91 @@ void GpuCuller::RemoveChunk(int64_t chunkID) {
     m_chunkSlots.erase(it);
     m_freeSlots.push(slot);
 
-    // Mark as empty on GPU by setting vertexCount to 0
-    // We only need to write the vertexCount field, but writing the whole struct is often cleaner/aligned
-    // Let's just write 0 to the vertexCount offset
     uint32_t zero = 0;
-    // Offset of vertexCount is 32 + 4 = 36 bytes into the struct
     size_t offset = (slot * sizeof(ChunkGpuData)) + offsetof(ChunkGpuData, vertexCount);
     glNamedBufferSubData(m_globalChunkBuffer, offset, sizeof(uint32_t), &zero);
 }
 
-void GpuCuller::Cull(const glm::mat4& viewProj, GLuint chunkVertexSSBO) {
-    // 1. Async Readback from PREVIOUS frame
-    glGetNamedBufferSubData(m_resultBuffer, 0, sizeof(GLuint), &m_drawnCount);
+void GpuCuller::GenerateHiZ(GLuint depthTexture, int width, int height) {
+    m_depthPyramidWidth = width;
+    m_depthPyramidHeight = height;
 
-    // 2. Reset Atomic Counter
+    // Calculate total mip levels: log2(max(w,h)) + 1
+    int numLevels = 1 + (int)floor(log2(std::max(width, height)));
+
+    m_hizShader->use();
+    
+    // Process Mip Levels 0 -> 1, 1 -> 2, etc.
+    // Note: We cannot write to Level 0 (it's the depth buffer itself).
+    // We assume Level 0 is already valid (rendered to).
+    
+    for (int i = 0; i < numLevels - 1; ++i) {
+        // Dimensions of the DESTINATION mip level
+        int outW = std::max(1, width >> (i + 1));
+        int outH = std::max(1, height >> (i + 1));
+
+        // Bind Read Image (Level i)
+        glBindImageTexture(0, depthTexture, i, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
+        
+        // Bind Write Image (Level i+1)
+        glBindImageTexture(1, depthTexture, i+1, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
+
+        m_hizShader->setVec2("u_OutDimension", glm::vec2(outW, outH));
+
+        // Dispatch
+        // Local size is 32x32. 
+        int groupsX = (outW + 31) / 32;
+        int groupsY = (outH + 31) / 32;
+        
+        glDispatchCompute(groupsX, groupsY, 1);
+
+        // Barrier to ensure Level i+1 is written before being read as Level i in next iteration
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    }
+}
+
+void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& proj, GLuint depthTexture) {
+    glGetNamedBufferSubData(m_resultBuffer, 0, sizeof(GLuint), &m_drawnCount);
+    
     uint32_t zero = 0;
     glNamedBufferSubData(m_atomicCounterBuffer, 0, sizeof(GLuint), &zero);
 
-    // 3. Dispatch Compute
     m_cullShader->use();
     m_cullShader->setMat4("u_ViewProjection", glm::value_ptr(viewProj));
     m_cullShader->setUInt("u_MaxChunks", (uint32_t)m_maxChunks);
+    
+    // Frustum Params (extracted from Proj matrix)
+    m_cullShader->setFloat("u_P00", proj[0][0]);
+    m_cullShader->setFloat("u_P11", proj[1][1]);
+
+    // Bind Depth Pyramid
+    if (depthTexture != 0 && m_depthPyramidWidth > 0) {
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, depthTexture);
+        glBindSampler(0, m_depthSampler); // Force Nearest-Mipmap-Nearest
+        
+        m_cullShader->setInt("u_DepthPyramid", 0);
+        m_cullShader->setVec2("u_PyramidSize", glm::vec2(m_depthPyramidWidth, m_depthPyramidHeight));
+        m_cullShader->setBool("u_OcclusionEnabled", true);
+    } else {
+        m_cullShader->setBool("u_OcclusionEnabled", false);
+    }
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_globalChunkBuffer);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_indirectBuffer);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_visibleChunkBuffer);
     glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 0, m_atomicCounterBuffer);
 
-    // Dispatch enough groups to cover MAX capacity, not just active count.
-    // The shader will skip empty slots efficiently.
     glDispatchCompute((GLuint)(m_maxChunks + 63) / 64, 1, 1);
 
-    // Barrier: Ensure Compute finishes writing before Draw reads
     glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_ATOMIC_COUNTER_BARRIER_BIT);
-
-    // 4. Copy Atomic Counter to Result Buffer for next frame readback
     glCopyNamedBufferSubData(m_atomicCounterBuffer, m_resultBuffer, 0, 0, sizeof(GLuint));
 }
 
 void GpuCuller::DrawIndirect(GLuint dummyVAO) {
     glBindVertexArray(dummyVAO);
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_indirectBuffer);
-    glBindBuffer(GL_PARAMETER_BUFFER, m_atomicCounterBuffer); // Use atomic counter value as draw count
-
-    // Binding 1 matches VERT_PRIMARY.glsl 'ChunkOffsets'
+    glBindBuffer(GL_PARAMETER_BUFFER, m_atomicCounterBuffer); 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_visibleChunkBuffer);
 
     glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_maxChunks, 0);

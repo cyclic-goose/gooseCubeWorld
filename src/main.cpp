@@ -39,8 +39,59 @@ glm::mat4 lockedCullMatrix;
 ImGuiManager gui;
 UIConfig appState; 
 
+// --- FRAMEBUFFER RESOURCES ---
+struct FramebufferResources {
+    GLuint fbo = 0;
+    GLuint depthTex = 0; // Render Target (Depth Component)
+    GLuint hiZTex = 0;   // Compute Target (R32F)
+    GLuint colorTex = 0; 
+    int width = 0;
+    int height = 0;
 
+    void Resize(int w, int h) {
+        if (width == w && height == h) return;
+        width = w; height = h;
 
+        if (fbo) glDeleteFramebuffers(1, &fbo);
+        if (depthTex) glDeleteTextures(1, &depthTex);
+        if (hiZTex) glDeleteTextures(1, &hiZTex);
+        if (colorTex) glDeleteTextures(1, &colorTex);
+
+        // 1. Create Render Depth Texture (Fixed: uses Depth Component)
+        // This is strictly for rendering the scene.
+        glCreateTextures(GL_TEXTURE_2D, 1, &depthTex);
+        glTextureStorage2D(depthTex, 1, GL_DEPTH_COMPONENT32F, width, height);
+        
+        glTextureParameteri(depthTex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTextureParameteri(depthTex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTextureParameteri(depthTex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(depthTex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // 2. Create Hi-Z Texture (Fixed: uses R32F)
+        // This is for the Compute Shader downsampling.
+        glCreateTextures(GL_TEXTURE_2D, 1, &hiZTex);
+        int levels = 1 + (int)floor(log2(std::max(width, height)));
+        glTextureStorage2D(hiZTex, levels, GL_R32F, width, height);
+
+        glTextureParameteri(hiZTex, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+        glTextureParameteri(hiZTex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTextureParameteri(hiZTex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTextureParameteri(hiZTex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // 3. Create Color Texture
+        glCreateTextures(GL_TEXTURE_2D, 1, &colorTex);
+        glTextureStorage2D(colorTex, 1, GL_RGBA8, width, height);
+
+        // 4. Assemble FBO
+        glCreateFramebuffers(1, &fbo);
+        glNamedFramebufferTexture(fbo, GL_DEPTH_ATTACHMENT, depthTex, 0); // Valid Depth Attachment
+        glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0, colorTex, 0);
+
+        if (glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            std::cerr << "Framebuffer Incomplete! Status: " << glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) << std::endl;
+        }
+    }
+} g_fbo;
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
 
@@ -243,6 +294,12 @@ int main() {
     glEnable(GL_CULL_FACE); 
     glCullFace(GL_BACK);
     glClearColor(0.53f, 0.81f, 0.22f, 1.0f); 
+
+    // Initial FBO sizing
+    int dw, dh;
+    glfwGetFramebufferSize(window, &dw, &dh);
+    g_fbo.Resize(dw, dh);
+    
     
     { 
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
@@ -316,7 +373,7 @@ int main() {
             
             
             // Recalc mvp
-            glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
+            glm::mat4 projection = camera.GetProjectionMatrix((float)g_fbo.width / (float)g_fbo.height, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
             
@@ -325,14 +382,55 @@ int main() {
                 lockedCullMatrix = viewProj;
             }
             
-            // CLEAR 
+            glBindFramebuffer(GL_FRAMEBUFFER, g_fbo.fbo);
+            glViewport(0, 0, g_fbo.width, g_fbo.height);
+
+            // ImGui enables GL_SCISSOR_TEST and often leaves it enabled with a small rect at the end of the frame.
+            // If we don't disable it here, glClear and glBlitNamedFramebuffer will be clipped, resulting in a black screen.
+            glDisable(GL_SCISSOR_TEST);
             glClearColor(0.53f, 0.81f, 0.91f, 1.0f); 
+            // Important: Reverse-Z clears to 0.0f
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            // RENDER WORLD
-            // Draw with separate ViewProj for Rendering and Culling
-            world.Draw(worldShader, viewProj, lockedCullMatrix);
 
 
+
+
+            // This triggers:
+            // 1. Cull(PrevDepth)
+            // 2. MultiDrawIndirect
+            world.Draw(worldShader, viewProj, projection, g_fbo.hiZTex);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+            // --- 2. GENERATE HI-Z PYRAMID ---
+            
+            // Step A: Copy the rendered depth buffer (DepthComponent) to the Hi-Z texture (R32F)
+            // We only copy Mip Level 0.
+            // This works because GL_DEPTH_COMPONENT32F and GL_R32F are compatible (both 32-bit).
+            glCopyImageSubData(g_fbo.depthTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                               g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                               g_fbo.width, g_fbo.height, 1);
+            
+            // Barrier: Ensure copy finishes before Compute Shader reads it
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+
+            // Step B: Downsample the rest of the pyramid
+            world.GetCuller()->GenerateHiZ(g_fbo.hiZTex, g_fbo.width, g_fbo.height);
+
+            // --- 3. COMPOSITE TO SCREEN ---
+            // Blit the Color Attachment of the FBO to the Default Backbuffer
+            // (ImGui renders on top of this)
+            glBlitNamedFramebuffer(g_fbo.fbo, 0, 
+                0, 0, g_fbo.width, g_fbo.height, 
+                0, 0, g_fbo.width, g_fbo.height, 
+                GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+
+
+
+
+
+                
             // Render GUI
             gui.RenderUI(world, appState, camera, globalConfig.VRAM_HEAP_ALLOCATION_MB);
             gui.EndFrame();
