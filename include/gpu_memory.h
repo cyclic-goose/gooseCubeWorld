@@ -57,8 +57,14 @@ public:
             size_t blockOffset = it->first;
             size_t blockSize = it->second;
 
-            size_t alignedOffset = AlignTo(blockOffset, alignment);
-            size_t padding = alignedOffset - blockOffset;
+            // Optimization: Skip complex alignment math if already aligned (common case)
+            size_t alignedOffset = blockOffset;
+            size_t padding = 0;
+            
+            if (blockOffset % alignment != 0) {
+                 alignedOffset = AlignTo(blockOffset, alignment);
+                 padding = alignedOffset - blockOffset;
+            }
 
             if (blockSize >= size + padding) {
                 size_t waste = blockSize - (size + padding);
@@ -127,6 +133,25 @@ public:
                 m_freeBlocks.erase(it);
             }
         }
+    }
+
+    // Calculates fragmentation as: 1.0 - (LargestFreeBlock / TotalFreeBytes)
+    // 0.0 = Perfectly Defrogmented (One large block)
+    // 1.0 = Highly Fragmented (Many small blocks)
+    float GetFragmentationRatio() const {
+        if (m_freeBlocks.empty()) return 0.0f; // Either full or empty, but effectively 0 fragmentation
+        
+        size_t totalFree = m_capacity - m_used;
+        if (totalFree == 0) return 0.0f; // Full
+
+        size_t largestBlock = 0;
+        for (const auto& block : m_freeBlocks) {
+            if (block.second > largestBlock) {
+                largestBlock = block.second;
+            }
+        }
+
+        return 1.0f - (static_cast<float>(largestBlock) / static_cast<float>(totalFree));
     }
 
     // NON-BLOCKING UPLOAD

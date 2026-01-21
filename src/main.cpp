@@ -136,7 +136,7 @@ void processInput(GLFWwindow *window, World& world) {
 
 
 // a quick one off "splash screen" so the player doesnt think the computer just froze (although it is kind of, its allocating vram)
-void RenderLoadingScreen(GLFWwindow* window) {
+void RenderLoadingScreen(GLFWwindow* window, const float HEAP_SIZE_FOR_DISPLAYING) {
     // Force a few frames to render to clear out the swap chain buffers
     // 3 iterations ensures we handle Double or Triple buffering correctly
     for (int i = 0; i < 3; i++) {
@@ -159,8 +159,9 @@ void RenderLoadingScreen(GLFWwindow* window) {
         ImGui::TextColored(ImVec4(1, 1, 0, 1), "Cyclic Goose Voxel Engine");
         ImGui::SetWindowFontScale(2.0f);
         ImGui::Separator();
-        ImGui::Text("Allocating VRAM Buffers (approx 900000GB)...");
-        ImGui::Text("Allocating Threadpool...");
+        ImGui::Text("Reserving Memory...");
+        ImGui::Text("Allocating %.1f MB VRAM...", HEAP_SIZE_FOR_DISPLAYING);
+        ImGui::Text("Spooling Threadpool...");
         ImGui::Text("Please Wait...");
         
         // --- VERSION WINDOW (Anchored Relative to Main) ---
@@ -178,7 +179,7 @@ void RenderLoadingScreen(GLFWwindow* window) {
         ImGui::SetNextWindowBgAlpha(0.0f); 
         
         ImGui::Begin("Version", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.2.1-alpha"); 
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.2.6-alpha"); 
         ImGui::End();
         ImGui::End();
         
@@ -218,8 +219,7 @@ int main() {
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
     
     gui.Init(window);
-    RenderLoadingScreen(window);
-
+    
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GEQUAL); 
@@ -227,22 +227,39 @@ int main() {
     glClearDepth(0.0f);     
     glEnable(GL_CULL_FACE); 
     glCullFace(GL_BACK);
-    glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
-
+    glClearColor(0.53f, 0.81f, 0.22f, 1.0f); 
+    
     { 
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         
         WorldConfig globalConfig;
-        globalConfig.lodCount = 8; 
-        globalConfig.lodRadius[0] = 10;   
+        globalConfig.VRAM_HEAP_ALLOCATION_MB = 1024; ////////////// ****************** THIS DICTATES HOW MUCH MEMORY ALLOCATED TO VRAM
+        RenderLoadingScreen(window, globalConfig.VRAM_HEAP_ALLOCATION_MB);
+        
+        // We can call this the development debug LOD settings since the app will boot faster
+        globalConfig.lodCount = 7;
+        globalConfig.lodRadius[0] = 3;   
         globalConfig.lodRadius[1] = 6;  
         globalConfig.lodRadius[2] = 6;   
         globalConfig.lodRadius[3] = 6;   
-        globalConfig.lodRadius[4] = 8;  
+        globalConfig.lodRadius[4] = 6;  
         globalConfig.lodRadius[5] = 12; 
-        globalConfig.lodRadius[6] = 14; 
-        globalConfig.lodRadius[7] = 16; 
+        globalConfig.lodRadius[6] = 12; 
+        globalConfig.lodRadius[7] = 12; 
         
+        // Higher LOD in general more expensive
+        // globalConfig.lodCount = 7;
+        // // new radii
+        // globalConfig.lodRadius[0] = 6;   
+        // globalConfig.lodRadius[1] = 12;  
+        // globalConfig.lodRadius[2] = 16;   
+        // globalConfig.lodRadius[3] = 20;   
+        // globalConfig.lodRadius[4] = 20;  
+        // globalConfig.lodRadius[5] = 20; 
+        // globalConfig.lodRadius[6] = 32; 
+        //globalConfig.lodRadius[7] = 12; 
+
+
         World world(globalConfig);
 
         while (!glfwWindowShouldClose(window)) {
@@ -264,8 +281,6 @@ int main() {
             Engine::Profiler::Get().DrawUI(appState.isGameMode);
 
             
-            // CLEAR 
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             
             // Recalc mvp
             glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
@@ -277,13 +292,16 @@ int main() {
                 lockedCullMatrix = viewProj;
             }
             
+            // CLEAR 
+            glClearColor(0.53f, 0.81f, 0.91f, 1.0f); 
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             // RENDER WORLD
             // Draw with separate ViewProj for Rendering and Culling
             world.Draw(worldShader, viewProj, lockedCullMatrix);
 
 
             // Render GUI
-            gui.RenderUI(world, appState, camera);
+            gui.RenderUI(world, appState, camera, globalConfig.VRAM_HEAP_ALLOCATION_MB);
             gui.EndFrame();
 
             glfwSwapBuffers(window);

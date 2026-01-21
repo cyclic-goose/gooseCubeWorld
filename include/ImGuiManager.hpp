@@ -9,6 +9,7 @@
 #include <vector>
 #include "world.h"
 #include "camera.h"
+#include "profiler.h"
 
 // --- CONFIGURATION STRUCT ---
 struct UIConfig {
@@ -82,7 +83,8 @@ public:
         m_Initialized = false;
     }
 
-    void RenderUI(World& world, UIConfig& config, const Camera& camera) {
+    void RenderUI(World& world, UIConfig& config, const Camera& camera, const float VRAM_HEAP_SIZE_MB) {
+        Engine::Profiler::ScopedTimer timer("ImGui::Render");
         if (!config.editConfigInitialized) {
             config.editConfig = world.GetConfig();
             config.editConfigInitialized = true;
@@ -103,7 +105,7 @@ public:
         //     if (config.showWorldSettings) RenderWorldSettings(world, config);
         //     RenderMenuBar(config);
         // }
-        if (config.showDebugPanel) RenderDebugPanel(world, config);
+        if (config.showDebugPanel) RenderDebugPanel(world, config, VRAM_HEAP_SIZE_MB);
         if (config.showWorldSettings) RenderWorldSettings(world, config);
     }
 
@@ -164,7 +166,7 @@ private:
         ImGui::End();
     }
 
-    void RenderDebugPanel(World& world, UIConfig& config) {
+    void RenderDebugPanel(World& world, UIConfig& config, const float VRAM_HEAP_SIZE_MB) {
         ImGuiWindowFlags flags = 0;
         if (config.isGameMode) {
             flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
@@ -190,8 +192,8 @@ private:
             ImGui::Separator();
             size_t used = world.m_gpuMemory->GetUsedMemory();
             size_t total = world.m_gpuMemory->GetTotalMemory();
-            float usedMB = used / (1024.0f * 1024.0f);
-            float totalMB = total / (1024.0f * 1024.0f);
+            float usedMB = (used / 1024.0f / 1024.0f);
+            float totalMB = VRAM_HEAP_SIZE_MB;
             float ratio = (float)used / (float)total;
             
             ImGui::Text("VRAM: %.1f / %.1f MB", usedMB, totalMB);
@@ -212,13 +214,48 @@ private:
             }
             
             ImGui::Text("Active Chunks: %zu", activeChunks);
-            ImGui::Text("Total Vertices: %s", FormatNumber(totalVertices).c_str());
+            ImGui::Text("Resident Vertices: %s", FormatNumber(totalVertices).c_str());
+            //ImGui::TextColored(ImVec4(0,1,0,1), "Drawn Vertices:    %s", FormatNumber(world.m_drawnVertices).c_str());
+
+            // size_t culledChunks = 0;
+            // if (activeChunks > world.m_drawnChunks) {
+            //     culledChunks = activeChunks - world.m_drawnChunks;
+            // }
+            // ImGui::Text("Drawn Chunks:  %s", FormatNumber(world.m_drawnChunks).c_str());
+            //ImGui::Text("Culled Chunks: %s", FormatNumber(culledChunks).c_str());
             
             if (ImGui::Checkbox("Wireframe Mode", &config.showWireframe)) {
                 glPolygonMode(GL_FRONT_AND_BACK, config.showWireframe ? GL_LINE : GL_FILL);
             }
             ImGui::Checkbox("Lock Frustum (F)", &config.lockFrustum);
             if (config.lockFrustum) ImGui::TextColored(ImVec4(1,0,0,1), "FRUSTUM LOCKED");
+
+
+            // the following section corresponds to this part of the frag shader
+            // if (u_DebugMode == 1) { FragColor = vec4(v_Normal * 0.5 + 0.5, 1.0); return; }
+            // if (u_DebugMode == 2) { FragColor = vec4(vec3(v_AO), 1.0); return; }
+            // if (u_DebugMode == 3) { FragColor = vec4(fract(v_TexCoord), 0.0, 1.0); return; }
+            // and if 0 is chosen, the program tries to use the usual texture program if any
+            // else, flat colors chosen
+
+            
+            ImGui::Text("Cube Texture Debugging:");
+            if (ImGui::RadioButton("Normal Shader/Texture Program", &config.editConfig.cubeDebugMode, 0)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+            }
+            if (ImGui::RadioButton("Debug Normals", &config.editConfig.cubeDebugMode, 1)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+            }
+            if (ImGui::RadioButton("Debug AO", &config.editConfig.cubeDebugMode, 2)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+            }
+            if (ImGui::RadioButton("Debug UVs", &config.editConfig.cubeDebugMode, 3)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+            }
+            if (ImGui::RadioButton("Flat Color", &config.editConfig.cubeDebugMode, 4)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+            }
+
 
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "THREADING");
