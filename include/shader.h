@@ -10,6 +10,8 @@
 class Shader {
 public:
     unsigned int ID;
+
+    // Constructor for Vertex + Fragment Shaders
     Shader(const char* vertexPath, const char* fragmentPath) {
         std::string vertexCode, fragmentCode;
         std::ifstream vShaderFile, fShaderFile;
@@ -18,7 +20,6 @@ public:
         fShaderFile.exceptions(std::ifstream::failbit | std::ifstream::badbit);
         
         try {
-            std::cout << "[DEBUG] Loading Shader: " << vertexPath << " & " << fragmentPath << std::endl;
             vShaderFile.open(vertexPath);
             fShaderFile.open(fragmentPath);
             std::stringstream vShaderStream, fShaderStream;
@@ -34,19 +35,16 @@ public:
         const char * fShaderCode = fragmentCode.c_str();
         unsigned int vertex, fragment;
         
-        // Vertex Shader
         vertex = glCreateShader(GL_VERTEX_SHADER);
         glShaderSource(vertex, 1, &vShaderCode, NULL);
         glCompileShader(vertex);
         checkCompileErrors(vertex, "VERTEX");
         
-        // Fragment Shader
         fragment = glCreateShader(GL_FRAGMENT_SHADER);
         glShaderSource(fragment, 1, &fShaderCode, NULL);
         glCompileShader(fragment);
         checkCompileErrors(fragment, "FRAGMENT");
         
-        // Shader Program
         ID = glCreateProgram();
         glAttachShader(ID, vertex);
         glAttachShader(ID, fragment);
@@ -55,8 +53,38 @@ public:
         
         glDeleteShader(vertex);
         glDeleteShader(fragment);
+    }
 
-        std::cout << "[DEBUG] Shader Compiled Successfully. ID: " << ID << std::endl;
+    // Constructor for Compute Shader
+    Shader(const char* computePath) {
+        std::string computeCode;
+        std::ifstream cShaderFile;
+        
+        cShaderFile.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+        
+        try {
+            cShaderFile.open(computePath);
+            std::stringstream cShaderStream;
+            cShaderStream << cShaderFile.rdbuf();
+            computeCode = cShaderStream.str();
+        } catch (std::ifstream::failure& e) {
+            std::cout << "[ERROR] COMPUTE SHADER FILE NOT READ (" << computePath << "): " << e.what() << std::endl;
+        }
+
+        const char* cShaderCode = computeCode.c_str();
+        unsigned int compute;
+        
+        compute = glCreateShader(GL_COMPUTE_SHADER);
+        glShaderSource(compute, 1, &cShaderCode, NULL);
+        glCompileShader(compute);
+        checkCompileErrors(compute, "COMPUTE");
+        
+        ID = glCreateProgram();
+        glAttachShader(ID, compute);
+        glLinkProgram(ID);
+        checkCompileErrors(ID, "PROGRAM");
+        
+        glDeleteShader(compute);
     }
 
     void use() { 
@@ -64,12 +92,15 @@ public:
     }
     
     void setMat4(const std::string &name, const float* value) const {
-        GLint loc = glGetUniformLocation(ID, name.c_str());
-        if(loc == -1) {
-            // Uncomment this if you suspect uniforms aren't being found
-            // std::cout << "[WARN] Uniform '" << name << "' not found in shader!" << std::endl;
-        }
-        glUniformMatrix4fv(loc, 1, GL_FALSE, value);
+        glUniformMatrix4fv(glGetUniformLocation(ID, name.c_str()), 1, GL_FALSE, value);
+    }
+
+    void setUInt(const std::string &name, unsigned int value) const {
+        glUniform1ui(glGetUniformLocation(ID, name.c_str()), value);
+    }
+
+    void setInt(const std::string &name, int value) const {
+        glUniform1i(glGetUniformLocation(ID, name.c_str()), value);
     }
 
 private:

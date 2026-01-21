@@ -9,7 +9,10 @@
 #include <queue>
 #include <atomic>
 #include <chrono>
-#include <utility> // for std::pair
+#include <utility>
+#include <fstream>
+#include <sstream>
+#include <memory> 
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -24,12 +27,25 @@
 #include "gpu_memory.h"
 #include "packedVertex.h" 
 
+// --- GPU STRUCTURES ---
+
 struct DrawArraysIndirectCommand {
     uint32_t count;
     uint32_t instanceCount;
     uint32_t first;
     uint32_t baseInstance;
 };
+
+struct alignas(16) ChunkCandidate {
+    glm::vec4 minAABB_scale; // xyz = min, w = scale
+    glm::vec4 maxAABB_pad;   // xyz = max, w = pad
+    uint32_t firstVertex;
+    uint32_t vertexCount;
+    uint32_t pad1;
+    uint32_t pad2; // Padding to align to uvec4/vec4
+};
+
+// --- CONFIG ---
 
 struct WorldConfig {
     int seed = 1337;
@@ -157,36 +173,6 @@ inline int64_t ChunkKey(int x, int y, int z, int lod) {
     return ulod | (ux << 41) | (uz << 21) | uy;
 }
 
-struct Frustum {
-    glm::vec4 planes[6];
-    void Update(const glm::mat4& viewProj) {
-        for (int i = 0; i < 3; ++i) {
-            for (int j = 0; j < 4; ++j) {
-                planes[i * 2][j] = viewProj[j][3] + viewProj[j][i];
-                planes[i * 2 + 1][j] = viewProj[j][3] - viewProj[j][i];
-            }
-        }
-        for (int i = 0; i < 6; ++i) {
-            float length = glm::length(glm::vec3(planes[i]));
-            planes[i] /= length;
-        }
-    }
-    bool IsBoxVisible(const glm::vec3& min, const glm::vec3& max) const {
-        for (int i = 0; i < 6; i++) {
-            if (glm::dot(planes[i], glm::vec4(min.x, min.y, min.z, 1.0f)) < 0.0f &&
-                glm::dot(planes[i], glm::vec4(max.x, min.y, min.z, 1.0f)) < 0.0f &&
-                glm::dot(planes[i], glm::vec4(min.x, max.y, min.z, 1.0f)) < 0.0f &&
-                glm::dot(planes[i], glm::vec4(max.x, max.y, min.z, 1.0f)) < 0.0f &&
-                glm::dot(planes[i], glm::vec4(min.x, min.y, max.z, 1.0f)) < 0.0f &&
-                glm::dot(planes[i], glm::vec4(max.x, max.y, max.z, 1.0f)) < 0.0f &&
-                glm::dot(planes[i], glm::vec4(min.x, max.y, max.z, 1.0f)) < 0.0f &&
-                glm::dot(planes[i], glm::vec4(max.x, max.y, max.z, 1.0f)) < 0.0f)
-                return false;
-        }
-        return true;
-    }
-};
-
 class World {
 private:
     WorldConfig m_config;
@@ -207,12 +193,20 @@ private:
 
     int m_frameCounter = 0; 
     std::atomic<bool> m_shutdown{false};
-    Frustum m_frustum;
 
     std::unique_ptr<GpuMemoryManager> m_gpuMemory;
-    GLuint m_indirectBuffer = 0; 
-    GLuint m_batchSSBO = 0; 
+
+    // --- GPU DRIVEN CULLING BUFFERS ---
+    GLuint m_indirectBuffer = 0;      // Stores final DrawCommands (Output from CS)
+    GLuint m_batchSSBO = 0;           // Stores final Instance Data (vec4 position) (Output from CS)
+    GLuint m_candidateSSBO = 0;       // Stores ALL ChunkMetadata (Input to CS)
+    GLuint m_atomicCounterBuffer = 0; // Stores visible count (Parameter Buffer)
+    
     GLuint m_dummyVAO = 0; 
+    std::unique_ptr<Shader> m_cullShader;
+
+    std::vector<ChunkCandidate> m_cpuCandidates; // CPU Mirror of Candidate Buffer
+    bool m_chunksDirty = true;        // Flag to trigger upload to m_candidateSSBO
 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
@@ -238,6 +232,37 @@ private:
         return true; 
     }
 
+    void SyncCandidatesToGPU() {
+        if (!m_chunksDirty) return;
+
+        m_cpuCandidates.clear();
+        m_cpuCandidates.reserve(m_chunks.size());
+
+        for (auto& pair : m_chunks) {
+            ChunkNode* node = pair.second;
+            
+            // Only add chunks that are ready to draw
+            if (node->state != ChunkState::ACTIVE) continue;
+            if (node->gpuOffset == -1) continue; 
+            if (node->lod > 0 && IsFullyCovered(node->cx, node->cz, node->lod)) continue;
+
+            ChunkCandidate c;
+            c.minAABB_scale = glm::vec4(node->minAABB, (float)node->scale);
+            c.maxAABB_pad = glm::vec4(node->maxAABB, 0.0f);
+            c.firstVertex = (uint32_t)(node->gpuOffset / sizeof(PackedVertex));
+            c.vertexCount = (uint32_t)node->vertexCount;
+            c.pad1 = 0; c.pad2 = 0;
+
+            m_cpuCandidates.push_back(c);
+        }
+
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_candidateSSBO);
+        glBufferData(GL_SHADER_STORAGE_BUFFER, m_cpuCandidates.size() * sizeof(ChunkCandidate), m_cpuCandidates.data(), GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+        m_chunksDirty = false;
+    }
+
 public:
     World(WorldConfig config) : m_config(config), m_generator(config) {
         size_t maxChunks = 0;
@@ -249,13 +274,26 @@ public:
 
         m_gpuMemory = std::make_unique<GpuMemoryManager>(1024 * 1024 * 1024);
 
+        // 1. Output Draw Commands (Write by CS, Read by DrawIndirect)
         glCreateBuffers(1, &m_indirectBuffer);
         glNamedBufferStorage(m_indirectBuffer, maxChunks * sizeof(DrawArraysIndirectCommand), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
+        // 2. Output Batch/Offset Data (Write by CS, Read by VS)
         glCreateBuffers(1, &m_batchSSBO);
         glNamedBufferStorage(m_batchSSBO, maxChunks * sizeof(glm::vec4), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
+        // 3. Input Candidate Data (Read by CS)
+        glCreateBuffers(1, &m_candidateSSBO);
+        // Initial dummy size, resized in SyncCandidatesToGPU
+        glNamedBufferData(m_candidateSSBO, 1024, nullptr, GL_DYNAMIC_DRAW);
+
+        // 4. Atomic Counter / Parameter Buffer (Read/Write by CS, Read by DrawIndirectCount)
+        glCreateBuffers(1, &m_atomicCounterBuffer);
+        glNamedBufferStorage(m_atomicCounterBuffer, sizeof(GLuint), nullptr, GL_DYNAMIC_STORAGE_BIT);
+
         glCreateVertexArrays(1, &m_dummyVAO);
+
+        m_cullShader = std::make_unique<Shader>("./resources/CULL_FRUSTUM.glsl");
     }
 
     ~World() { 
@@ -266,7 +304,14 @@ public:
         m_shutdown = true;
         if (m_indirectBuffer) { glDeleteBuffers(1, &m_indirectBuffer); m_indirectBuffer = 0; }
         if (m_batchSSBO) { glDeleteBuffers(1, &m_batchSSBO); m_batchSSBO = 0; }
+        if (m_candidateSSBO) { glDeleteBuffers(1, &m_candidateSSBO); m_candidateSSBO = 0; }
+        if (m_atomicCounterBuffer) { glDeleteBuffers(1, &m_atomicCounterBuffer); m_atomicCounterBuffer = 0; }
         if (m_dummyVAO) { glDeleteVertexArrays(1, &m_dummyVAO); m_dummyVAO = 0; }
+        
+        if (m_cullShader) { 
+            glDeleteProgram(m_cullShader->ID); 
+            m_cullShader.reset(); 
+        }
     }
     
     const WorldConfig& GetConfig() const { return m_config; }
@@ -302,6 +347,8 @@ public:
             }
         }
 
+        bool anyChanged = false;
+
         for (ChunkNode* node : nodesToMesh) {
             if(m_shutdown) return; 
             if (node->state == ChunkState::GENERATING) {
@@ -326,16 +373,20 @@ public:
                         node->vertexCount = node->cachedMesh.size();
                         node->cachedMesh.clear(); 
                         node->cachedMesh.shrink_to_fit();
+                        anyChanged = true; 
                     } 
                 }
                 node->state = ChunkState::ACTIVE;
             }
         }
+        
+        if (anyChanged) m_chunksDirty = true;
     }
 
     void UnloadChunks(glm::vec3 cameraPos, int targetLod) {
         if(m_shutdown) return;
         std::vector<int64_t> toRemove;
+        bool anyRemoved = false;
         
         for (auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
@@ -352,6 +403,7 @@ public:
                     if (node->gpuOffset != -1) {
                         m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
                         node->gpuOffset = -1;
+                        anyRemoved = true;
                     }
                     toRemove.push_back(pair.first);
                     m_chunkPool.Release(node); 
@@ -359,49 +411,53 @@ public:
             }
         }
         for (auto k : toRemove) m_chunks.erase(k);
+        if (anyRemoved) m_chunksDirty = true;
     }
 
     void Draw(Shader& shader, const glm::mat4& viewProj) {
         if(m_shutdown) return;
-        m_frustum.Update(viewProj);
-        static std::vector<DrawArraysIndirectCommand> commands;
-        static std::vector<glm::vec4> batchOffsets;
-        commands.clear();
-        batchOffsets.clear();
 
-        int instanceID = 0;
-        for (auto& pair : m_chunks) {
-            ChunkNode* node = pair.second;
-            if (node->state != ChunkState::ACTIVE) continue;
-            if (node->gpuOffset == -1) continue; 
-            if (!m_frustum.IsBoxVisible(node->minAABB, node->maxAABB)) continue;
-            if (node->lod > 0 && IsFullyCovered(node->cx, node->cz, node->lod)) continue;
+        // 1. Update Candidate Buffer if chunks loaded/unloaded
+        SyncCandidatesToGPU();
 
-            DrawArraysIndirectCommand cmd;
-            cmd.count = (uint32_t)node->vertexCount;
-            cmd.instanceCount = 1;
-            cmd.first = (uint32_t)(node->gpuOffset / sizeof(PackedVertex)); 
-            cmd.baseInstance = instanceID; 
+        if (m_cpuCandidates.empty()) return;
 
-            commands.push_back(cmd);
-            batchOffsets.push_back(glm::vec4(node->position, (float)node->scale));
-            instanceID++;
-        }
+        // 2. Reset Atomic Counter (Visible Count)
+        const GLuint zero = 0;
+        glNamedBufferSubData(m_atomicCounterBuffer, 0, sizeof(GLuint), &zero);
+        
+        // 3. Dispatch Compute Shader
+        m_cullShader->use();
+        m_cullShader->setMat4("u_ViewProjection", glm::value_ptr(viewProj));
+        m_cullShader->setUInt("u_Count", (GLuint)m_cpuCandidates.size());
 
-        if (commands.empty()) return;
+        // Bind Buffers
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_candidateSSBO);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_indirectBuffer);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_batchSSBO);
+        glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 0, m_atomicCounterBuffer);
 
-        glNamedBufferSubData(m_indirectBuffer, 0, commands.size() * sizeof(DrawArraysIndirectCommand), commands.data());
-        glNamedBufferSubData(m_batchSSBO, 0, batchOffsets.size() * sizeof(glm::vec4), batchOffsets.data());
+        // Calculate work groups
+        int workGroups = (int)((m_cpuCandidates.size() + 63) / 64);
+        glDispatchCompute(workGroups, 1, 1);
 
-        glMemoryBarrier(GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+        // 4. Memory Barrier
+        glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_ATOMIC_COUNTER_BARRIER_BIT);
 
+        // 5. Draw
         shader.use();
         glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
+        
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_batchSSBO);
+
         glBindVertexArray(m_dummyVAO);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_indirectBuffer);
-        glMultiDrawArraysIndirect(GL_TRIANGLES, 0, (GLsizei)commands.size(), 0);
+        glBindBuffer(GL_PARAMETER_BUFFER, m_atomicCounterBuffer);
+
+        glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_cpuCandidates.size(), 0);
+
+        glBindBuffer(GL_PARAMETER_BUFFER, 0);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
         glBindVertexArray(0); 
     }
@@ -409,9 +465,6 @@ public:
     void QueueNewChunks(glm::vec3 cameraPos, int targetLod) {
         if (m_shutdown) return;
 
-        // FIXED: Use a spiral pattern (Center -> Out) instead of Loop (Left -> Right).
-        // This ensures that if the Time Budget is exceeded, we drop the FAR chunks,
-        // not the chunks on the positive X/Z axis.
         static std::vector<std::pair<int, int>> spiralOffsets;
         static std::once_flag flag;
         std::call_once(flag, [](){
@@ -421,7 +474,6 @@ public:
                     spiralOffsets.push_back({x, z});
                 }
             }
-            // Sort by distance from center
             std::sort(spiralOffsets.begin(), spiralOffsets.end(), [](const std::pair<int,int>& a, const std::pair<int,int>& b){
                 return (a.first*a.first + a.second*a.second) < (b.first*b.first + b.second*b.second);
             });
@@ -439,24 +491,12 @@ public:
         int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
         int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
 
-        // Iterate using Spiral Offset
         for (const auto& offset : spiralOffsets) {
-            // Check if offset is within current LOD radius
             if (std::abs(offset.first) > r || std::abs(offset.second) > r) continue;
-
-
-            // ********** SPRIRAL CHUNK UPDATING LIMITER ************ //
-            // Time Budget Check (2ms limit per frame per LOD)
-            // auto currTime = std::chrono::high_resolution_clock::now();
-            // auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(currTime - startTime).count();
-            // if (elapsed > 5) break; // Break loop if taking too long
-            // ********** SPRIRAL CHUNK UPDATING LIMITER ************ //
-
 
             int x = px + offset.first;
             int z = pz + offset.second;
             
-            // Calculate height range for this column
             int minH, maxH;
             m_generator.GetHeightBounds(x, z, scale, minH, maxH);
             int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
@@ -590,5 +630,6 @@ public:
         
         m_chunks.clear();
         for(int i=0; i<8; i++) { lastPx[i] = -999; lastPz[i] = -999; }
+        m_chunksDirty = true; // Trigger reset of candidate buffer
     }
 };
