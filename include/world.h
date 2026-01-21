@@ -192,26 +192,6 @@ private:
 
     friend class ImGuiManager;
 
-    bool IsFullyCovered(int cx, int cz, int currentLod) {
-        if (currentLod == 0) return false;
-        int prevLod = currentLod - 1;
-        int scaleRatio = 2; 
-        int minX = cx * scaleRatio;
-        int minZ = cz * scaleRatio;
-        int maxX = minX + 1; 
-        int maxZ = minZ + 1;
-
-        for (int x = minX; x <= maxX; x++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                int64_t key = ChunkKey(x, 0, z, prevLod);
-                auto it = m_chunks.find(key);
-                if (it == m_chunks.end()) return false; 
-                if (it->second->state != ChunkState::ACTIVE) return false; 
-            }
-        }
-        return true; 
-    }
-
 public:
     World(WorldConfig config) : m_config(config), m_generator(config) {
         size_t maxChunks = 0;
@@ -329,11 +309,40 @@ public:
                 if (node->lod != targetLod) continue;
 
                 int scale = node->scale;
-                int limit = m_config.lodRadius[targetLod] + 3; 
                 int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
                 int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+                
+                int dx = abs(node->cx - camX);
+                int dz = abs(node->cz - camZ);
+                
+                // Outer limit for this LOD
+                int outerLimit = m_config.lodRadius[targetLod] + 3; 
 
-                if (abs(node->cx - camX) > limit || abs(node->cz - camZ) > limit) {
+                bool shouldRemove = false;
+
+                // 1. Unload if outside the Outer Ring
+                if (dx > outerLimit || dz > outerLimit) {
+                    shouldRemove = true;
+                }
+
+                // 2. Unload if inside the Inner Ring (Concentric Rings / Donut)
+                // If we are LOD > 0, we must clear space for LOD-1.
+                if (targetLod > 0) {
+                    // Radius of the previous LOD in *this* LOD's coordinates.
+                    // Divide by 2 because Scale[L] = 2 * Scale[L-1]
+                    int prevRadius = m_config.lodRadius[targetLod - 1];
+                    int innerBoundary = (prevRadius / 2);
+                    
+                    // Optimization: Overlap by 1-2 chunks to prevent holes/flickering at the seam
+                    int safeZone = innerBoundary - 2; 
+
+                    // If strictly inside the safe zone (closer than the overlap), unload it
+                    if (dx < safeZone && dz < safeZone) {
+                        shouldRemove = true;
+                    }
+                }
+
+                if (shouldRemove) {
                     ChunkState s = node->state.load();
                     if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
                         toRemove.push_back(pair.first);
@@ -392,11 +401,6 @@ public:
     }
 
     void QueueNewChunks(glm::vec3 cameraPos, int targetLod) {
-        // Logic remains identical to original file...
-        // ... (Omitting full implementation for brevity as requested, logic is unchanged) ...
-        // Note: When calling newNode->Reset, ensure we set the ID
-        
-        // *Included abbreviated version of the loop logic for context*
         if (m_shutdown) return;
         Engine::Profiler::ScopedTimer timer("New Chunk Queuing:");
         
@@ -413,18 +417,6 @@ public:
             lastPz[lod] = pz;
         }
 
-        // ... [Spiral Logic Identical to original] ...
-
-        // When acquiring new node:
-        // ChunkNode* newNode = m_chunkPool.Acquire();
-        // newNode->Reset(...);
-        // newNode->id = key; // ENSURE ID IS SET HERE
-        
-        // To save tokens, I am trusting you to keep the QueueNewChunks implementation 
-        // essentially the same, just ensure newNode->id = key is set when creating a chunk.
-        
-        // RE-IMPLEMENTATION OF KEY QUEUE LOOP FOR SAFETY:
-        
         static std::vector<std::pair<int, int>> spiralOffsets;
         static std::once_flag flag;
         std::call_once(flag, [](){
@@ -443,12 +435,27 @@ public:
         int r = m_config.lodRadius[lod];
         int rSq = r * r; 
 
+        // Ring Logic Calculation
+        int minR = 0;
+        if (lod > 0) {
+            int prevR = m_config.lodRadius[lod - 1];
+            // Scale conversion: Prev LOD radius in Current LOD units is Half.
+            minR = (prevR / 2);
+            // Apply slight overlap (e.g., 1 unit) to ensure continuity
+            minR = std::max(0, minR - 1);
+        }
+
         std::shared_lock<std::shared_mutex> readLock(m_chunksMutex);
 
         for (const auto& offset : spiralOffsets) {
             int distSq = offset.first*offset.first + offset.second*offset.second;
             if (distSq > (rSq * 2 + 100)) break; 
             if (std::abs(offset.first) > r || std::abs(offset.second) > r) continue;
+
+            // Ring Check: Skip if strictly inside the inner ring
+            if (lod > 0) {
+                 if (std::abs(offset.first) < minR && std::abs(offset.second) < minR) continue;
+            }
 
             int x = px + offset.first;
             int z = pz + offset.second;
@@ -488,7 +495,7 @@ public:
                     ChunkNode* newNode = m_chunkPool.Acquire();
                     if (newNode) {
                         newNode->Reset(req.x, req.y, req.z, req.lod);
-                        newNode->id = key; // CRITICAL: Set ID for GpuCuller
+                        newNode->id = key; 
                         m_chunks[key] = newNode;
                         newNode->state = ChunkState::GENERATING;
                         m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
@@ -523,7 +530,6 @@ public:
     }
 
     void FillChunk(Chunk& chunk, int cx, int cy, int cz, int scale) {
-        // [Logic Unchanged from uploaded file]
         chunk.worldX = cx * CHUNK_SIZE * scale;
         chunk.worldY = cy * CHUNK_SIZE * scale;
         chunk.worldZ = cz * CHUNK_SIZE * scale;
@@ -593,7 +599,7 @@ public:
             for (auto& pair : m_chunks) {
                 ChunkNode* node = pair.second;
                 if (node->gpuOffset != -1) {
-                    m_culler->RemoveChunk(node->id); // [NEW]
+                    m_culler->RemoveChunk(node->id); 
                     m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
                     node->gpuOffset = -1;
                 }
