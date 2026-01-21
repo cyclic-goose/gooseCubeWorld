@@ -1,55 +1,93 @@
 #version 460 core
 
-// 0 = Standard, 1 = Normals
-uniform int u_DebugMode;
+// --- UNIFORMS ---
+uniform sampler2DArray u_Textures;
+//uniform bool u_UseTextures;        // New toggle: false = nice debug colors, true = textures
+uniform int u_DebugMode;           // 0=Default, 1=Normals, 2=AO, 3=UVs
 
+// --- INPUTS (Must match Vertex Shader) ---
 in vec3 v_Normal;
 in vec2 v_TexCoord;
-in float v_TexID;
-in vec3 v_Color; // Now carries Tint from Vertex Shader
-in float v_AO; 
+in vec3 v_Color; // Tint from vertex shader
+in float v_AO;   // 0.0 (Occluded/Corner) -> 1.0 (Open/Face)
+flat in int v_TexID;
 
 out vec4 FragColor;
 
-// Helper to get a debug color for missing textures
-vec3 GetColorFromID(float id) {
-    int i = int(id);
-    if (i == 1) return vec3(0.2, 0.8, 0.2); // Green (Grass)
-    if (i == 2) return vec3(0.6, 0.4, 0.2); // Brown (Dirt)
-    if (i == 3) return vec3(0.5, 0.5, 0.5); // Grey (Stone)
-    if (i == 4) return vec3(0.9, 0.9, 0.9); // White (Snow)
-    if (i == 5) return vec3(0.8, 0.7, 0.5); // Sand
-    return vec3(1.0, 0.0, 1.0);             // Magenta (Error)
+// --- FALLBACK COLORS ---
+vec3 GetFallbackColor(int id) {
+    // Map your Block IDs to colors here
+    switch (id) {
+        case 1: return vec3(0.2, 0.7, 0.2); // Grass (Green)
+        case 2: return vec3(0.45, 0.3, 0.2); // Dirt (Brown)
+        case 3: return vec3(0.6, 0.6, 0.6); // Stone (Grey)
+        case 4: return vec3(0.95, 0.95, 0.95); // Snow (White)
+        case 5: return vec3(0.8, 0.7, 0.5); // Sand (Beige)
+        default: return vec3(1.0, 0.0, 1.0); // Magenta (Missing/Error)
+    }
 }
 
 void main()
 {
-    // --- DEBUG: NORMALS ---
-    if (u_DebugMode == 1) {
-        FragColor = vec4(v_Normal * 0.5 + 0.5, 1.0);
-        return;
+    // --- DEBUG MODES ---
+    if (u_DebugMode == 1) { FragColor = vec4(v_Normal * 0.5 + 0.5, 1.0); return; }
+    if (u_DebugMode == 2) { FragColor = vec4(vec3(v_AO), 1.0); return; }
+    if (u_DebugMode == 3) { FragColor = vec4(fract(v_TexCoord), 0.0, 1.0); return; }
+
+    // --- 1. MATERIAL COLOR ---
+    vec4 albedo;
+
+    if (u_DebugMode == 0) {
+        // ID 0 is Air, so Texture Layer 0 corresponds to Block ID 1
+        float layer = float(max(0, v_TexID - 1)); 
+        albedo = texture(u_Textures, vec3(v_TexCoord, layer));
+        
+        // Alpha Cutout (e.g. for flowers or leaves)
+        if (albedo.a < 0.1) discard;
+    } 
+    else {
+        albedo = vec4(GetFallbackColor(v_TexID), 1.0);
+
+        // Procedural Edge Highlight (Lego Effect)
+        vec2 grid = fract(v_TexCoord);
+        vec2 dist = min(grid, 1.0 - grid);
+        float edgeFactor = min(dist.x, dist.y);
+        
+        // Subtle darkened edge for block definition
+        if (edgeFactor < 0.02) albedo.rgb *= 0.85;
     }
 
-    // --- STANDARD RENDER ---
+    // --- 2. LIGHTING MODEL ---
     
-    // 1. Base Color (Texture Placeholder)
-    // Eventually replace GetColorFromID with: texture(u_TextureArray, vec3(v_TexCoord, v_TexID))
-    vec3 albedo = GetColorFromID(v_TexID);
+    // A. Sun Direction
+    // Changed from top-down (0.8 Y) to an angle to light up block faces better
+    vec3 sunDir = normalize(vec3(0.5, 0.7, 0.5)); 
+    vec3 sunColor = vec3(1.0, 0.98, 0.9);
     
-    // Add the grid pattern back for depth perception
-    vec2 uv = v_TexCoord * 2.0; // Scale up grid
-    bool pattern = (mod(floor(uv.x) + floor(uv.y), 2.0) == 0.0);
-    if (!pattern) albedo *= 0.9; // Slight checkerboard
+    // Diffuse term
+    float diff = max(dot(v_Normal, sunDir), 0.0);
 
-    // 2. Lighting (Simple Lambert)
-    vec3 sunDir = normalize(vec3(0.2, 1.0, 0.3));
-    float diff = max(dot(v_Normal, sunDir), 0.3); // 0.3 ambient
+    // B. Hemispheric Ambient (Fixes "Dark Sky" look)
+    // Brighter sky color and significantly brighter ground bounce
+    vec3 skyColor = vec3(0.65, 0.8, 0.95);   
+    vec3 groundColor = vec3(0.25, 0.25, 0.3); 
+    
+    float hemiMix = v_Normal.y * 0.5 + 0.5; // Map -1..1 to 0..1
+    vec3 ambient = mix(groundColor, skyColor, hemiMix) * 0.7; // Boosted intensity to 0.7
 
-    // 3. Ambient Occlusion
-    // Remap AO (0.0 - 1.0) to (0.4 - 1.0) so corners aren't pitch black
-    float aoIntensity = 0.4 + (v_AO * 0.6);
+    // C. Ambient Occlusion
+    // Remap AO (0.0-1.0) to (0.3-1.0) to prevent pitch black corners
+    float aoFactor = mix(0.3, 1.0, v_AO);
 
-    vec3 finalColor = albedo * diff * aoIntensity;
+    // D. Combine
+    // Sun * 1.1 makes the sunlit parts pop more
+    vec3 totalLight = (ambient * aoFactor) + (sunColor * diff * 1.1 * aoFactor);
 
-    FragColor = vec4(finalColor, 1.0);
+    // --- 3. FINAL COMPOSITION ---
+    vec3 finalColor = albedo.rgb * v_Color * totalLight;
+
+    // Gamma Correction (Important for vibrant colors)
+    finalColor = pow(finalColor, vec3(1.0 / 2.2));
+
+    FragColor = vec4(finalColor, albedo.a);
 }

@@ -227,7 +227,7 @@ int main() {
     glClearDepth(0.0f);     
     glEnable(GL_CULL_FACE); 
     glCullFace(GL_BACK);
-    glClearColor(0.53f, 0.81f, 0.92f, 1.0f); 
+    glClearColor(0.53f, 0.81f, 0.22f, 1.0f); 
     
     { 
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
@@ -235,24 +235,28 @@ int main() {
         WorldConfig globalConfig;
         globalConfig.VRAM_HEAP_ALLOCATION_MB = 1024; ////////////// ****************** THIS DICTATES HOW MUCH MEMORY ALLOCATED TO VRAM
         RenderLoadingScreen(window, globalConfig.VRAM_HEAP_ALLOCATION_MB);
-        // 
-        // globalConfig.lodRadius[0] = 3;   
-        // globalConfig.lodRadius[1] = 6;  
-        // globalConfig.lodRadius[2] = 6;   
-        // globalConfig.lodRadius[3] = 6;   
-        // globalConfig.lodRadius[4] = 6;  
-        // globalConfig.lodRadius[5] = 12; 
-        // globalConfig.lodRadius[6] = 12; 
-        // globalConfig.lodRadius[7] = 12; 
+        
+        // We can call this the development debug LOD settings since the app will boot faster
         globalConfig.lodCount = 7;
-        // new radii
-        globalConfig.lodRadius[0] = 6;   
-        globalConfig.lodRadius[1] = 12;  
-        globalConfig.lodRadius[2] = 16;   
-        globalConfig.lodRadius[3] = 20;   
-        globalConfig.lodRadius[4] = 20;  
-        globalConfig.lodRadius[5] = 20; 
-        globalConfig.lodRadius[6] = 32; 
+        globalConfig.lodRadius[0] = 3;   
+        globalConfig.lodRadius[1] = 6;  
+        globalConfig.lodRadius[2] = 6;   
+        globalConfig.lodRadius[3] = 6;   
+        globalConfig.lodRadius[4] = 6;  
+        globalConfig.lodRadius[5] = 12; 
+        globalConfig.lodRadius[6] = 12; 
+        globalConfig.lodRadius[7] = 12; 
+        
+        // Higher LOD in general more expensive
+        // globalConfig.lodCount = 7;
+        // // new radii
+        // globalConfig.lodRadius[0] = 6;   
+        // globalConfig.lodRadius[1] = 12;  
+        // globalConfig.lodRadius[2] = 16;   
+        // globalConfig.lodRadius[3] = 20;   
+        // globalConfig.lodRadius[4] = 20;  
+        // globalConfig.lodRadius[5] = 20; 
+        // globalConfig.lodRadius[6] = 32; 
         //globalConfig.lodRadius[7] = 12; 
 
 
@@ -277,8 +281,6 @@ int main() {
             Engine::Profiler::Get().DrawUI(appState.isGameMode);
 
             
-            // CLEAR 
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             
             // Recalc mvp
             glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
@@ -290,6 +292,9 @@ int main() {
                 lockedCullMatrix = viewProj;
             }
             
+            // CLEAR 
+            glClearColor(0.53f, 0.81f, 0.91f, 1.0f); 
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             // RENDER WORLD
             // Draw with separate ViewProj for Rendering and Culling
             world.Draw(worldShader, viewProj, lockedCullMatrix);

@@ -59,7 +59,7 @@ struct WorldConfig {
     float VRAM_HEAP_ALLOCATION_MB = 1024;
 
     // debug
-    bool viewNormals = false;
+    int cubeDebugMode = 4; // a value of zero means run the normal shader program 
 };
 
 // ================================================================================================
@@ -330,8 +330,8 @@ public:
         m_textureArrayID = textureID;
     }
 
-    void setViewNormals(bool mode) { 
-        m_config.viewNormals = mode;
+    void setCubeDebugMode(int mode) { 
+        m_config.cubeDebugMode = mode;
     }
 
     // // Toggles between 0 and 1
@@ -675,8 +675,8 @@ public:
             glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
 
             // View normals by activating Frag shader debug uniform
-            // 0 = Normal, 1 = Debug Normals. 
-            glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config.viewNormals);
+            // 0 = Normal, 1 = Debug Normals
+            glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config.cubeDebugMode);
             
             // Bind Persistent Vertex Storage (SSBO Binding 0)
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());

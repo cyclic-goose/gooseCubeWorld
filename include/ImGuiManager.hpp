@@ -230,9 +230,30 @@ private:
             ImGui::Checkbox("Lock Frustum (F)", &config.lockFrustum);
             if (config.lockFrustum) ImGui::TextColored(ImVec4(1,0,0,1), "FRUSTUM LOCKED");
 
-            if (ImGui::Checkbox("Debug Normals", &config.editConfig.viewNormals)) {
-                // this world setting does actually need to reflect in the actual world, for the other settings, they are saved in an instance here for the Regenerate button
-                world.setViewNormals(config.editConfig.viewNormals);
+
+            // the following section corresponds to this part of the frag shader
+            // if (u_DebugMode == 1) { FragColor = vec4(v_Normal * 0.5 + 0.5, 1.0); return; }
+            // if (u_DebugMode == 2) { FragColor = vec4(vec3(v_AO), 1.0); return; }
+            // if (u_DebugMode == 3) { FragColor = vec4(fract(v_TexCoord), 0.0, 1.0); return; }
+            // and if 0 is chosen, the program tries to use the usual texture program if any
+            // else, flat colors chosen
+
+            
+            ImGui::Text("Cube Texture Debugging:");
+            if (ImGui::RadioButton("Normal Shader/Texture Program", &config.editConfig.cubeDebugMode, 0)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+            }
+            if (ImGui::RadioButton("Debug Normals", &config.editConfig.cubeDebugMode, 1)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+            }
+            if (ImGui::RadioButton("Debug AO", &config.editConfig.cubeDebugMode, 2)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+            }
+            if (ImGui::RadioButton("Debug UVs", &config.editConfig.cubeDebugMode, 3)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+            }
+            if (ImGui::RadioButton("Flat Color", &config.editConfig.cubeDebugMode, 4)){
+                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
             }
 
 
