@@ -157,14 +157,14 @@ public:
         // Surface Logic
         if (wy == heightAtXZ) {
             // Top Block
-            if (wy > 55) return 4; // Snow
-            if (wy > 35) return 1; // Grass
+            if (wy > 550) return 4; // Snow
+            if (wy > 350) return 1; // Grass
             return 2;              // Sand/Dirt
         } 
         else if (wy > heightAtXZ - (4 * lodScale)) {
             // Sub-surface (4 blocks deep)
-            if (wy > 55) return 4; // Snow
-            if (wy > 35) return 2; // Dirt
+            if (wy > 550) return 4; // Snow
+            if (wy > 350) return 2; // Dirt
             return 5;              // SandStone
         }
         

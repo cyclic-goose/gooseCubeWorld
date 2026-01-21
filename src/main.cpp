@@ -12,6 +12,10 @@
 #include "ImGuiManager.hpp"
 #include "profiler.h"
 
+// --- IMAGE LOADER IMPLEMENTATION ---
+// #define STB_IMAGE_IMPLEMENTATION
+#include "texture_manager.h" // Includes stb_image.h internally
+
 // --- CONFIGURATION ---
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
@@ -261,6 +265,24 @@ int main() {
 
 
         World world(globalConfig);
+
+
+
+        // --- LOAD TEXTURES ---
+        // Your shader subtracts 1 from the ID (max(0, TexID - 1))
+        // So BlockID 1 maps to Array Index 0.
+        std::vector<std::string> texturePaths = {
+            "resources/textures/dirt1.jpg",   // ID 1
+            "resources/textures/dirt1.jpg",    // ID 2
+            "resources/textures/dirt1.jpg",   // ID 3
+            "resources/textures/snow.png",    // ID 4
+            "resources/textures/sand.png"     // ID 5
+        };
+
+        // Ensure you have these images in resources/textures/ !
+        GLuint texArray = TextureManager::LoadTextureArray(texturePaths);
+        world.SetTextureArray(texArray);
+
 
         while (!glfwWindowShouldClose(window)) {
             float currentFrame = (float)glfwGetTime();
