@@ -230,6 +230,9 @@ private:
             ImGui::Checkbox("Lock Frustum (F)", &config.lockFrustum);
             if (config.lockFrustum) ImGui::TextColored(ImVec4(1,0,0,1), "FRUSTUM LOCKED");
 
+            if (world.GetLODFreeze())
+                ImGui::TextColored(ImVec4(1,0,0,1), "CHUNK/LOD Loading Frozen (O to toggle)");
+
 
             // the following section corresponds to this part of the frag shader
             // if (u_DebugMode == 1) { FragColor = vec4(v_Normal * 0.5 + 0.5, 1.0); return; }
@@ -292,12 +295,13 @@ private:
                 ImGui::SliderInt("Height (Chunks)", &config.editConfig.worldHeightChunks, 8, 128);
                 ImGui::TextColored(ImVec4(0.7,0.7,0.7,1), "Note: Height changes require full reload.");
             }
+            
 
             if (ImGui::CollapsingHeader("LOD Settings")) {
                 ImGui::SliderInt("LOD Count", &config.editConfig.lodCount, 1, 8);
                 for (int i = 0; i < config.editConfig.lodCount; i++) {
                     std::string label = "LOD " + std::to_string(i) + " Radius";
-                    ImGui::SliderInt(label.c_str(), &config.editConfig.lodRadius[i], 1, 64);
+                    ImGui::SliderInt(label.c_str(), &config.editConfig.lodRadius[i], 0, 64);
                 }
             }
 

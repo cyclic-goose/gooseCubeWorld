@@ -488,7 +488,7 @@ public:
                 int dz = abs(node->cz - camZ);
                 
                 // 1. UNLOAD TOO FAR (Outer Radius)
-                int outerLimit = m_config.lodRadius[targetLod] + 3; 
+                int outerLimit = m_config.lodRadius[targetLod]; // If you see gaps, add 1 or two here but has a high probability of causing z-fighting/flickering
                 bool shouldRemove = false;
                 if (dx > outerLimit || dz > outerLimit) {
                     shouldRemove = true;
@@ -499,7 +499,7 @@ public:
                 if (targetLod > 0) {
                     int prevRadius = m_config.lodRadius[targetLod - 1];
                     // Radius of LOD(n-1) in LOD(n) coordinates is exactly half.
-                    int innerBoundary = (prevRadius / 2);
+                    int innerBoundary = ((prevRadius+1)/ 2);
                     
                     if (dx < innerBoundary && dz < innerBoundary) {
                         shouldRemove = true;
@@ -576,7 +576,7 @@ public:
         int minR = 0;
         if (lod > 0) {
             int prevR = m_config.lodRadius[lod - 1];
-            minR = (prevR / 2); 
+            minR = ((prevR +1 )/ 2); 
         }
 
         std::shared_lock<std::shared_mutex> readLock(m_chunksMutex);

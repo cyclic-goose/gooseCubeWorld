@@ -252,15 +252,15 @@ int main() {
         RenderLoadingScreen(window, globalConfig.VRAM_HEAP_ALLOCATION_MB);
         
         // We can call this the development debug LOD settings since the app will boot faster
-        globalConfig.lodCount = 7;
+        globalConfig.lodCount = 4;
         globalConfig.lodRadius[0] = 3;   
-        globalConfig.lodRadius[1] = 6;  
-        globalConfig.lodRadius[2] = 7;   
-        globalConfig.lodRadius[3] = 8;   
-        globalConfig.lodRadius[4] = 9;  
-        globalConfig.lodRadius[5] = 10; 
-        globalConfig.lodRadius[6] = 11; 
-        globalConfig.lodRadius[7] = 12; 
+        globalConfig.lodRadius[1] = 7;  
+        globalConfig.lodRadius[2] = 11;   
+        globalConfig.lodRadius[3] = 19;   
+        //globalConfig.lodRadius[4] = 3;  
+        //globalConfig.lodRadius[5] = 3; 
+        //globalConfig.lodRadius[6] = 3; 
+        //globalConfig.lodRadius[7] = 3; 
         
         // Higher LOD in general more expensive
         // globalConfig.lodCount = 7;
