@@ -831,35 +831,6 @@ public:
     //                                      WORKER TASKS
     // ================================================================================================
 private:
-// older version, new version is at the top
-    // bool AreChildrenReady(int cx, int cy, int cz, int lod) {
-    //     if (lod == 0) return true; // Lowest LOD has no children
-        
-    //     int childLod = lod - 1;
-    //     // A chunk at LOD N (coord x) covers LOD N-1 coords [2x, 2x+1]
-    //     int startX = cx * 2;
-    //     int startY = cy * 2;
-    //     int startZ = cz * 2;
-
-    //     // Check all 8 children
-    //     for (int x = 0; x < 2; x++) {
-    //         for (int y = 0; y < 2; y++) {
-    //             for (int z = 0; z < 2; z++) {
-    //                 int64_t key = ChunkKey(startX + x, startY + y, startZ + z, childLod);
-                    
-    //                 // Note: We are already holding a Read Lock (shared_lock) in UnloadChunks,
-    //                 // so calling find() here is thread-safe.
-    //                 auto it = m_chunks.find(key);
-                    
-    //                 // If child is missing or still generating/meshing, we are NOT ready.
-    //                 if (it == m_chunks.end() || it->second->state != ChunkState::ACTIVE) {
-    //                     return false;
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     return true;
-    // }
 
 
     void Task_Generate(ChunkNode* node) {
