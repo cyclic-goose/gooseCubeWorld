@@ -230,6 +230,12 @@ private:
             ImGui::Checkbox("Lock Frustum (F)", &config.lockFrustum);
             if (config.lockFrustum) ImGui::TextColored(ImVec4(1,0,0,1), "FRUSTUM LOCKED");
 
+            if (ImGui::Checkbox("Debug Normals", &config.editConfig.viewNormals)) {
+                // this world setting does actually need to reflect in the actual world, for the other settings, they are saved in an instance here for the Regenerate button
+                world.setViewNormals(config.editConfig.viewNormals);
+            }
+
+
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "THREADING");
             ImGui::Separator();

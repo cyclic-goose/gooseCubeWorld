@@ -15,7 +15,7 @@ out vec3 v_Normal;
 out vec2 v_TexCoord;
 out float v_TexID;
 out vec3 v_Color;
-out float v_AO; // Pass AO to fragment if needed
+out float v_AO; 
 
 vec3 getCubeNormal(int i) {
     const vec3 normals[6] = vec3[](
@@ -32,7 +32,6 @@ void main() {
     uint data = packedVertices[gl_VertexID];
 
     // 2. Unpack
-    // Offset -8.0 matches the C++ +8.0 offset
     float x = float(bitfieldExtract(data, 0,  6)) - 8.0;
     float y = float(bitfieldExtract(data, 6,  6)) - 8.0;
     float z = float(bitfieldExtract(data, 12, 6)) - 8.0;
@@ -50,7 +49,7 @@ void main() {
     vec3 trueWorldPos = (localPos * scale) + chunkOffset;
     vec3 renderPos = trueWorldPos;
 
-    // Sinking Logic (Anti-shimmer for far LODs)
+    // Sinking Logic
     if (scale > 1.0) {
         renderPos.y -= (scale * 2.0); 
     }
@@ -58,7 +57,8 @@ void main() {
     v_Normal = getCubeNormal(normIndex);
     v_TexID = float(texID);
     
-    // 0..3 -> 0.0..1.0
+    // Unpack AO: 0..3 -> 0.0..1.0
+    // 0 = Darkest (Corner), 3 = Brightest (Face)
     v_AO = float(aoVal) / 3.0; 
     
     // UV Logic
@@ -66,7 +66,8 @@ void main() {
     else if (abs(v_Normal.y) > 0.5) v_TexCoord = trueWorldPos.xz;
     else v_TexCoord = trueWorldPos.xy;
 
-    v_Color = (v_Normal * 0.5 + 0.5) * (0.5 + (v_AO * 0.5)); 
+    // Default tint (White). We apply lighting/AO in Fragment shader now.
+    v_Color = vec3(1.0); 
 
     gl_Position = u_ViewProjection * vec4(renderPos, 1.0);
 }

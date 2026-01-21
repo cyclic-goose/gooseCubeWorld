@@ -57,6 +57,9 @@ struct WorldConfig {
     bool enableCaves = false;     
     float caveThreshold = 0.5f; 
     float VRAM_HEAP_ALLOCATION_MB = 1024;
+
+    // debug
+    bool viewNormals = false;
 };
 
 // ================================================================================================
@@ -287,6 +290,8 @@ private:
 
     friend class ImGuiManager;
 
+    //bool m_viewNormals = false;
+
 public:
     // ================================================================================================
     //                                     LIFECYCLE
@@ -324,6 +329,15 @@ public:
     void SetTextureArray(GLuint textureID) {
         m_textureArrayID = textureID;
     }
+
+    void setViewNormals(bool mode) { 
+        m_config.viewNormals = mode;
+    }
+
+    // // Toggles between 0 and 1
+    // void ToggleViewNormals() { 
+    //     m_config.viewNormals = !m_config.viewNormals; 
+    // }
     
     const WorldConfig& GetConfig() const { return m_config; }
 
@@ -659,9 +673,15 @@ public:
 
             shader.use();
             glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
+
+            // View normals by activating Frag shader debug uniform
+            // 0 = Normal, 1 = Debug Normals. 
+            glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config.viewNormals);
             
             // Bind Persistent Vertex Storage (SSBO Binding 0)
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
+
+            
             
             // --- TEXTURE ARRAY BINDING ---
             // Ensure your shader has: uniform sampler2DArray u_Textures;
