@@ -25,6 +25,11 @@ bool firstMouse = true;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
+// Debug Logic
+bool lockFrustum = false;
+bool fKeyPressed = false;
+glm::mat4 lockedCullMatrix;
+
 // 1. GLOBAL GUI MANAGERS
 ImGuiManager gui;
 UIConfig appState; 
@@ -102,6 +107,16 @@ void processInput(GLFWwindow *window, World& world) {
         world.Reload(appState.editConfig);
         rPressed = true;
     } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) rPressed = false;
+
+    // 5. F: Freeze Frustum
+    if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS) {
+        if (!fKeyPressed) {
+            lockFrustum = !lockFrustum;
+            fKeyPressed = true;
+            std::cout << "[DEBUG] Frustum Lock: " << (lockFrustum ? "ON" : "OFF") << std::endl;
+        }
+    } else { fKeyPressed = false; }
+
 }
 
 
@@ -222,6 +237,13 @@ int main() {
             world.Update(camera.Position);
 
             gui.BeginFrame();
+            // --- DEBUG UI EXTENSION ---
+            ImGui::Begin("Debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+            ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+            ImGui::Checkbox("Lock Frustum (F)", &lockFrustum);
+            if (lockFrustum) ImGui::TextColored(ImVec4(1,0,0,1), "FRUSTUM LOCKED");
+            ImGui::End();
+
             gui.RenderUI(world, appState, camera);
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -230,7 +252,13 @@ int main() {
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
 
-            world.Draw(worldShader, viewProj);
+            // Handle Frustum Locking Logic
+            if (!lockFrustum) {
+                lockedCullMatrix = viewProj;
+            }
+
+            // Draw with separate ViewProj for Rendering and Culling
+            world.Draw(worldShader, viewProj, lockedCullMatrix);
             gui.EndFrame();
 
             glfwSwapBuffers(window);
