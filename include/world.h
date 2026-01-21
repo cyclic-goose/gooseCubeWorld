@@ -40,7 +40,7 @@
 
 struct WorldConfig {
     int seed = 1337;
-    int worldHeightChunks = 32;
+    int worldHeightChunks = 64;
     int lodCount = 5; 
     
     // LOD Radii: Defines the distance for each Detail Level.
@@ -645,7 +645,7 @@ public:
         // 1. COMPUTE PASS (CULLING)
         // Filters visible chunks into the Indirect Buffer
         {
-            Engine::Profiler::ScopedTimer timerGPU("GPU: Frustum Culling");
+            Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
             //Engine::Profiler::ScopedTimer timerGPU("GPU: Culling Compute"); 
             m_culler->Cull(cullViewProj, m_gpuMemory->GetID());
             Engine::Profiler::Get().EndGPU();
@@ -654,7 +654,7 @@ public:
         // 2. GEOMETRY PASS
         // MultiDrawIndirect using the buffer generated above
         {
-            Engine::Profiler::ScopedTimer timerGPU("GPU: Geometry Draw");
+            Engine::Profiler::Get().BeginGPU("GPU: MDI DRAW"); 
 
             shader.use();
             glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));

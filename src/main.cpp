@@ -234,16 +234,27 @@ int main() {
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         
         WorldConfig globalConfig;
-        globalConfig.lodCount = 8; 
-        globalConfig.lodRadius[0] = 3;   
-        globalConfig.lodRadius[1] = 6;  
-        globalConfig.lodRadius[2] = 6;   
-        globalConfig.lodRadius[3] = 6;   
-        globalConfig.lodRadius[4] = 8;  
-        globalConfig.lodRadius[5] = 12; 
-        globalConfig.lodRadius[6] = 14; 
-        globalConfig.lodRadius[7] = 16; 
-        
+        // 
+        // globalConfig.lodRadius[0] = 3;   
+        // globalConfig.lodRadius[1] = 6;  
+        // globalConfig.lodRadius[2] = 6;   
+        // globalConfig.lodRadius[3] = 6;   
+        // globalConfig.lodRadius[4] = 6;  
+        // globalConfig.lodRadius[5] = 12; 
+        // globalConfig.lodRadius[6] = 12; 
+        // globalConfig.lodRadius[7] = 12; 
+        globalConfig.lodCount = 7;
+        // new radii
+        globalConfig.lodRadius[0] = 6;   
+        globalConfig.lodRadius[1] = 12;  
+        globalConfig.lodRadius[2] = 16;   
+        globalConfig.lodRadius[3] = 20;   
+        globalConfig.lodRadius[4] = 20;  
+        globalConfig.lodRadius[5] = 20; 
+        globalConfig.lodRadius[6] = 32; 
+        //globalConfig.lodRadius[7] = 12; 
+
+
         World world(globalConfig);
 
         while (!glfwWindowShouldClose(window)) {
