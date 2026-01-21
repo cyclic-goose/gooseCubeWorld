@@ -28,7 +28,7 @@
 #include "gpu_memory.h"
 #include "packedVertex.h"
 #include "profiler.h"
-#include "gpu_culler.h" // [NEW] Integrated GPU Culler
+#include "gpu_culler.h" 
 
 // --- CONFIG ---
 struct WorldConfig {
@@ -60,7 +60,7 @@ struct ChunkNode {
     
     long long gpuOffset = -1; 
     size_t vertexCount = 0;
-    int64_t id; // Added ID for easier tracking
+    int64_t id; 
 
     glm::vec3 minAABB;
     glm::vec3 maxAABB;
@@ -177,6 +177,11 @@ private:
     // Used for tracking movement per LOD
     int lastPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
     int lastPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
+    
+    // [OPTIMIZATION] Separate tracking for Unloading to prevent redundant O(N) scans
+    int lastUnloadPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
+    int lastUnloadPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
+
     bool m_lodComplete[8] = {false};
 
     int m_frameCounter = 0; 
@@ -184,7 +189,7 @@ private:
 
     std::unique_ptr<GpuMemoryManager> m_gpuMemory;
 
-    // --- GPU DRIVEN CULLING (REPLACED OLD SYSTEM) ---
+    // --- GPU DRIVEN CULLING ---
     std::unique_ptr<GpuCuller> m_culler;
     GLuint m_dummyVAO = 0; 
 
@@ -225,6 +230,16 @@ public:
 
     void Update(glm::vec3 cameraPos) {
         if (m_shutdown) return;
+        
+        // --- AUTO-DEFRAG / RELOAD ---
+        // If fragmentation gets too high, force a reload to clean the GPU heap.
+        // NOTE: Assumes GpuMemoryManager has GetFragmentationRatio(). 
+        // If not, please implement it or remove this check.
+        if (m_gpuMemory->GetFragmentationRatio() > 0.6f) { 
+             Reload(m_config);
+             return;
+        }
+
         ProcessQueues(); 
         
         // --- OPTIMIZATION: Process ALL LODs every frame ---
@@ -248,15 +263,15 @@ public:
             std::lock_guard<std::mutex> lock(m_queueMutex);
             
             // INCREASED LIMITS:
-            // Process significantly more items per frame to clear the backlog
-            int limitGen = 512; 
+            // "Enable everything to queue as much as possible"
+            int limitGen = 1024; // Was 512
             while (!m_generatedQueue.empty() && limitGen > 0) {
                 nodesToMesh.push_back(m_generatedQueue.front());
                 m_generatedQueue.pop();
                 limitGen--;
             }
             
-            int limitUpload = 256; 
+            int limitUpload = 512; // Was 256
             while (!m_meshedQueue.empty() && limitUpload > 0) {
                 nodesToUpload.push_back(m_meshedQueue.front());
                 m_meshedQueue.pop();
@@ -289,7 +304,6 @@ public:
                         node->cachedMesh.clear(); 
                         node->cachedMesh.shrink_to_fit();
                         
-                        // [NEW] REGISTER WITH GPU CULLER
                         m_culler->AddOrUpdateChunk(
                             node->id, 
                             node->minAABB, 
@@ -305,8 +319,24 @@ public:
     }
 
     void UnloadChunks(glm::vec3 cameraPos, int targetLod) {
+        //Engine::Profiler::ScopedTimer timer("Chunk Unloading");
         if(m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("Chunk Unloading");
+        
+        int scale = 1 << targetLod;
+        int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
+        int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+
+        // --- OPTIMIZATION: Early Exit ---
+        // If we haven't crossed a chunk boundary for this LOD since last check, 
+        // the set of chunks to unload (based on distance) cannot have changed.
+        if (camX == lastUnloadPx[targetLod] && camZ == lastUnloadPz[targetLod]) {
+            return;
+        }
+
+        // Update tracking
+        lastUnloadPx[targetLod] = camX;
+        lastUnloadPz[targetLod] = camZ;
+        
         std::vector<int64_t> toRemove;
         
         {
@@ -314,10 +344,6 @@ public:
             for (auto& pair : m_chunks) {
                 ChunkNode* node = pair.second;
                 if (node->lod != targetLod) continue;
-
-                int scale = node->scale;
-                int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
-                int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
                 
                 int dx = abs(node->cx - camX);
                 int dz = abs(node->cz - camZ);
@@ -395,7 +421,7 @@ public:
 
     void QueueNewChunks(glm::vec3 cameraPos, int targetLod) {
         if (m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("New Chunk Queuing:");
+        //Engine::Profiler::ScopedTimer timer("New Chunk Queuing:");
         
         int lod = targetLod;
         int scale = 1 << lod;
@@ -476,7 +502,7 @@ public:
         std::sort(missing.begin(), missing.end(), [](const ChunkRequest& a, const ChunkRequest& b){ return a.distSq < b.distSq; });
 
         int queued = 0;
-        int MAX_TASKS = 2000; // Increased massively from 128
+        int MAX_TASKS = 2000; 
         
         if (!missing.empty()) {
             std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
@@ -603,6 +629,8 @@ public:
         for(int i=0; i<8; i++) { 
             lastPx[i] = -999; 
             lastPz[i] = -999; 
+            lastUnloadPx[i] = -999;
+            lastUnloadPz[i] = -999;
             m_lodComplete[i] = false; 
         }
     }
