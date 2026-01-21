@@ -1,7 +1,8 @@
 #version 460 core
 
+// Binding 0 is now an array of uints (4 bytes), not uvec2 (8 bytes)
 layout (std430, binding = 0) readonly buffer VoxelData {
-    uvec2 packedVertices[];
+    uint packedVertices[];
 };
 
 layout (std430, binding = 1) readonly buffer ChunkOffsets {
@@ -14,6 +15,7 @@ out vec3 v_Normal;
 out vec2 v_TexCoord;
 out float v_TexID;
 out vec3 v_Color;
+out float v_AO; // Pass AO to fragment if needed
 
 vec3 getCubeNormal(int i) {
     const vec3 normals[6] = vec3[](
@@ -26,29 +28,29 @@ vec3 getCubeNormal(int i) {
 }
 
 void main() {
-    uvec2 rawData = packedVertices[gl_VertexID];
+    // 1. Fetch 32-bit Data
+    uint data = packedVertices[gl_VertexID];
+
+    // 2. Unpack
+    // Offset -8.0 matches the C++ +8.0 offset
+    float x = float(bitfieldExtract(data, 0,  6)) - 8.0;
+    float y = float(bitfieldExtract(data, 6,  6)) - 8.0;
+    float z = float(bitfieldExtract(data, 12, 6)) - 8.0;
     
-    // Unpack with 128 offset
-    float x = float(bitfieldExtract(rawData.x, 0,  8)) - 128.0;
-    float y = float(bitfieldExtract(rawData.x, 8,  8)) - 128.0;
-    float z = float(bitfieldExtract(rawData.x, 16, 8)) - 128.0;
-    
-    int normIndex = int(bitfieldExtract(rawData.x, 24, 3));
-    int texID = int(bitfieldExtract(rawData.y, 0, 16));
+    int normIndex = int(bitfieldExtract(data, 18, 3));
+    int aoVal     = int(bitfieldExtract(data, 21, 2));
+    int texID     = int(bitfieldExtract(data, 23, 9));
 
     vec3 localPos = vec3(x, y, z);
     
+    // 3. Chunk Processing
     vec3 chunkOffset = chunkPositions[gl_BaseInstance].xyz;
     float scale = chunkPositions[gl_BaseInstance].w;
 
-    // 1. Calculate True World Position (Used for Texture Coordinates)
     vec3 trueWorldPos = (localPos * scale) + chunkOffset;
-
-    // 2. Calculate Render Position (Used for Geometry Sinking)
     vec3 renderPos = trueWorldPos;
 
-    // SINKING LOGIC:
-    // Only apply to renderPos! This keeps textures locked in place.
+    // Sinking Logic (Anti-shimmer for far LODs)
     if (scale > 1.0) {
         renderPos.y -= (scale * 2.0); 
     }
@@ -56,12 +58,15 @@ void main() {
     v_Normal = getCubeNormal(normIndex);
     v_TexID = float(texID);
     
-    // UV FIX: Use trueWorldPos (stable) and multiplier 1.0 (1 block = 1 tile)
-    if (abs(v_Normal.x) > 0.5) v_TexCoord = trueWorldPos.yz * 1.0; 
-    else if (abs(v_Normal.y) > 0.5) v_TexCoord = trueWorldPos.xz * 1.0;
-    else v_TexCoord = trueWorldPos.xy * 1.0;
+    // 0..3 -> 0.0..1.0
+    v_AO = float(aoVal) / 3.0; 
+    
+    // UV Logic
+    if (abs(v_Normal.x) > 0.5) v_TexCoord = trueWorldPos.yz; 
+    else if (abs(v_Normal.y) > 0.5) v_TexCoord = trueWorldPos.xz;
+    else v_TexCoord = trueWorldPos.xy;
 
-    v_Color = v_Normal * 0.5 + 0.5; 
+    v_Color = (v_Normal * 0.5 + 0.5) * (0.5 + (v_AO * 0.5)); 
 
     gl_Position = u_ViewProjection * vec4(renderPos, 1.0);
 }
