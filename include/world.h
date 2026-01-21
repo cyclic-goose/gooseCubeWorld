@@ -6,6 +6,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <mutex>
+#include <shared_mutex> // Added for Reader/Writer locks
 #include <queue>
 #include <atomic>
 #include <chrono>
@@ -179,7 +180,10 @@ private:
     WorldConfig m_config;
     TerrainGenerator m_generator;
     
+    // Protected by m_chunksMutex
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
+    std::shared_mutex m_chunksMutex; // R/W Lock for the map
+
     ObjectPool<ChunkNode> m_chunkPool;
 
     std::mutex m_queueMutex;
@@ -191,6 +195,7 @@ private:
     // Used for tracking movement per LOD
     int lastPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
     int lastPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
+    bool m_lodComplete[8] = {false}; // Optimization: true if all chunks for this LOD are loaded
 
     int m_frameCounter = 0; 
     std::atomic<bool> m_shutdown{false};
@@ -198,21 +203,22 @@ private:
     std::unique_ptr<GpuMemoryManager> m_gpuMemory;
 
     // --- GPU DRIVEN CULLING BUFFERS ---
-    GLuint m_indirectBuffer = 0;      // Stores final DrawCommands (Output from CS)
-    GLuint m_batchSSBO = 0;           // Stores final Instance Data (vec4 position) (Output from CS)
-    GLuint m_candidateSSBO = 0;       // Stores ALL ChunkMetadata (Input to CS)
-    GLuint m_atomicCounterBuffer = 0; // Stores visible count (Parameter Buffer)
+    GLuint m_indirectBuffer = 0;      
+    GLuint m_batchSSBO = 0;           
+    GLuint m_candidateSSBO = 0;       
+    GLuint m_atomicCounterBuffer = 0; 
     
     GLuint m_dummyVAO = 0; 
     std::unique_ptr<Shader> m_cullShader;
 
-    std::vector<ChunkCandidate> m_cpuCandidates; // CPU Mirror of Candidate Buffer
-    bool m_chunksDirty = true;        // Flag to trigger upload to m_candidateSSBO
+    std::vector<ChunkCandidate> m_cpuCandidates; 
+    bool m_chunksDirty = true;        
 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
 
     friend class ImGuiManager;
 
+    // Must be called with at least a Read lock on m_chunks
     bool IsFullyCovered(int cx, int cz, int currentLod) {
         if (currentLod == 0) return false;
         int prevLod = currentLod - 1;
@@ -237,24 +243,29 @@ private:
         if (!m_chunksDirty) return;
 
         m_cpuCandidates.clear();
-        m_cpuCandidates.reserve(m_chunks.size());
+        
+        // READ LOCK: Iterating map
+        {
+            std::shared_lock<std::shared_mutex> lock(m_chunksMutex);
+            m_cpuCandidates.reserve(m_chunks.size());
 
-        for (auto& pair : m_chunks) {
-            ChunkNode* node = pair.second;
-            
-            // Only add chunks that are ready to draw
-            if (node->state != ChunkState::ACTIVE) continue;
-            if (node->gpuOffset == -1) continue; 
-            if (node->lod > 0 && IsFullyCovered(node->cx, node->cz, node->lod)) continue;
+            for (auto& pair : m_chunks) {
+                ChunkNode* node = pair.second;
+                
+                // Only add chunks that are ready to draw
+                if (node->state != ChunkState::ACTIVE) continue;
+                if (node->gpuOffset == -1) continue; 
+                if (node->lod > 0 && IsFullyCovered(node->cx, node->cz, node->lod)) continue;
 
-            ChunkCandidate c;
-            c.minAABB_scale = glm::vec4(node->minAABB, (float)node->scale);
-            c.maxAABB_pad = glm::vec4(node->maxAABB, 0.0f);
-            c.firstVertex = (uint32_t)(node->gpuOffset / sizeof(PackedVertex));
-            c.vertexCount = (uint32_t)node->vertexCount;
-            c.pad1 = 0; c.pad2 = 0;
+                ChunkCandidate c;
+                c.minAABB_scale = glm::vec4(node->minAABB, (float)node->scale);
+                c.maxAABB_pad = glm::vec4(node->maxAABB, 0.0f);
+                c.firstVertex = (uint32_t)(node->gpuOffset / sizeof(PackedVertex));
+                c.vertexCount = (uint32_t)node->vertexCount;
+                c.pad1 = 0; c.pad2 = 0;
 
-            m_cpuCandidates.push_back(c);
+                m_cpuCandidates.push_back(c);
+            }
         }
 
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_candidateSSBO);
@@ -275,20 +286,15 @@ public:
 
         m_gpuMemory = std::make_unique<GpuMemoryManager>(1024 * 1024 * 1024);
 
-        // 1. Output Draw Commands (Write by CS, Read by DrawIndirect)
         glCreateBuffers(1, &m_indirectBuffer);
         glNamedBufferStorage(m_indirectBuffer, maxChunks * sizeof(DrawArraysIndirectCommand), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
-        // 2. Output Batch/Offset Data (Write by CS, Read by VS)
         glCreateBuffers(1, &m_batchSSBO);
         glNamedBufferStorage(m_batchSSBO, maxChunks * sizeof(glm::vec4), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
-        // 3. Input Candidate Data (Read by CS)
         glCreateBuffers(1, &m_candidateSSBO);
-        // Initial dummy size, resized in SyncCandidatesToGPU
         glNamedBufferData(m_candidateSSBO, 1024, nullptr, GL_DYNAMIC_DRAW);
 
-        // 4. Atomic Counter / Parameter Buffer (Read/Write by CS, Read by DrawIndirectCount)
         glCreateBuffers(1, &m_atomicCounterBuffer);
         glNamedBufferStorage(m_atomicCounterBuffer, sizeof(GLuint), nullptr, GL_DYNAMIC_STORAGE_BIT);
 
@@ -392,29 +398,50 @@ public:
         std::vector<int64_t> toRemove;
         bool anyRemoved = false;
         
-        for (auto& pair : m_chunks) {
-            ChunkNode* node = pair.second;
-            if (node->lod != targetLod) continue;
+        // READ/WRITE Lock: We iterate to find (read), then erase (write)
+        // Since erase invalidates iterators, it's safer to collect keys first
+        
+        {
+            // First pass: Read only to find candidates
+            std::shared_lock<std::shared_mutex> lock(m_chunksMutex);
+            
+            for (auto& pair : m_chunks) {
+                ChunkNode* node = pair.second;
+                if (node->lod != targetLod) continue;
 
-            int scale = node->scale;
-            int limit = m_config.lodRadius[targetLod] + 3; 
-            int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
-            int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+                int scale = node->scale;
+                int limit = m_config.lodRadius[targetLod] + 3; 
+                int camX = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
+                int camZ = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
 
-            if (abs(node->cx - camX) > limit || abs(node->cz - camZ) > limit) {
-                ChunkState s = node->state.load();
-                if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
+                if (abs(node->cx - camX) > limit || abs(node->cz - camZ) > limit) {
+                    ChunkState s = node->state.load();
+                    if (s != ChunkState::GENERATING && s != ChunkState::MESHING) {
+                        toRemove.push_back(pair.first);
+                    }
+                }
+            }
+        }
+
+        if (!toRemove.empty()) {
+            // Second pass: Write lock to actually remove
+            std::unique_lock<std::shared_mutex> lock(m_chunksMutex);
+            
+            for (auto k : toRemove) {
+                auto it = m_chunks.find(k);
+                if (it != m_chunks.end()) {
+                    ChunkNode* node = it->second;
                     if (node->gpuOffset != -1) {
                         m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
                         node->gpuOffset = -1;
                         anyRemoved = true;
                     }
-                    toRemove.push_back(pair.first);
-                    m_chunkPool.Release(node); 
+                    m_chunkPool.Release(node);
+                    m_chunks.erase(it);
                 }
             }
         }
-        for (auto k : toRemove) m_chunks.erase(k);
+        
         if (anyRemoved) m_chunksDirty = true;
     }
 
@@ -430,40 +457,30 @@ public:
         if (m_cpuCandidates.empty()) return;
 
         // GPU: Culling Pass
-        Engine::Profiler::Get().BeginGPU("GPU: Culling Compute"); ////////////////////// Profile To GPU Barrier
+        Engine::Profiler::Get().BeginGPU("GPU: Culling Compute"); 
 
-        // 2. Reset Atomic Counter (Visible Count)
         const GLuint zero = 0;
         glNamedBufferSubData(m_atomicCounterBuffer, 0, sizeof(GLuint), &zero);
         
-        // 3. Dispatch Compute Shader using the CULLING matrix
         m_cullShader->use();
         m_cullShader->setMat4("u_ViewProjection", glm::value_ptr(cullViewProj));
         m_cullShader->setUInt("u_Count", (GLuint)m_cpuCandidates.size());
 
-        // Bind Buffers
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_candidateSSBO);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_indirectBuffer);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_batchSSBO);
         glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 0, m_atomicCounterBuffer);
 
-        // Calculate work groups
         int workGroups = (int)((m_cpuCandidates.size() + 63) / 64);
         glDispatchCompute(workGroups, 1, 1);
 
-        // 4. Memory Barrier
         glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_ATOMIC_COUNTER_BARRIER_BIT);
 
-        Engine::Profiler::Get().EndGPU();                       ////////////////////// Profile To GPU Barrier
-
-
+        Engine::Profiler::Get().EndGPU();                       
 
         // ******************* GPU: Rendering Pass ****************** //
         Engine::Profiler::Get().BeginGPU("GPU: Geometry Draw");
 
-
-
-        // 5. Draw using the RENDERING matrix
         shader.use();
         glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
         
@@ -480,14 +497,32 @@ public:
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
         glBindVertexArray(0); 
 
-
         Engine::Profiler::Get().EndGPU();
-        // ******************* GPU: Rendering Pass ****************** //
     }
 
     void QueueNewChunks(glm::vec3 cameraPos, int targetLod) {
-        Engine::Profiler::ScopedTimer timer("New Chunk Queuing");
+        //Engine::Profiler::ScopedTimer timer("New Chunk Queuing");
         if (m_shutdown) return;
+        Engine::Profiler::ScopedTimer timer("New Chunk Queuing:");
+        
+        int lod = targetLod;
+        int scale = 1 << lod;
+        int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
+        int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+
+        // --- OPTIMIZATION 1: Early Exit ---
+        // If we haven't moved from the last check coordinate AND we finished loading everything last time, skip.
+        if (px == lastPx[lod] && pz == lastPz[lod] && m_lodComplete[lod]) {
+            return;
+        }
+
+        // If we moved, we are no longer "Complete"
+        if (px != lastPx[lod] || pz != lastPz[lod]) {
+            m_lodComplete[lod] = false;
+            lastPx[lod] = px;
+            lastPz[lod] = pz;
+        }
+
 
         static std::vector<std::pair<int, int>> spiralOffsets;
         static std::once_flag flag;
@@ -503,26 +538,33 @@ public:
             });
         });
         
-        auto startTime = std::chrono::high_resolution_clock::now();
         std::vector<ChunkRequest> missing;
         missing.reserve(200); 
-        const int MAX_TASKS =  128; 
+        const int MAX_TASKS = 128; 
 
         int camYBlock = (int)cameraPos.y;
-        int lod = targetLod;
-        int scale = 1 << lod;
         int r = m_config.lodRadius[lod];
-        int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
-        int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
+        int rSq = r * r; 
+
+        // Shared lock to check existence of chunks safely
+        std::shared_lock<std::shared_mutex> readLock(m_chunksMutex);
 
         for (const auto& offset : spiralOffsets) {
+            // --- OPTIMIZATION 2: Spiral Break ---
+            // If distance^2 > r^2 (with slight buffer for square corners), stop iterating.
+            int distSq = offset.first*offset.first + offset.second*offset.second;
+            if (distSq > (rSq * 2 + 100)) break; 
+
             if (std::abs(offset.first) > r || std::abs(offset.second) > r) continue;
 
             int x = px + offset.first;
             int z = pz + offset.second;
             
+            // Note: This noise call is still the heaviest part inside the loop. 
+            // Optimizing this further would require caching a coarse heightmap.
             int minH, maxH;
             m_generator.GetHeightBounds(x, z, scale, minH, maxH);
+            
             int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
             int chunkYEnd = (maxH / (CHUNK_SIZE * scale)) + 1;
             chunkYStart = std::max(0, chunkYStart);
@@ -530,33 +572,54 @@ public:
 
             for (int y = chunkYStart; y <= chunkYEnd; y++) {
                 int64_t key = ChunkKey(x, y, z, lod);
+                
+                // Fast check with read lock
                 if (m_chunks.find(key) == m_chunks.end()) {
                     int dx = x - px; 
                     int dz = z - pz; 
                     int chunkWorldY = y * CHUNK_SIZE * scale;
                     int dy = (chunkWorldY - camYBlock) / (CHUNK_SIZE * scale); 
-                    int distSq = dx*dx + dz*dz + (dy*dy); 
-                    missing.push_back({x, y, z, lod, distSq});
+                    int distMetric = dx*dx + dz*dz + (dy*dy); 
+                    missing.push_back({x, y, z, lod, distMetric});
+                }
+            }
+        }
+        
+        // Done with read loop
+        readLock.unlock();
+
+        std::sort(missing.begin(), missing.end(), [](const ChunkRequest& a, const ChunkRequest& b){ return a.distSq < b.distSq; });
+
+        // WRITE Lock: To insert new chunks
+        int queued = 0;
+        if (!missing.empty()) {
+            std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
+            
+            for (const auto& req : missing) {
+                if (queued >= MAX_TASKS) break;
+                
+                int64_t key = ChunkKey(req.x, req.y, req.z, req.lod);
+                // Double check existence in case of race (if threaded later)
+                if (m_chunks.find(key) == m_chunks.end()) {
+                    ChunkNode* newNode = m_chunkPool.Acquire();
+                    if (newNode) {
+                        newNode->Reset(req.x, req.y, req.z, req.lod);
+                        m_chunks[key] = newNode;
+                        newNode->state = ChunkState::GENERATING;
+                        m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
+                        queued++;
+                    }
                 }
             }
         }
 
-        std::sort(missing.begin(), missing.end(), [](const ChunkRequest& a, const ChunkRequest& b){ return a.distSq < b.distSq; });
-
-        int queued = 0;
-        for (const auto& req : missing) {
-            if (queued >= MAX_TASKS) break;
-            int64_t key = ChunkKey(req.x, req.y, req.z, req.lod);
-            if (m_chunks.find(key) == m_chunks.end()) {
-                ChunkNode* newNode = m_chunkPool.Acquire();
-                if (newNode) {
-                    newNode->Reset(req.x, req.y, req.z, req.lod);
-                    m_chunks[key] = newNode;
-                    newNode->state = ChunkState::GENERATING;
-                    m_pool.enqueue([this, newNode]() { this->Task_Generate(newNode); });
-                    queued++;
-                }
-            }
+        // --- Update Status ---
+        // If we queued everything that was missing, we are "Complete" for this position.
+        // If we hit MAX_TASKS, we are not done.
+        if (queued < MAX_TASKS) {
+            m_lodComplete[lod] = true;
+        } else {
+            m_lodComplete[lod] = false;
         }
     }
 
@@ -570,7 +633,6 @@ public:
 
     void Task_Mesh(ChunkNode* node) {
         if (m_shutdown) return;
-        // RAII Timer: Starts now, Ends when function returns
         Engine::Profiler::ScopedTimer timer("Mesh Generation"); 
 
         LinearAllocator<PackedVertex> threadAllocator(1000000); 
@@ -646,17 +708,24 @@ public:
         m_config = newConfig;
         m_generator = TerrainGenerator(m_config);
         
-        for (auto& pair : m_chunks) {
-            ChunkNode* node = pair.second;
-            if (node->gpuOffset != -1) {
-                m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
-                node->gpuOffset = -1;
+        {
+            std::unique_lock<std::shared_mutex> lock(m_chunksMutex);
+            for (auto& pair : m_chunks) {
+                ChunkNode* node = pair.second;
+                if (node->gpuOffset != -1) {
+                    m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
+                    node->gpuOffset = -1;
+                }
+                m_chunkPool.Release(node);
             }
-            m_chunkPool.Release(node);
+            m_chunks.clear();
         }
-        
-        m_chunks.clear();
-        for(int i=0; i<8; i++) { lastPx[i] = -999; lastPz[i] = -999; }
-        m_chunksDirty = true; // Trigger reset of candidate buffer
+
+        for(int i=0; i<8; i++) { 
+            lastPx[i] = -999; 
+            lastPz[i] = -999; 
+            m_lodComplete[i] = false; // Reset optimization flags
+        }
+        m_chunksDirty = true; 
     }
 };
