@@ -290,7 +290,7 @@ int main() {
             // This triggers:
             // 1. Cull(PrevDepth)
             // 2. MultiDrawIndirect
-            world.Draw(worldShader, viewProj, projection, g_fbo.hiZTex);
+            world.Draw(worldShader, viewProj, lockedCullMatrix, projection, g_fbo.hiZTex);
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 

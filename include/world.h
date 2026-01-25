@@ -739,12 +739,12 @@ public:
     //                                         RENDERING
     // ================================================================================================
 
-    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& proj, GLuint depthPyramidTex) {
+    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix, const glm::mat4& proj, GLuint depthPyramidTex) {
         if(m_shutdown) return;
 
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
-            m_culler->Cull(viewProj, proj, depthPyramidTex);
+            m_culler->Cull(cullViewMatrix, proj, depthPyramidTex);
             Engine::Profiler::Get().EndGPU();
         }
 
