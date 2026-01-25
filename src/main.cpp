@@ -21,7 +21,7 @@
 // --- CONFIGURATION ---
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
-const bool START_FULLSCREEN = true; 
+const bool START_FULLSCREEN = false; 
 
 // Camera setup
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
@@ -36,6 +36,8 @@ float lastFrame = 0.0f;
 bool lockFrustum = false;
 bool fKeyPressed = false;
 glm::mat4 lockedCullMatrix;
+bool f3DepthDebug = false;
+int mipLevelDebug = 0;
 
 // GLOBAL GUI MANAGERS
 ImGuiManager gui;
@@ -86,6 +88,22 @@ void processInput(GLFWwindow *window, World& world) {
         }
     } else { f2Pressed = false; }
     
+    static bool f3Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F3) == GLFW_PRESS) {
+        if (!f3Pressed) {
+            f3DepthDebug = !f3DepthDebug;
+            f3Pressed = true;
+        }
+    } else { f3Pressed = false; }
+
+    static bool f4Pressed = false;
+    if (glfwGetKey(window, GLFW_KEY_F4) == GLFW_PRESS) {
+        if (!f4Pressed) {
+            mipLevelDebug += 1;
+            if (mipLevelDebug > 5) {mipLevelDebug = 0;}
+            f4Pressed = true;
+        }
+    } else { f4Pressed = false; }
     
     // P: Toggle Profiler Window
     static bool pPressed = false;
@@ -180,7 +198,8 @@ int main() {
     
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_GEQUAL); 
+    //glDepthFunc(GL_GEQUAL); 
+    glDepthFunc(GL_GREATER);
     //glDepthFunc(GL_LEQUAL);
     glClearDepth(0.0f);     
     glEnable(GL_CULL_FACE); 
@@ -190,11 +209,13 @@ int main() {
     // Initial FBO sizing
     int dw, dh;
     glfwGetFramebufferSize(window, &dw, &dh);
+    std::cout << dw << ", " << dh << std::endl;
     g_fbo.Resize(dw, dh);
     
     
     { 
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
+        Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl");
         
         WorldConfig globalConfig;
         globalConfig.VRAM_HEAP_ALLOCATION_MB = 1024; ////////////// ****************** THIS DICTATES HOW MUCH MEMORY ALLOCATED TO VRAM
@@ -242,7 +263,8 @@ int main() {
         // Ensure you have these images in resources/textures/ !
         GLuint texArray = TextureManager::LoadTextureArray(texturePaths);
         world.SetTextureArray(texArray);
-
+        int CUR_SCR_WIDTH = SCR_WIDTH, CUR_SCR_HEIGHT = SCR_HEIGHT;
+        int PREV_SCR_WIDTH = CUR_SCR_WIDTH, PREV_SCR_HEIGHT = CUR_SCR_HEIGHT;
 
         while (!glfwWindowShouldClose(window)) {
             float currentFrame = (float)glfwGetTime();
@@ -262,10 +284,22 @@ int main() {
             gui.BeginFrame();
             Engine::Profiler::Get().DrawUI(appState.isGameMode);
 
+
+            // get new window render size
+
+            // Initial FBO sizing
+            
+            glfwGetFramebufferSize(window, &CUR_SCR_WIDTH, &CUR_SCR_HEIGHT);
+            //std::cout << dw << ", " << dh << std::endl;
+            if (CUR_SCR_WIDTH != PREV_SCR_WIDTH || CUR_SCR_HEIGHT != PREV_SCR_HEIGHT)
+            {
+                // need to potentially resize some buffer, particularly the hi-z depth target buffer
+                g_fbo.Resize(CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+            }
             
             
             // Recalc mvp
-            glm::mat4 projection = camera.GetProjectionMatrix((float)g_fbo.width / (float)g_fbo.height, 0.1f);
+            glm::mat4 projection = camera.GetProjectionMatrix((float)CUR_SCR_WIDTH / (float)CUR_SCR_HEIGHT, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
             
@@ -275,13 +309,14 @@ int main() {
             }
             
             glBindFramebuffer(GL_FRAMEBUFFER, g_fbo.fbo);
-            glViewport(0, 0, g_fbo.width, g_fbo.height);
+            glViewport(0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
 
             // ImGui enables GL_SCISSOR_TEST and often leaves it enabled with a small rect at the end of the frame.
             // If we don't disable it here, glClear and glBlitNamedFramebuffer will be clipped, resulting in a black screen.
             glDisable(GL_SCISSOR_TEST);
             glClearColor(0.53f, 0.81f, 0.91f, 1.0f); 
             // Important: Reverse-Z clears to 0.0f
+            glClearDepth(0.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 
@@ -301,21 +336,30 @@ int main() {
             // This works because GL_DEPTH_COMPONENT32F and GL_R32F are compatible (both 32-bit).
             glCopyImageSubData(g_fbo.depthTex, GL_TEXTURE_2D, 0, 0, 0, 0,
                                g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
-                               g_fbo.width, g_fbo.height, 1);
+                               CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 1);
             
             // Barrier: Ensure copy finishes before Compute Shader reads it
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
             // Step B: Downsample the rest of the pyramid
-            world.GetCuller()->GenerateHiZ(g_fbo.hiZTex, g_fbo.width, g_fbo.height);
+            world.GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
 
             // --- 3. COMPOSITE TO SCREEN ---
             // Blit the Color Attachment of the FBO to the Default Backbuffer
             // (ImGui renders on top of this)
-            glBlitNamedFramebuffer(g_fbo.fbo, 0, 
-                0, 0, g_fbo.width, g_fbo.height, 
-                0, 0, g_fbo.width, g_fbo.height, 
-                GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+            if (!f3DepthDebug)
+            {
+                // Draw normal rendered view
+                glBlitNamedFramebuffer(g_fbo.fbo, 0, 
+                    0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
+                    0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
+                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                
+            } else {
+                // render depth view instead 
+                world.RenderHiZDebug(&depthDebug, g_fbo.hiZTex, mipLevelDebug, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+            }
 
 
 

@@ -38,6 +38,7 @@ public:
     void Cull(const glm::mat4& viewProj, const glm::mat4& proj, GLuint depthTexture);
 
     void DrawIndirect(GLuint dummyVAO);
+    
     uint32_t GetDrawCount() const { return m_drawnCount; }
 
 private:

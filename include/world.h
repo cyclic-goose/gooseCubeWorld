@@ -777,6 +777,42 @@ public:
 
 
 
+
+
+    void RenderHiZDebug(Shader* debugShader, GLuint hizTexture, int mipLevel, int screenW, int screenH) {
+    // 1. Setup State
+    glDisable(GL_DEPTH_TEST); // Always draw on top
+    glDisable(GL_CULL_FACE);
+    
+    debugShader->use();
+    
+    // 2. Bind the Hi-Z Texture
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, hizTexture);
+    
+    // IMPORTANT: Ensure the sampler allows reading lower mips
+    // If you used the sampler from GpuCuller, it effectively does this, 
+    // but for debugging, standard GL_NEAREST is fine.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0); 
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 10); // Ensure access to low mips
+
+    // 3. Set Uniforms
+    debugShader->setInt("u_DepthTexture", 0);
+    debugShader->setInt("u_MipLevel", mipLevel);
+    debugShader->setVec2("u_ScreenSize", glm::vec2(screenW, screenH));
+
+    // 4. Draw Full Screen Triangle (Vertex-less)
+    // We draw 3 vertices, the vertex shader positions them to cover the screen
+    glBindVertexArray(m_dummyVAO); // Core profile requires a VAO bound, even if empty
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    
+    // 5. Restore State
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+}
+
     // ================================================================================================
     //                                         RESET / RELOAD
     // ================================================================================================

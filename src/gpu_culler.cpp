@@ -120,16 +120,21 @@ void GpuCuller::GenerateHiZ(GLuint depthTexture, int width, int height) {
         glBindImageTexture(1, depthTexture, i+1, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
 
         m_hizShader->setVec2("u_OutDimension", glm::vec2(outW, outH));
-
+        
         // Dispatch
         // Local size is 32x32. 
         int groupsX = (outW + 31) / 32;
         int groupsY = (outH + 31) / 32;
+        //std::cout << "outW" << outW << "outH" << outH << std::endl;
         
         glDispatchCompute(groupsX, groupsY, 1);
-
+        
         // Barrier to ensure Level i+1 is written before being read as Level i in next iteration
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+
+        // pass the previous stages out as the in dimension for the next state
+        m_hizShader->setVec2("u_InDimension", glm::vec2(outW, outH));
     }
 }
 
@@ -183,3 +188,4 @@ void GpuCuller::DrawIndirect(GLuint dummyVAO) {
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     glBindVertexArray(0);
 }
+
