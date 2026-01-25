@@ -320,9 +320,6 @@ int main() {
 
 
 
-
-
-                
             // Render GUI
             gui.RenderUI(world, appState, camera, globalConfig.VRAM_HEAP_ALLOCATION_MB);
             gui.EndFrame();
