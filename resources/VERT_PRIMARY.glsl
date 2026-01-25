@@ -61,7 +61,8 @@ void main() {
     // Sinking Logic for LOD blending (optional based on your engine logic)
     vec3 renderPos = trueWorldPos;
     if (scale > 1.0) {
-        renderPos.y -= (scale * 3.0); 
+        renderPos.y -= (scale * 1.001);
+        renderPos.z -= 0.01;
     }
 
     // 5. Outputs

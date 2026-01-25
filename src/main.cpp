@@ -11,6 +11,8 @@
 #include "shader.h"
 #include "ImGuiManager.hpp"
 #include "profiler.h"
+#include "screen_quad.h"
+#include "splash_screen.hpp"
 
 // --- IMAGE LOADER IMPLEMENTATION ---
 // #define STB_IMAGE_IMPLEMENTATION
@@ -39,59 +41,7 @@ glm::mat4 lockedCullMatrix;
 ImGuiManager gui;
 UIConfig appState; 
 
-// --- FRAMEBUFFER RESOURCES ---
-struct FramebufferResources {
-    GLuint fbo = 0;
-    GLuint depthTex = 0; // Render Target (Depth Component)
-    GLuint hiZTex = 0;   // Compute Target (R32F)
-    GLuint colorTex = 0; 
-    int width = 0;
-    int height = 0;
 
-    void Resize(int w, int h) {
-        if (width == w && height == h) return;
-        width = w; height = h;
-
-        if (fbo) glDeleteFramebuffers(1, &fbo);
-        if (depthTex) glDeleteTextures(1, &depthTex);
-        if (hiZTex) glDeleteTextures(1, &hiZTex);
-        if (colorTex) glDeleteTextures(1, &colorTex);
-
-        // 1. Create Render Depth Texture (Fixed: uses Depth Component)
-        // This is strictly for rendering the scene.
-        glCreateTextures(GL_TEXTURE_2D, 1, &depthTex);
-        glTextureStorage2D(depthTex, 1, GL_DEPTH_COMPONENT32F, width, height);
-        
-        glTextureParameteri(depthTex, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTextureParameteri(depthTex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTextureParameteri(depthTex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTextureParameteri(depthTex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        // 2. Create Hi-Z Texture (Fixed: uses R32F)
-        // This is for the Compute Shader downsampling.
-        glCreateTextures(GL_TEXTURE_2D, 1, &hiZTex);
-        int levels = 1 + (int)floor(log2(std::max(width, height)));
-        glTextureStorage2D(hiZTex, levels, GL_R32F, width, height);
-
-        glTextureParameteri(hiZTex, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
-        glTextureParameteri(hiZTex, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTextureParameteri(hiZTex, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTextureParameteri(hiZTex, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        // 3. Create Color Texture
-        glCreateTextures(GL_TEXTURE_2D, 1, &colorTex);
-        glTextureStorage2D(colorTex, 1, GL_RGBA8, width, height);
-
-        // 4. Assemble FBO
-        glCreateFramebuffers(1, &fbo);
-        glNamedFramebufferTexture(fbo, GL_DEPTH_ATTACHMENT, depthTex, 0); // Valid Depth Attachment
-        glNamedFramebufferTexture(fbo, GL_COLOR_ATTACHMENT0, colorTex, 0);
-
-        if (glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            std::cerr << "Framebuffer Incomplete! Status: " << glCheckNamedFramebufferStatus(fbo, GL_FRAMEBUFFER) << std::endl;
-        }
-    }
-} g_fbo;
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
 
@@ -201,65 +151,7 @@ void processInput(GLFWwindow *window, World& world) {
 }
 
 
-// a quick one off "splash screen" so the player doesnt think the computer just froze (although it is kind of, its allocating vram)
-void RenderLoadingScreen(GLFWwindow* window, const float HEAP_SIZE_FOR_DISPLAYING) {
-    // Force a few frames to render to clear out the swap chain buffers
-    // 3 iterations ensures we handle Double or Triple buffering correctly
-    for (int i = 0; i < 3; i++) {
-        // 1. Viewport & Clear
-        int display_w, display_h;
-        glfwGetFramebufferSize(window, &display_w, &display_h);
-        glViewport(0, 0, display_w, display_h);
-        
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        
-        // 2. Draw UI
-        gui.BeginFrame();
-        
-        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        
-        ImGui::Begin("Loading", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
-        ImGui::SetWindowFontScale(3.0f);
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Cyclic Goose Voxel Engine");
-        ImGui::SetWindowFontScale(2.0f);
-        ImGui::Separator();
-        ImGui::Text("Reserving Memory...");
-        ImGui::Text("Allocating %.1f MB VRAM...", HEAP_SIZE_FOR_DISPLAYING);
-        ImGui::Text("Spooling Threadpool...");
-        ImGui::Text("Please Wait...");
-        
-        // --- VERSION WINDOW (Anchored Relative to Main) ---
-        // Calculate position: Right edge of main box, 5 pixels down
-        // CAPTURE GEOMETRY: Get the bottom-right corner of this window
-        ImVec2 mainPos = ImGui::GetWindowPos();
-        ImVec2 mainSize = ImGui::GetWindowSize();
-        ImVec2 versionPos;
-        versionPos.x = mainPos.x + mainSize.x; 
-        versionPos.y = mainPos.y + mainSize.y + 5.0f; 
-        
-        // Pivot (1.0f, 0.0f) = Top-Right of the version text
-        // This aligns the right edge of the text with the right edge of the box above it
-        ImGui::SetNextWindowPos(versionPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-        ImGui::SetNextWindowBgAlpha(0.0f); 
-        
-        ImGui::Begin("Version", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.2.6-alpha"); 
-        ImGui::End();
-        ImGui::End();
-        
-        gui.EndFrame();
-        
-        // Swap and Poll
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-    }
-    
-    // Force synchronization before hanging the CPU
-    glFinish(); 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-}
+
 
 int main() {
     
@@ -306,18 +198,18 @@ int main() {
         
         WorldConfig globalConfig;
         globalConfig.VRAM_HEAP_ALLOCATION_MB = 1024; ////////////// ****************** THIS DICTATES HOW MUCH MEMORY ALLOCATED TO VRAM
-        RenderLoadingScreen(window, globalConfig.VRAM_HEAP_ALLOCATION_MB);
+        RenderLoadingScreen(window, gui, globalConfig.VRAM_HEAP_ALLOCATION_MB);
         
         // We can call this the development debug LOD settings since the app will boot faster
-        globalConfig.lodCount = 4;
-        globalConfig.lodRadius[0] = 3;   
+        globalConfig.lodCount = 8;
+        globalConfig.lodRadius[0] = 5;   
         globalConfig.lodRadius[1] = 7;  
         globalConfig.lodRadius[2] = 11;   
-        globalConfig.lodRadius[3] = 19;   
-        //globalConfig.lodRadius[4] = 3;  
-        //globalConfig.lodRadius[5] = 3; 
-        //globalConfig.lodRadius[6] = 3; 
-        //globalConfig.lodRadius[7] = 3; 
+        globalConfig.lodRadius[3] = 13;   
+        globalConfig.lodRadius[4] = 9;  
+        globalConfig.lodRadius[5] = 9; 
+        globalConfig.lodRadius[6] = 9; 
+        globalConfig.lodRadius[7] = 9; 
         
         // Higher LOD in general more expensive
         // globalConfig.lodCount = 7;
