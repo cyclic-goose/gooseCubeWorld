@@ -45,7 +45,7 @@ struct WorldConfig {
     
     // LOD Radii: Defines the distance for each Detail Level.
     // Index 0 = Highest Detail (LOD 0), Index 4 = Lowest Detail.
-    int lodRadius[8] = { 10, 16, 24, 32, 48, 0, 0, 0 }; 
+    int lodRadius[12] = { 10, 16, 24, 32, 48, 0, 0, 0 , 0, 0, 0, 0}; 
     
     // Terrain Parameters
     float scale = 0.08f;          

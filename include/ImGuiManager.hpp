@@ -298,7 +298,7 @@ private:
             
 
             if (ImGui::CollapsingHeader("LOD Settings")) {
-                ImGui::SliderInt("LOD Count", &config.editConfig.lodCount, 1, 8);
+                ImGui::SliderInt("LOD Count", &config.editConfig.lodCount, 1, 12);
                 for (int i = 0; i < config.editConfig.lodCount; i++) {
                     std::string label = "LOD " + std::to_string(i) + " Radius";
                     ImGui::SliderInt(label.c_str(), &config.editConfig.lodRadius[i], 0, 64);
