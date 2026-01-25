@@ -76,76 +76,91 @@ bool IsFrustumVisible(vec3 minPos, vec3 maxPos) {
 }
 
 // --- OCCLUSION LOGIC ---
+// Robust 8-corner projection
 bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
-    // 1. Calculate AABB Center and Extents
-    vec3 center = (minAABB + maxAABB) * 0.5;
-    vec3 extent = (maxAABB - minAABB) * 0.5;
+    // 1. Define the 8 corners of the box
+    vec3 corners[8];
+    corners[0] = vec3(minAABB.x, minAABB.y, minAABB.z);
+    corners[1] = vec3(maxAABB.x, minAABB.y, minAABB.z);
+    corners[2] = vec3(minAABB.x, maxAABB.y, minAABB.z);
+    corners[3] = vec3(maxAABB.x, maxAABB.y, minAABB.z);
+    corners[4] = vec3(minAABB.x, minAABB.y, maxAABB.z);
+    corners[5] = vec3(maxAABB.x, minAABB.y, maxAABB.z);
+    corners[6] = vec3(minAABB.x, maxAABB.y, maxAABB.z);
+    corners[7] = vec3(maxAABB.x, maxAABB.y, maxAABB.z);
 
-    // 2. Project Center to Clip Space
-    vec4 clipPos = u_ViewProjection * vec4(center, 1.0);
-    // Don't cull if behind camera (W < epsilon)
-    if (clipPos.w <= 0.001) return false; 
-    
-    // 3. To Screen Space (NDC -> 0..1)
-    vec3 ndc = clipPos.xyz / clipPos.w;
-    vec2 uv = ndc.xy * 0.5 + 0.5;
-    
-    // 4. Calculate Screen-Space Bounding Box Size
-    // We approximate the projected size of the AABB.
-    // Width in Clip Space = (2 * WorldRadius * P00) / LinearDepth
-    // This is an approximation treating the box as a sphere/cube.
-    // For a more robust fit, we'd project all 8 corners, but that's expensive.
-    float maxExtent = max(extent.x, max(extent.y, extent.z));
-    
-    // Linear Depth approximation (View Space Z)
-    // We can roughly use clipPos.w as linear depth
-    float boxSizePixels = max(
-        (2.0 * maxExtent * u_P00 * u_PyramidSize.x) / clipPos.w,
-        (2.0 * maxExtent * u_P11 * u_PyramidSize.y) / clipPos.w
-    );
+    // 2. Project to Screen Space
+    vec2 minUV = vec2(1.0);
+    vec2 maxUV = vec2(0.0);
+    float maxZ = 0.0; // Closest Z (Reverse-Z: 1.0 is near)
 
-    // 5. Select Mip Level
-    // We want a mip where 1 texel covers the entire AABB.
-    // log2(size) gives us that level.
-    float lod = floor(log2(boxSizePixels));
+    // Check if any point is behind camera or too close. 
+    // In our projection, W < epsilon means behind/clipping.
+    // If the box clips the near plane, we simply assume it's visible.
+    // It's cheaper than doing precise near-plane clipping on the GPU.
+    bool clipping = false;
 
-    // 6. Sample Depth Buffer
-    // textureLod does the sampling. We rely on the conservative reduction (MIN) 
-    // done in the Hi-Z generation shader.
-    // Note: GL_LINEAR filtering on MIN-reduced maps can be incorrect (averaging).
-    // Ensure the sampler is set to GL_NEAREST_MIPMAP_NEAREST.
-    float occluderDepth = textureLod(u_DepthPyramid, uv, lod).r;
+    for(int i = 0; i < 8; i++) {
+        vec4 clipPos = u_ViewProjection * vec4(corners[i], 1.0);
+        
+        // If a point is behind the camera (w <= 0), the projection is invalid.
+        // The object is likely intersecting the near plane -> Visible.
+        if (clipPos.w <= 0.001) {
+            clipping = true;
+            break;
+        }
 
-    // 7. Compare
-    // Reverse-Z: Near = 1.0, Far = 0.0
-    // Visible Logic: Object Closest Z >= Occluder Depth
-    // Occluded Logic: Object Closest Z < Occluder Depth
-    // "Closest Z" of the object is the NDC z coordinate + some safety margin.
+        vec3 ndc = clipPos.xyz / clipPos.w;
+        vec2 uv = ndc.xy * 0.5 + 0.5;
+
+        minUV = min(minUV, uv);
+        maxUV = max(maxUV, uv);
+        
+        // Reverse-Z: The point closest to camera has the LARGEST Z value.
+        // We want the Max Z of the object to compare against the buffer.
+        maxZ = max(maxZ, ndc.z);
+    }
+
+    if (clipping) return false; // Visible (intersects near plane)
+
+    // Clamp UVs to screen
+    minUV = clamp(minUV, 0.0, 1.0);
+    maxUV = clamp(maxUV, 0.0, 1.0);
+
+    // 3. Calculate Dimensions & LOD
+    // Convert UV size to Pixel size
+    vec2 dims = (maxUV - minUV) * u_PyramidSize;
+    float maxDim = max(dims.x, dims.y);
     
-    // Since we used 'center' for Z, we need to push it to the 'closest' face.
-    // Conservative Approach: Use the raw NDC Z of the center, then nudge it towards camera.
-    // Ideally, we'd project the nearest point of the AABB.
-    float objectDepth = ndc.z; // This is center depth.
+    // Select LOD
+    // We want a mip level where our box is covered by roughly 2-4 texels.
+    // floor(log2(maxDim)) ensures that 1 texel at LOD is smaller than or equal to maxDim.
+    float lod = floor(log2(maxDim));
+
+    // 4. Sample Hi-Z (4 samples for conservation)
+    // We sample the corners of the UV bounding box at the chosen LOD.
+    // This approximates the "Minimum Depth" (furthest distance) in the screen area covered by the object.
     
-    // Simple heuristic: Assume object has radius in Z. Convert that radius to depth buffer delta?
-    // Hard to do accurately in non-linear depth. 
-    // Instead, we just use the center depth. If the center is occluded, the box is likely occluded.
-    // To be safe, we add a bias.
-    // Since Closer = Higher Value, we subtract bias to push it "back" (harder to cull).
-    // Actually, we want to ensure we don't falsely cull.
-    // If we use Center Z, and the front face is closer, we might cull a visible front face.
-    // So we should use the CLOSEST point (Highest Z).
-    // This assumes the box is un-rotated roughly.
+    float d1 = textureLod(u_DepthPyramid, vec2(minUV.x, minUV.y), lod).r;
+    float d2 = textureLod(u_DepthPyramid, vec2(maxUV.x, minUV.y), lod).r;
+    float d3 = textureLod(u_DepthPyramid, vec2(minUV.x, maxUV.y), lod).r;
+    float d4 = textureLod(u_DepthPyramid, vec2(maxUV.x, maxUV.y), lod).r;
     
-    // Let's rely on a bias instead of exact corner projection for speed.
-    // Since it's voxels, boxes are fairly uniform.
+    // Conservative Reduction (Reverse-Z):
+    // We want the FURTHEST occluder depth in the region.
+    // In Reverse-Z (Near=1, Far=0), Furthest = Minimum Value.
+    // If ANY pixel in the background is "Far" (e.g. 0.1), and our object is "Near" (e.g. 0.5),
+    // then min(depths) will be 0.1.
+    // 0.5 < 0.1 is False -> Object is Visible. (Correct)
+    // We only cull if the object is BEHIND the furthest thing.
+    float furthestOccluder = min(min(d1, d2), min(d3, d4));
     
-    // REVERSE Z: Closest point has HIGHER Z. 
-    // We want to verify: Is (Object.Closest) < Occluder?
-    // If we use Object.Center, Object.Closest is ~ Object.Center + RadiusDepth.
-    // We'll just use Object.Center and a small tolerance.
+    // 5. Compare
+    // Is the object BEHIND the furthest occluder?
+    // In Reverse-Z, "Behind" means "Smaller Z Value".
+    // If (Object.ClosestZ < Occluder.FurthestZ), then the object is completely obscured.
     
-    return objectDepth < (occluderDepth - 0.0005);
+    return maxZ < furthestOccluder;
 }
 
 void main() {

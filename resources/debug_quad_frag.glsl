@@ -15,5 +15,9 @@ void main() {
 
     // Visualization:
     // In Reverse-Z: 1.0 is Close (White), 0.0 is Far (Black).
-    FragColor = vec4(vec3(depth*1000.0), 1.0);
+    // Because the values drop off to <0.01 very quickly, we use a power function
+    // to boost the dark values so they are visible to the human eye.
+    float displayDepth = pow(depth, 0.1); 
+    
+    FragColor = vec4(vec3(displayDepth), 1.0);
 }

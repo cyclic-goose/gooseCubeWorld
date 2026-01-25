@@ -134,7 +134,7 @@ void GpuCuller::GenerateHiZ(GLuint depthTexture, int width, int height) {
 
 
         // pass the previous stages out as the in dimension for the next state
-        m_hizShader->setVec2("u_InDimension", glm::vec2(outW, outH));
+        //m_hizShader->setVec2("u_InDimension", glm::vec2(outW, outH));
     }
 }
 

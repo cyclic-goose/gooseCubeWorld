@@ -295,6 +295,8 @@ int main() {
             {
                 // need to potentially resize some buffer, particularly the hi-z depth target buffer
                 g_fbo.Resize(CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+                PREV_SCR_WIDTH = CUR_SCR_WIDTH;
+                PREV_SCR_HEIGHT = CUR_SCR_HEIGHT;
             }
             
             
@@ -331,22 +333,21 @@ int main() {
 
             // --- 2. GENERATE HI-Z PYRAMID ---
             
-            // Step A: Copy the rendered depth buffer (DepthComponent) to the Hi-Z texture (R32F)
-            // We only copy Mip Level 0.
-            // This works because GL_DEPTH_COMPONENT32F and GL_R32F are compatible (both 32-bit).
-            glCopyImageSubData(g_fbo.depthTex, GL_TEXTURE_2D, 0, 0, 0, 0,
-                               g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
-                               CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 1);
-            
-            // Barrier: Ensure copy finishes before Compute Shader reads it
-            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
-
-            // Step B: Downsample the rest of the pyramid
             world.GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
 
-            // --- 3. COMPOSITE TO SCREEN ---
-            // Blit the Color Attachment of the FBO to the Default Backbuffer
-            // (ImGui renders on top of this)
+            if (!appState.lockFrustum)
+            {
+                glCopyImageSubData(g_fbo.depthTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                   g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                   CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 1);
+                
+                // Barrier: Ensure copy finishes before Compute Shader reads it
+                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+    
+                // Step B: Downsample the rest of the pyramid
+                world.GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+            }
+
 
             if (!f3DepthDebug)
             {
