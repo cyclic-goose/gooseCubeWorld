@@ -49,6 +49,7 @@ GpuCuller::~GpuCuller() {
     if (m_atomicCounterBuffer) glDeleteBuffers(1, &m_atomicCounterBuffer);
     if (m_resultBuffer)        glDeleteBuffers(1, &m_resultBuffer);
     if (m_depthSampler)        glDeleteSamplers(1, &m_depthSampler);
+    if (m_fence)               glDeleteSync(m_fence);
 }
 
 void GpuCuller::InitBuffers() {
@@ -175,8 +176,24 @@ void GpuCuller::GenerateHiZ(GLuint depthTexture, int width, int height) {
 }
 
 void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, GLuint depthTexture) {
-    // 1. Read back the draw count from the *previous* frame (avoids stalling pipeline)
-    glGetNamedBufferSubData(m_resultBuffer, 0, sizeof(GLuint), &m_drawnCount);
+    // ASYNC READBACK
+    // Instead of forcing a stall with glGetNamedBufferSubData, we check if the GPU is done.
+    if (m_fence) {
+        // Wait up to 0ns (instant check)
+        GLenum waitReturn = glClientWaitSync(m_fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+        
+        if (waitReturn == GL_ALREADY_SIGNALED || waitReturn == GL_CONDITION_SATISFIED) {
+            // GPU is done, safe to read without stalling
+            glGetNamedBufferSubData(m_resultBuffer, 0, sizeof(GLuint), &m_drawnCount);
+            
+            // Cleanup fence
+            glDeleteSync(m_fence);
+            m_fence = nullptr;
+        }
+    }
+
+    // Read back the draw count from the *previous* frame (avoids stalling pipeline)
+    // glGetNamedBufferSubData(m_resultBuffer, 0, sizeof(GLuint), &m_drawnCount);
     
     // 2. Reset atomic counter for this frame
     uint32_t zero = 0;
@@ -227,6 +244,11 @@ void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, c
     
     // 7. Copy Atomic Counter to Result Buffer (for CPU readback next frame)
     glCopyNamedBufferSubData(m_atomicCounterBuffer, m_resultBuffer, 0, 0, sizeof(GLuint));
+
+    // 8. Create Sync Fence
+    // This allows us to query (in the next frame) if this Copy is finished before we try to read it.
+    if (m_fence) glDeleteSync(m_fence); // Should be null, but safety first
+    m_fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 }
 
 void GpuCuller::DrawIndirect(GLuint dummyVAO) {

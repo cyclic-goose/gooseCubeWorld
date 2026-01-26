@@ -120,4 +120,7 @@ private:
     int m_depthPyramidWidth = 0;
     int m_depthPyramidHeight = 0;
     GLuint m_depthSampler = 0; 
+
+    // Sync Object to prevent CPU stalls
+    GLsync m_fence = nullptr;
 };

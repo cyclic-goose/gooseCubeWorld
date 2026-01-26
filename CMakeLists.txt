@@ -8,8 +8,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
-# 1.1 FastNoise2 (Submodule)
-add_subdirectory(external/FastNoise2)
+# 1.1 FastNoise2 (Submodule) - Check if exists first
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/FastNoise2/CMakeLists.txt")
+    add_subdirectory(external/FastNoise2)
+else()
+    message(WARNING "FastNoise2 submodule not found. Make sure to run 'git submodule update --init --recursive'")
+endif()
 
 # 1.2 GLFW (Fetch from Web)
 FetchContent_Declare(
@@ -21,9 +25,11 @@ set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
+# Ensure we build static libs for Windows
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(glfw)
 
-# 1.3 GLM (Fetch from Web) - REQUIRED for Cross-Compilation
+# 1.3 GLM (Fetch from Web)
 FetchContent_Declare(
     glm
     GIT_REPOSITORY https://github.com/g-truc/glm.git
@@ -31,8 +37,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(glm)
 
-# 1.4 STB (Header-only, no CMakeLists.txt)
-# Since stb has no CMakeLists.txt, we must populate it manually rather than using MakeAvailable
+# 1.4 STB (Header-only)
 FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
@@ -44,7 +49,6 @@ if(NOT stb_POPULATED)
 endif()
 
 # --- 2. Source Files ---
-# Note: This will now pick up src/vendor/stb_impl.cpp automatically
 file(GLOB_RECURSE SOURCES 
     "src/*.cpp" 
     "src/vendor/glad.c" 
@@ -62,32 +66,34 @@ target_include_directories(gooseVoxelEngine PRIVATE
     src/vendor/imgui
     src/vendor/imgui/backends
     ${glfw_SOURCE_DIR}/include
-    ${stb_SOURCE_DIR} # Includes the path to the fetched stb headers
+    ${stb_SOURCE_DIR}
 )
 
 # --- 5. Optimizations ---
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64|i386)")
+    # Basic vectorization for generic builds
     target_compile_options(gooseVoxelEngine PRIVATE -mavx2 -msse4.1)
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     if(CMAKE_CROSSCOMPILING)
-        message(STATUS "Cross-compiling Release: Using -mavx2 -O3")
+        message(STATUS "Cross-compiling Release for Windows")
+        # -s: Strip symbols (redundant if using strip tool, but good practice)
+        # -static: Force static linking of gcc/stdc++
         target_compile_options(gooseVoxelEngine PRIVATE -O3 -mavx2 -funroll-loops)
-        
-        # Static Linking for Windows
         target_link_options(gooseVoxelEngine PRIVATE 
             -static 
             -static-libgcc 
             -static-libstdc++
+            -s 
         )
     else()
         message(STATUS "Native Release: Using -march=native")
         target_compile_options(gooseVoxelEngine PRIVATE -O3 -march=native -funroll-loops)
     endif()
 
-    # LTO
+    # LTO (Link Time Optimization)
     include(CheckIPOSupported)
     check_ipo_supported(RESULT result OUTPUT output)
     if(result)
@@ -105,13 +111,16 @@ target_link_libraries(gooseVoxelEngine PRIVATE
 )
 
 if(WIN32)
-    # Windows Link dependencies
+    # Windows Link dependencies (Order matters for static MinGW linking!)
     target_link_libraries(gooseVoxelEngine PRIVATE 
+        opengl32
         gdi32
         ws2_32
         dwmapi
         winmm
-        opengl32 # Standard Windows OpenGL lib
+        shlwapi   # Often needed for static linking
+        rpcrt4    # Often needed for static linking
+        iphlpapi  # Network helpers
     )
     target_compile_definitions(gooseVoxelEngine PRIVATE _GLFW_WIN32)
 else()
