@@ -32,10 +32,10 @@ public:
     void GenerateHiZ(GLuint depthTexture, int width, int height);
 
     // Executes Compute Shader for Culling
-    // depthTexture: The full Hi-Z pyramid
-    // viewProj: Camera View Projection Matrix
-    // proj: Camera Projection Matrix (needed for screen space box projection)
-    void Cull(const glm::mat4& viewProj, const glm::mat4& proj, GLuint depthTexture);
+    // viewProj: Current Camera View Projection Matrix (for Frustum Check)
+    // prevViewProj: Previous Camera View Projection Matrix (for Occlusion Lookup)
+    // proj: Camera Projection Matrix (needed for screen space box projection math)
+    void Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, GLuint depthTexture, bool occlusionCullingOn);
 
     void DrawIndirect(GLuint dummyVAO);
     

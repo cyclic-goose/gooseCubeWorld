@@ -39,6 +39,7 @@ glm::mat4 lockedCullMatrix;
 bool f3DepthDebug = false;
 int mipLevelDebug = 0;
 
+
 // GLOBAL GUI MANAGERS
 ImGuiManager gui;
 UIConfig appState; 
@@ -265,6 +266,8 @@ int main() {
         world.SetTextureArray(texArray);
         int CUR_SCR_WIDTH = SCR_WIDTH, CUR_SCR_HEIGHT = SCR_HEIGHT;
         int PREV_SCR_WIDTH = CUR_SCR_WIDTH, PREV_SCR_HEIGHT = CUR_SCR_HEIGHT;
+        // Store Previous View Projection for Reprojection Culling
+        glm::mat4 prevViewProj = glm::mat4(1.0f);
 
         while (!glfwWindowShouldClose(window)) {
             float currentFrame = (float)glfwGetTime();
@@ -327,26 +330,32 @@ int main() {
             // This triggers:
             // 1. Cull(PrevDepth)
             // 2. MultiDrawIndirect
-            world.Draw(worldShader, viewProj, lockedCullMatrix, projection, g_fbo.hiZTex);
+            world.Draw(worldShader, viewProj, lockedCullMatrix, prevViewProj, projection, g_fbo.hiZTex);
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-            // --- 2. GENERATE HI-Z PYRAMID ---
-            
-            world.GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
 
-            if (!appState.lockFrustum)
+            //// **************** TODO: Move this to world.draw()
+            if (world.getOcclusionCulling())
             {
-                glCopyImageSubData(g_fbo.depthTex, GL_TEXTURE_2D, 0, 0, 0, 0,
-                                   g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
-                                   CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 1);
-                
-                // Barrier: Ensure copy finishes before Compute Shader reads it
-                glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
-    
-                // Step B: Downsample the rest of the pyramid
-                world.GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+              // occlusion cull, generate HiZ and run compute shader
+              // no where near perfect right now but does incur a performance gain if needed
+                if (!appState.lockFrustum)
+                {
+                    glCopyImageSubData(g_fbo.depthTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                    g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                    CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 1);
+                    
+                    // Barrier: Ensure copy finishes before Compute Shader reads it
+                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+        
+                    // Step B: Downsample the rest of the pyramid
+                    world.GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+                }
             }
+            //// **************** TODO: Move this to world.draw()
+
+            
 
 
             if (!f3DepthDebug)
@@ -371,6 +380,11 @@ int main() {
 
             glfwSwapBuffers(window);
             glfwPollEvents();
+
+            // Update Previous Frame Matrix for next frame
+            if (!appState.lockFrustum) {
+                prevViewProj = viewProj;
+            }
         }
     }
     Engine::Profiler::Get().Shutdown();

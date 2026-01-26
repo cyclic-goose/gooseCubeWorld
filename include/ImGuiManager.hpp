@@ -28,6 +28,7 @@ struct UIConfig {
     // Current settings being tweaked in the GUI
     WorldConfig editConfig;         
     bool editConfigInitialized = false;
+    bool occlusionCulling = true;
 };
 
 class ImGuiManager {
@@ -259,6 +260,10 @@ private:
                 world.setCubeDebugMode(config.editConfig.cubeDebugMode);
             }
 
+            
+            if (ImGui::Checkbox("Occlusion Culling (Not Perfect)", &config.occlusionCulling) ) {
+                world.setOcclusionCulling(config.occlusionCulling);
+            }
 
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "THREADING");

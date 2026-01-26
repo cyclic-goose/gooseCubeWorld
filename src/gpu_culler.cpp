@@ -104,14 +104,14 @@ void GpuCuller::GenerateHiZ(GLuint depthTexture, int width, int height) {
 
     m_hizShader->use();
     
-    // Process Mip Levels 0 -> 1, 1 -> 2, etc.
-    // Note: We cannot write to Level 0 (it's the depth buffer itself).
-    // We assume Level 0 is already valid (rendered to).
-    
+    // Track input width/height for each level
+    int inW = width;
+    int inH = height;
+
     for (int i = 0; i < numLevels - 1; ++i) {
         // Dimensions of the DESTINATION mip level
-        int outW = std::max(1, width >> (i + 1));
-        int outH = std::max(1, height >> (i + 1));
+        int outW = std::max(1, inW >> 1);
+        int outH = std::max(1, inH >> 1);
 
         // Bind Read Image (Level i)
         glBindImageTexture(0, depthTexture, i, GL_FALSE, 0, GL_READ_ONLY, GL_R32F);
@@ -120,25 +120,25 @@ void GpuCuller::GenerateHiZ(GLuint depthTexture, int width, int height) {
         glBindImageTexture(1, depthTexture, i+1, GL_FALSE, 0, GL_WRITE_ONLY, GL_R32F);
 
         m_hizShader->setVec2("u_OutDimension", glm::vec2(outW, outH));
+        m_hizShader->setVec2("u_InDimension", glm::vec2(inW, inH));
         
         // Dispatch
         // Local size is 32x32. 
         int groupsX = (outW + 31) / 32;
         int groupsY = (outH + 31) / 32;
-        //std::cout << "outW" << outW << "outH" << outH << std::endl;
         
         glDispatchCompute(groupsX, groupsY, 1);
         
         // Barrier to ensure Level i+1 is written before being read as Level i in next iteration
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-
-        // pass the previous stages out as the in dimension for the next state
-        //m_hizShader->setVec2("u_InDimension", glm::vec2(outW, outH));
+        // Prepare for next iteration
+        inW = outW;
+        inH = outH;
     }
 }
 
-void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& proj, GLuint depthTexture) {
+void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, GLuint depthTexture, bool occlusionCullingOn) {
     glGetNamedBufferSubData(m_resultBuffer, 0, sizeof(GLuint), &m_drawnCount);
     
     uint32_t zero = 0;
@@ -146,6 +146,7 @@ void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& proj, GLuint de
 
     m_cullShader->use();
     m_cullShader->setMat4("u_ViewProjection", glm::value_ptr(viewProj));
+    m_cullShader->setMat4("u_PrevViewProjection", glm::value_ptr(prevViewProj)); // Pass Previous Matrix
     m_cullShader->setUInt("u_MaxChunks", (uint32_t)m_maxChunks);
     
     // Frustum Params (extracted from Proj matrix)
@@ -153,10 +154,10 @@ void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& proj, GLuint de
     m_cullShader->setFloat("u_P11", proj[1][1]);
 
     // Bind Depth Pyramid
-    if (depthTexture != 0 && m_depthPyramidWidth > 0) {
+    if (depthTexture != 0 && m_depthPyramidWidth > 0 && occlusionCullingOn) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, depthTexture);
-        glBindSampler(0, m_depthSampler); // Force Nearest-Mipmap-Nearest
+        glBindSampler(0, m_depthSampler); 
         
         m_cullShader->setInt("u_DepthPyramid", 0);
         m_cullShader->setVec2("u_PyramidSize", glm::vec2(m_depthPyramidWidth, m_depthPyramidHeight));
@@ -188,4 +189,3 @@ void GpuCuller::DrawIndirect(GLuint dummyVAO) {
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
     glBindVertexArray(0);
 }
-

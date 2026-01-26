@@ -58,6 +58,8 @@ struct WorldConfig {
     float caveThreshold = 0.5f; 
     float VRAM_HEAP_ALLOCATION_MB = 1024;
 
+    bool occlusionCulling = true;
+
     // debug
     int cubeDebugMode = 4; // a value of zero means run the normal shader program 
 };
@@ -422,6 +424,12 @@ public:
         m_config.cubeDebugMode = mode;
     }
 
+    void setOcclusionCulling (bool mode){
+        m_config.occlusionCulling = mode;
+    }
+
+    bool getOcclusionCulling () { return m_config.occlusionCulling; }
+
     void SetLODFreeze(bool freeze) { m_freezeLODs = freeze; }
     bool GetLODFreeze() const { return m_freezeLODs; }
 
@@ -739,12 +747,12 @@ public:
     //                                         RENDERING
     // ================================================================================================
 
-    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix, const glm::mat4& proj, GLuint depthPyramidTex) {
+    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix,const glm::mat4& previousViewMatrix, const glm::mat4& proj, GLuint depthPyramidTex) {
         if(m_shutdown) return;
 
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
-            m_culler->Cull(cullViewMatrix, proj, depthPyramidTex);
+            m_culler->Cull(cullViewMatrix, previousViewMatrix, proj, depthPyramidTex, m_config.occlusionCulling);
             Engine::Profiler::Get().EndGPU();
         }
 
