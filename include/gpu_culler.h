@@ -9,7 +9,6 @@
 
 class Shader;
 
-// Matches the GPU-side structure exactly
 struct alignas(16) ChunkGpuData {
     glm::vec4 minAABB_scale; 
     glm::vec4 maxAABB_pad;   
@@ -24,17 +23,13 @@ public:
     GpuCuller(size_t maxChunks);
     ~GpuCuller();
 
-    uint32_t AddOrUpdateChunk(int64_t chunkID, const glm::vec3& minAABB, float scale, size_t firstVertex, size_t vertexCount);
+    // UPDATED: Now accepts maxAABB explicitly for tight fitting
+    uint32_t AddOrUpdateChunk(int64_t chunkID, const glm::vec3& minAABB, const glm::vec3& maxAABB, float scale, size_t firstVertex, size_t vertexCount);
+    
     void RemoveChunk(int64_t chunkID);
 
-    // Generates the Mip Chain for the depth texture.
-    // Call this AFTER rendering the scene but BEFORE culling the next frame.
     void GenerateHiZ(GLuint depthTexture, int width, int height);
 
-    // Executes Compute Shader for Culling
-    // viewProj: Current Camera View Projection Matrix (for Frustum Check)
-    // prevViewProj: Previous Camera View Projection Matrix (for Occlusion Lookup)
-    // proj: Camera Projection Matrix (needed for screen space box projection math)
     void Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, GLuint depthTexture, bool occlusionCullingOn);
 
     void DrawIndirect(GLuint dummyVAO);
@@ -46,23 +41,19 @@ private:
 
     size_t m_maxChunks;
     
-    // Shaders
     std::unique_ptr<Shader> m_cullShader;
-    std::unique_ptr<Shader> m_hizShader; // Downsampler
+    std::unique_ptr<Shader> m_hizShader;
 
-    // GPU Buffers
     GLuint m_globalChunkBuffer = 0;   
     GLuint m_indirectBuffer = 0;      
     GLuint m_visibleChunkBuffer = 0;  
     GLuint m_atomicCounterBuffer = 0; 
     GLuint m_resultBuffer = 0;        
 
-    // Hi-Z State
     int m_depthPyramidWidth = 0;
     int m_depthPyramidHeight = 0;
-    GLuint m_depthSampler = 0; // Sampler object for nearest_mipmap_nearest
+    GLuint m_depthSampler = 0; 
 
-    // Slot Management
     std::unordered_map<int64_t, uint32_t> m_chunkSlots;
     std::stack<uint32_t> m_freeSlots;
 

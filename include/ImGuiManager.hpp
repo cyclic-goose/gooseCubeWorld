@@ -13,10 +13,11 @@
 
 // --- CONFIGURATION STRUCT ---
 struct UIConfig {
-    bool showDebugPanel = true;    // F2 to toggle
+    bool showDebugPanel = false;    // F2 to toggle
     bool showWorldSettings = false; // M to toggle
     bool showOverlay = true;        
     bool showWireframe = false;
+    
     bool vsync = false;
     bool lockFrustum = false;
     float FPS_OVERLAY_FONT_SCALE = 1.35f;

@@ -224,14 +224,14 @@ int main() {
         
         // We can call this the development debug LOD settings since the app will boot faster
         globalConfig.lodCount = 8;
-        globalConfig.lodRadius[0] = 5;   
+        globalConfig.lodRadius[0] = 7;   
         globalConfig.lodRadius[1] = 7;  
         globalConfig.lodRadius[2] = 11;   
         globalConfig.lodRadius[3] = 13;   
-        globalConfig.lodRadius[4] = 9;  
-        globalConfig.lodRadius[5] = 9; 
-        globalConfig.lodRadius[6] = 9; 
-        globalConfig.lodRadius[7] = 9; 
+        globalConfig.lodRadius[4] = 17;  
+        globalConfig.lodRadius[5] = 17; 
+        globalConfig.lodRadius[6] = 21; 
+        globalConfig.lodRadius[7] = 25; 
         
         // Higher LOD in general more expensive
         // globalConfig.lodCount = 7;

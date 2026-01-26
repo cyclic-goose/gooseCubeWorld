@@ -77,9 +77,7 @@ bool IsFrustumVisible(vec3 minPos, vec3 maxPos) {
 }
 
 // --- OCCLUSION LOGIC ---
-// Robust 8-corner projection
 bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
-    // 1. Define the 8 corners of the box
     vec3 corners[8];
     corners[0] = vec3(minAABB.x, minAABB.y, minAABB.z);
     corners[1] = vec3(maxAABB.x, minAABB.y, minAABB.z);
@@ -91,66 +89,64 @@ bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
     corners[7] = vec3(maxAABB.x, maxAABB.y, maxAABB.z);
 
     // 2. Project to Screen Space using PREVIOUS Matrix
-    // We use Previous Matrix because the Hi-Z buffer contains the depth of the Previous Frame.
-    // If we use Current Matrix, the AABB screen coords won't align with the depth buffer.
     vec2 minUV = vec2(1.0);
     vec2 maxUV = vec2(0.0);
     float maxZ = 0.0; // Closest Z (Reverse-Z: 1.0 is near)
-
-    bool visibleInPrevFrame = false;
+    
+    bool intersectsNearPlane = false;
+    bool anyVisible = false;
 
     for(int i = 0; i < 8; i++) {
         vec4 clipPos = u_PrevViewProjection * vec4(corners[i], 1.0);
         
-        // If a point is behind the camera (w <= epsilon), the projection is invalid.
-        if (clipPos.w > 0.001) {
-            vec3 ndc = clipPos.xyz / clipPos.w;
-            vec2 uv = ndc.xy * 0.5 + 0.5;
-            
-            // Check if point was on screen in previous frame
-            // We use a slight margin (0.0 - 1.0)
-            if (uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0) {
-                visibleInPrevFrame = true;
-            }
-
-            minUV = min(minUV, uv);
-            maxUV = max(maxUV, uv);
-            
-            // Reverse-Z: The point closest to camera has the LARGEST Z value.
-            maxZ = max(maxZ, ndc.z);
+        if (clipPos.w < 0.001) {
+            intersectsNearPlane = true; 
+            break;
         }
+
+        vec3 ndc = clipPos.xyz / clipPos.w;
+        
+        if (ndc.z > 1.0) {
+            intersectsNearPlane = true;
+            break;
+        }
+
+        vec2 uv = ndc.xy * 0.5 + 0.5;
+        minUV = min(minUV, uv);
+        maxUV = max(maxUV, uv);
+        maxZ = max(maxZ, ndc.z);
+        anyVisible = true;
     }
     
-    // SAFETY: If the object was totally off-screen or behind the camera in the last frame,
-    // we have no depth data for it. We must ASSUME VISIBLE (return false) to avoid popping.
-    if (!visibleInPrevFrame) return false; 
+    if (intersectsNearPlane) return false;
+    if (!anyVisible) return false; 
 
-    // Clamp UVs to screen
     minUV = clamp(minUV, 0.0, 1.0);
     maxUV = clamp(maxUV, 0.0, 1.0);
 
     // 3. Calculate Dimensions & LOD
-    // Convert UV size to Pixel size
     vec2 dims = (maxUV - minUV) * u_PyramidSize;
     float maxDim = max(dims.x, dims.y);
     
-    // Select LOD
-    // We subtract 1.0 to pick a higher-resolution mip level (better accuracy for distant objects).
-    float lod = clamp(floor(log2(maxDim) - 1.0), 0.0, 10.0);
+    // [TWEAK HERE] LOD Bias
+    // -1.0 is standard. -2.0 is Aggressive.
+    // -2.0 forces the shader to sample a texture that is 2x larger (higher res).
+    // This allows it to see "thinner" occluders (like distant mountains) without
+    // them getting blurred into the sky.
+    float lod = clamp(log2(maxDim) - 2.0, 0.0, 10.0);
 
-    // 4. Sample Hi-Z
+    // 4. Sample Hi-Z (5 Taps: Corners + Center)
     float d1 = textureLod(u_DepthPyramid, vec2(minUV.x, minUV.y), lod).r;
     float d2 = textureLod(u_DepthPyramid, vec2(maxUV.x, minUV.y), lod).r;
     float d3 = textureLod(u_DepthPyramid, vec2(minUV.x, maxUV.y), lod).r;
     float d4 = textureLod(u_DepthPyramid, vec2(maxUV.x, maxUV.y), lod).r;
+    float d5 = textureLod(u_DepthPyramid, (minUV + maxUV) * 0.5, lod).r;
     
-    // Conservative Reduction (Reverse-Z): Furthest = Minimum Value.
-    float furthestOccluder = min(min(d1, d2), min(d3, d4));
+    float furthestOccluder = min(d5, min(min(d1, d2), min(d3, d4)));
     
     // 5. Compare
-    // Is the object BEHIND the furthest occluder?
-    // We add a tiny epsilon to maxZ to prevent Z-fighting artifacts.
-    return maxZ < furthestOccluder;
+    // Reduced epsilon slightly to prevent flickering on distant objects
+    return maxZ < (furthestOccluder - 0.00001);
 }
 
 void main() {
@@ -160,12 +156,7 @@ void main() {
     ChunkGpuData chunk = allChunks[idx];
     if (chunk.vertexCount == 0) return;
 
-    // 1. Frustum Culling using CURRENT Matrix
-    // We only care if the chunk is in the CURRENT frustum.
     if (IsFrustumVisible(chunk.minAABB_scale.xyz, chunk.maxAABB_pad.xyz)) {
-        
-        // 2. Occlusion Culling using PREVIOUS Matrix
-        // We check if it was visible in the LAST frame.
         bool visible = true;
         if (u_OcclusionEnabled) {
              if (IsOccluded(chunk.minAABB_scale.xyz, chunk.maxAABB_pad.xyz)) {
