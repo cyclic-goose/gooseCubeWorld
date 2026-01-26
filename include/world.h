@@ -615,13 +615,20 @@ public:
     void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix,const glm::mat4& previousViewMatrix, const glm::mat4& proj, const int CUR_SCR_WIDTH, const int CUR_SCR_HEIGHT, Shader* depthDebugShader, bool depthDebug, bool frustumLock) {
         if(m_shutdown) return;
 
+
+        // ************************** FRUSTUM AND OCCLUSION CULL (CALLS CULL_COMPUTE) *********************** //
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
             m_culler->Cull(cullViewMatrix, previousViewMatrix, proj, g_fbo.hiZTex);
             Engine::Profiler::Get().EndGPU();
         }
+        // ************************** FRUSTUM AND OCCLUSION CULL (CALLS CULL_COMPUTE) *********************** //
 
-        {
+
+
+
+
+        {   // ************************** DRAW CALL (ACTUAL CALL INSIDE GPU_CULLER) *********************** //
             Engine::Profiler::Get().BeginGPU("GPU: MDI DRAW"); 
 
             shader.use();
@@ -643,8 +650,16 @@ public:
             glDisable(GL_POLYGON_OFFSET_FILL);
 
             Engine::Profiler::Get().EndGPU();
+            // ************************** DRAW CALL (ACTUAL CALL INSIDE GPU_CULLER) *********************** //
 
 
+
+
+            
+
+
+            // ************************** Hiearchical Z Buffer (OCCLUSION CULL DEPTH BUFFER AND MIPMAPS, CALLS HI_Z_DOWN.glsl) *********************** //
+             Engine::Profiler::Get().BeginGPU("GPU: Occlusion Cull COMPUTE"); 
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
@@ -673,8 +688,9 @@ public:
                 RenderHiZDebug(depthDebugShader, g_fbo.hiZTex, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
             }
 
+            Engine::Profiler::Get().EndGPU();
 
-
+            // ************************** Hiearchical Z Buffer (OCCLUSION CULL DEPTH BUFFER AND MIPMAPS, CALLS HI_Z_DOWN.glsl) *********************** //
 
 
         }
