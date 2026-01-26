@@ -2,6 +2,8 @@
 #define SHADER_H
 
 #include <glad/glad.h>
+#include <glm/glm.hpp>
+
 #include <string>
 #include <fstream>
 #include <sstream>
@@ -11,7 +13,9 @@ class Shader {
 public:
     unsigned int ID;
 
-    // Constructor for Vertex + Fragment Shaders
+    // ------------------------------------------------------------------------
+    // Constructor: Vertex + Fragment Shaders
+    // ------------------------------------------------------------------------
     Shader(const char* vertexPath, const char* fragmentPath) {
         std::string vertexCode, fragmentCode;
         std::ifstream vShaderFile, fShaderFile;
@@ -55,7 +59,9 @@ public:
         glDeleteShader(fragment);
     }
 
-    // Constructor for Compute Shader
+    // ------------------------------------------------------------------------
+    // Constructor: Compute Shader
+    // ------------------------------------------------------------------------
     Shader(const char* computePath) {
         std::string computeCode;
         std::ifstream cShaderFile;
@@ -87,20 +93,42 @@ public:
         glDeleteShader(compute);
     }
 
-    void use() { 
+    // ------------------------------------------------------------------------
+    // State Management
+    // ------------------------------------------------------------------------
+    void use() const { 
         glUseProgram(ID); 
     }
     
-    void setMat4(const std::string &name, const float* value) const {
-        glUniformMatrix4fv(glGetUniformLocation(ID, name.c_str()), 1, GL_FALSE, value);
+    // ------------------------------------------------------------------------
+    // Uniform Setters
+    // ------------------------------------------------------------------------
+    void setBool(const std::string &name, bool value) const {
+        glUniform1i(glGetUniformLocation(ID, name.c_str()), (int)value);
+    }
+
+    void setInt(const std::string &name, int value) const {
+        glUniform1i(glGetUniformLocation(ID, name.c_str()), value);
     }
 
     void setUInt(const std::string &name, unsigned int value) const {
         glUniform1ui(glGetUniformLocation(ID, name.c_str()), value);
     }
 
-    void setInt(const std::string &name, int value) const {
-        glUniform1i(glGetUniformLocation(ID, name.c_str()), value);
+    void setFloat(const std::string &name, float value) const {
+        glUniform1f(glGetUniformLocation(ID, name.c_str()), value);
+    }
+
+    void setVec2(const std::string &name, const glm::vec2 &value) const {
+        glUniform2fv(glGetUniformLocation(ID, name.c_str()), 1, &value[0]);
+    }
+
+    void setVec2(const std::string &name, float x, float y) const {
+        glUniform2f(glGetUniformLocation(ID, name.c_str()), x, y);
+    }
+
+    void setMat4(const std::string &name, const float* value) const {
+        glUniformMatrix4fv(glGetUniformLocation(ID, name.c_str()), 1, GL_FALSE, value);
     }
 
 private:

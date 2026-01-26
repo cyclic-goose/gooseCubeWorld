@@ -2,11 +2,10 @@
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 // --- CONFIGURATION ---
-// #define ENABLE_OCCLUSION 
-// #define ZERO_TO_ONE_DEPTH // Use this for glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE)
+#define ENABLE_OCCLUSION 
+#define ZERO_TO_ONE_DEPTH // Matches C++ glClipControl
 
 // --- INPUTS ---
-
 struct ChunkGpuData {
     vec4 minAABB_scale; 
     vec4 maxAABB_pad;   
@@ -16,20 +15,24 @@ struct ChunkGpuData {
     uint pad2;      
 };
 
-// Binding 0: Persistent global buffer
 layout(std430, binding = 0) readonly buffer GlobalBuffer {
     ChunkGpuData allChunks[];
 };
 
-uniform mat4 u_ViewProjection;
+uniform mat4 u_ViewProjection;     // CURRENT Frame (For Frustum Culling)
+uniform mat4 u_PrevViewProjection; // PREVIOUS Frame (For Occlusion Reprojection)
 uniform uint u_MaxChunks;
 
-#ifdef ENABLE_OCCLUSION
+// Helper uniforms for Occlusion
 uniform sampler2D u_DepthPyramid;
-#endif
+uniform vec2 u_PyramidSize; // Size of Mip 0
+uniform float u_P00;        // Projection[0][0]
+uniform float u_P11;        // Projection[1][1]
+uniform float u_zNear;      // Camera Z Near
+uniform float u_zFar;       // Camera Z Far
+uniform bool u_OcclusionEnabled; 
 
 // --- OUTPUTS ---
-
 struct DrawCommand {
     uint count;
     uint instanceCount;
@@ -37,90 +40,141 @@ struct DrawCommand {
     uint baseInstance;
 };
 
-// Binding 1: Draw Commands
 layout(std430, binding = 1) writeonly buffer OutputDrawCommands {
     DrawCommand outCommands[];
 };
 
-// Binding 2: Offsets for Vertex Shader
 layout(std430, binding = 2) writeonly buffer OutputChunkOffsets {
     vec4 outChunkOffsets[];
 };
 
-// Binding 0: Atomic Counter
 layout(binding = 0, offset = 0) uniform atomic_uint u_VisibleCount;
 
 // --- FRUSTUM LOGIC ---
-
-bool IsVisible(vec3 minPos, vec3 maxPos) {
-    // Extract frustum planes. 
-    // Gribb-Hartmann extraction.
-    // Rows: 0=Left/Right, 1=Top/Bottom, 2=Near/Far, 3=W
+bool IsFrustumVisible(vec3 minPos, vec3 maxPos) {
     mat4 M = transpose(u_ViewProjection);
     vec4 planes[6];
-
     planes[0] = M[3] + M[0]; // Left
     planes[1] = M[3] - M[0]; // Right
     planes[2] = M[3] + M[1]; // Bottom
     planes[3] = M[3] - M[1]; // Top
-
 #ifdef ZERO_TO_ONE_DEPTH
-    // GL_ZERO_TO_ONE: Near is z >= 0, Far is z <= w
-    // Row 2 is Z. 
     planes[4] = M[2];        // Near (0 <= z)
     planes[5] = M[3] - M[2]; // Far  (z <= w)
 #else
-    // Standard GL: Near is z >= -w, Far is z <= w
-    planes[4] = M[3] + M[2]; // Near
-    planes[5] = M[3] - M[2]; // Far
+    planes[4] = M[3] + M[2]; 
+    planes[5] = M[3] - M[2]; 
 #endif
 
     for(int i = 0; i < 6; i++) {
-        vec3 normal = planes[i].xyz;
-        // Positive vertex (p-vertex)
         vec3 p = minPos;
-        if(normal.x >= 0) p.x = maxPos.x;
-        if(normal.y >= 0) p.y = maxPos.y;
-        if(normal.z >= 0) p.z = maxPos.z;
-
-        if(dot(vec4(p, 1.0), planes[i]) < 0.0) {
-            return false;
-        }
+        if(planes[i].x >= 0) p.x = maxPos.x;
+        if(planes[i].y >= 0) p.y = maxPos.y;
+        if(planes[i].z >= 0) p.z = maxPos.z;
+        if(dot(vec4(p, 1.0), planes[i]) < 0.0) return false;
     }
     return true;
+}
+
+// --- OCCLUSION LOGIC ---
+bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
+    vec3 corners[8];
+    corners[0] = vec3(minAABB.x, minAABB.y, minAABB.z);
+    corners[1] = vec3(maxAABB.x, minAABB.y, minAABB.z);
+    corners[2] = vec3(minAABB.x, maxAABB.y, minAABB.z);
+    corners[3] = vec3(maxAABB.x, maxAABB.y, minAABB.z);
+    corners[4] = vec3(minAABB.x, minAABB.y, maxAABB.z);
+    corners[5] = vec3(maxAABB.x, minAABB.y, maxAABB.z);
+    corners[6] = vec3(minAABB.x, maxAABB.y, maxAABB.z);
+    corners[7] = vec3(maxAABB.x, maxAABB.y, maxAABB.z);
+
+    // 2. Project to Screen Space using PREVIOUS Matrix
+    vec2 minUV = vec2(1.0);
+    vec2 maxUV = vec2(0.0);
+    float maxZ = 0.0; // Closest Z (Reverse-Z: 1.0 is near)
+    
+    bool intersectsNearPlane = false;
+    bool anyVisible = false;
+
+    for(int i = 0; i < 8; i++) {
+        vec4 clipPos = u_PrevViewProjection * vec4(corners[i], 1.0);
+        
+        if (clipPos.w < 0.001) {
+            intersectsNearPlane = true; 
+            break;
+        }
+
+        vec3 ndc = clipPos.xyz / clipPos.w;
+        
+        if (ndc.z > 1.0) {
+            intersectsNearPlane = true;
+            break;
+        }
+
+        vec2 uv = ndc.xy * 0.5 + 0.5;
+        minUV = min(minUV, uv);
+        maxUV = max(maxUV, uv);
+        maxZ = max(maxZ, ndc.z);
+        anyVisible = true;
+    }
+    
+    if (intersectsNearPlane) return false;
+    if (!anyVisible) return false; 
+
+    minUV = clamp(minUV, 0.0, 1.0);
+    maxUV = clamp(maxUV, 0.0, 1.0);
+
+    // 3. Calculate Dimensions & LOD
+    vec2 dims = (maxUV - minUV) * u_PyramidSize;
+    float maxDim = max(dims.x, dims.y);
+    
+    // [TWEAK HERE] LOD Bias
+    // -1.0 is standard. -2.0 is Aggressive.
+    // -2.0 forces the shader to sample a texture that is 2x larger (higher res).
+    // This allows it to see "thinner" occluders (like distant mountains) without
+    // them getting blurred into the sky.
+    float lod = clamp(log2(maxDim) - 2.0, 0.0, 10.0);
+
+    // 4. Sample Hi-Z (5 Taps: Corners + Center)
+    float d1 = textureLod(u_DepthPyramid, vec2(minUV.x, minUV.y), lod).r;
+    float d2 = textureLod(u_DepthPyramid, vec2(maxUV.x, minUV.y), lod).r;
+    float d3 = textureLod(u_DepthPyramid, vec2(minUV.x, maxUV.y), lod).r;
+    float d4 = textureLod(u_DepthPyramid, vec2(maxUV.x, maxUV.y), lod).r;
+    float d5 = textureLod(u_DepthPyramid, (minUV + maxUV) * 0.5, lod).r;
+    
+    float furthestOccluder = min(d5, min(min(d1, d2), min(d3, d4)));
+    
+    // 5. Compare
+    // Reduced epsilon slightly to prevent flickering on distant objects
+    return maxZ < (furthestOccluder - 0.00001);
 }
 
 void main() {
     uint idx = gl_GlobalInvocationID.x;
     if (idx >= u_MaxChunks) return;
 
-    // Direct access to persistent buffer
     ChunkGpuData chunk = allChunks[idx];
-
-    // 1. Check if slot is ACTIVE
-    // We use vertexCount == 0 to mark empty/unloaded slots
     if (chunk.vertexCount == 0) return;
 
-    // 2. Frustum Culling
-    if (IsVisible(chunk.minAABB_scale.xyz, chunk.maxAABB_pad.xyz)) {
-        
-        // 3. (Optional) Occlusion Culling
-        #ifdef ENABLE_OCCLUSION
-            // Reproject AABB center to screen UV, sample depth pyramid, compare.
-            // (Skipped for brevity/stability unless depth pyramid is bound)
-        #endif
+    if (IsFrustumVisible(chunk.minAABB_scale.xyz, chunk.maxAABB_pad.xyz)) {
+        bool visible = true;
+        if (u_OcclusionEnabled) {
+             if (IsOccluded(chunk.minAABB_scale.xyz, chunk.maxAABB_pad.xyz)) {
+                 visible = false;
+             }
+        }
 
-        // Append to Indirect Buffer
-        uint outIndex = atomicCounterIncrement(u_VisibleCount);
+        if (visible) {
+            uint outIndex = atomicCounterIncrement(u_VisibleCount);
 
-        DrawCommand cmd;
-        cmd.count = chunk.vertexCount;
-        cmd.instanceCount = 1;
-        cmd.first = chunk.firstVertex;
-        cmd.baseInstance = outIndex; // Maps to index in OutputChunkOffsets
-        outCommands[outIndex] = cmd;
+            DrawCommand cmd;
+            cmd.count = chunk.vertexCount;
+            cmd.instanceCount = 1;
+            cmd.first = chunk.firstVertex;
+            cmd.baseInstance = outIndex;
+            outCommands[outIndex] = cmd;
 
-        // Output data required by Vertex Shader
-        outChunkOffsets[outIndex] = vec4(chunk.minAABB_scale.xyz, chunk.minAABB_scale.w);
+            outChunkOffsets[outIndex] = vec4(chunk.minAABB_scale.xyz, chunk.minAABB_scale.w);
+        }
     }
 }

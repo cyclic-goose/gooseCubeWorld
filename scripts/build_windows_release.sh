@@ -39,7 +39,12 @@ rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR"
 
 # Copy Executable
-cp build/windows_release/gooseVoxelEngine.exe "$DIST_DIR/"
+if [ -f "build/windows_release/gooseVoxelEngine.exe" ]; then
+    cp build/windows_release/gooseVoxelEngine.exe "$DIST_DIR/"
+else
+    echo "Error: Executable not found. Build likely failed."
+    exit 1
+fi
 
 # Strip Debug Symbols 
 # (This removes symbol tables, often reducing .exe size by 50-80% for C++ releases)

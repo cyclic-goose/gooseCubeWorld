@@ -22,7 +22,7 @@ public:
         // 1. Load the first image to determine dimensions
         unsigned char* data = stbi_load(filePaths[0].c_str(), &width, &height, &nrChannels, 0);
         if (!data) {
-            std::cerr << "[TextureManager] Failed to load first texture: " << filePaths[0] << std::endl;
+            std::cout << "[TextureManager] Failed to load first texture: " << filePaths[0] << std::endl;
             return 0;
         }
 
@@ -68,7 +68,7 @@ public:
             
             if (imgData) {
                 if (w != width || h != height) {
-                    std::cerr << "[TextureManager] Mismatch dimension for " << filePaths[i] 
+                    std::cout << "[TextureManager] Mismatch dimension for " << filePaths[i] 
                               << ". Expected " << width << "x" << height 
                               << ", got " << w << "x" << h << ". Skipping upload." << std::endl;
                 } else {
@@ -77,7 +77,7 @@ public:
                 }
                 stbi_image_free(imgData);
             } else {
-                std::cerr << "[TextureManager] Failed to load texture: " << filePaths[i] << std::endl;
+                std::cout << "[TextureManager] Failed to load texture: " << filePaths[i] << std::endl;
             }
         }
 

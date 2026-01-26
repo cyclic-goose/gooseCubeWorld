@@ -18,6 +18,7 @@
 #include <fstream>
 #include <sstream>
 #include <memory> 
+#include <cstring> 
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -32,7 +33,8 @@
 #include "gpu_memory.h"
 #include "packedVertex.h"
 #include "profiler.h"
-#include "gpu_culler.h" 
+#include "gpu_culler.h"
+#include "screen_quad.h"
 
 // ================================================================================================
 //                                     CONFIGURATION
@@ -44,8 +46,7 @@ struct WorldConfig {
     int lodCount = 5; 
     
     // LOD Radii: Defines the distance for each Detail Level.
-    // Index 0 = Highest Detail (LOD 0), Index 4 = Lowest Detail.
-    int lodRadius[8] = { 10, 16, 24, 32, 48, 0, 0, 0 }; 
+    int lodRadius[12] = { 10, 16, 24, 32, 48, 0, 0, 0 , 0, 0, 0, 0}; 
     
     // Terrain Parameters
     float scale = 0.08f;          
@@ -58,34 +59,20 @@ struct WorldConfig {
     float caveThreshold = 0.5f; 
     float VRAM_HEAP_ALLOCATION_MB = 1024;
 
-    // debug
-    int cubeDebugMode = 4; // a value of zero means run the normal shader program 
+    bool occlusionCulling = true;
+    int cubeDebugMode = 4; 
 };
 
 // ================================================================================================
 //                                  TERRAIN GENERATOR INTERFACE
 // ================================================================================================
-// GUIDE: To implement a new Terrain Generator:
-// 1. Create a class that inherits from ITerrainGenerator.
-// 2. Implement Init(), GetHeight(), and GetBlock().
-// 3. In World::World(), replace 'm_generator = std::make_unique<DefaultGenerator>(m_config);'
-//    with your new class.
-// ================================================================================================
 
 class ITerrainGenerator {
 public:
     virtual ~ITerrainGenerator() = default;
-    
-    // Called once on World init
     virtual void Init() = 0; 
-    
-    // Used for LOD calculations and height culling
     virtual int GetHeight(float x, float z) const = 0;
-    
-    // Used for actual voxel placement. Return Block ID (0 = Air).
     virtual uint8_t GetBlock(float x, float y, float z, int heightAtXZ, int lodScale) const = 0;
-    
-    // Helper for Quadtree/LOD bounding boxes
     virtual void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) = 0;
 };
 
@@ -104,21 +91,18 @@ public:
     DefaultGenerator(WorldConfig config) : m_config(config) { Init(); }
 
     void Init() override {
-        // 1. Base Rolling Hills
         auto fnPerlin = FastNoise::New<FastNoise::Perlin>();
         auto fnFractal = FastNoise::New<FastNoise::FractalFBm>();
         fnFractal->SetSource(fnPerlin);
         fnFractal->SetOctaveCount(4);
         m_baseNoise = fnFractal;
 
-        // 2. Sharp Mountains
         auto fnSimplex = FastNoise::New<FastNoise::Simplex>();
         auto fnFractal2 = FastNoise::New<FastNoise::FractalFBm>();
         fnFractal2->SetSource(fnSimplex);
         fnFractal2->SetOctaveCount(3);
         m_mountainNoise = fnFractal2;
 
-        // 3. Caves (3D Noise)
         m_caveNoise = FastNoise::New<FastNoise::Perlin>();
     }
 
@@ -126,11 +110,9 @@ public:
         float nx = x * m_config.scale;
         float nz = z * m_config.scale;
         
-        // Base Terrain
         float baseVal = m_baseNoise->GenSingle2D(nx * m_config.hillFrequency, nz * m_config.hillFrequency, m_config.seed);
         float hillHeight = baseVal * m_config.hillAmplitude;
         
-        // Mountains
         float mountainVal = m_mountainNoise->GenSingle2D(nx * m_config.mountainFrequency, nz * m_config.mountainFrequency, m_config.seed + 1);
         mountainVal = std::abs(mountainVal); 
         mountainVal = std::pow(mountainVal, 2.0f); 
@@ -139,36 +121,28 @@ public:
         return m_config.seaLevel + (int)(hillHeight + mountainHeight);
     }
 
-    // --- TEXTURE / BLOCK DEFINITION ---
-    // GUIDE: Map your logic to Texture IDs here.
-    // blockID 1 = Grass, 2 = Dirt, 3 = Stone, 4 = Snow, etc.
-    // These IDs correspond to the layer index in your Texture Array.
     uint8_t GetBlock(float x, float y, float z, int heightAtXZ, int lodScale) const override {
         int wy = (int)y;
         
-        // Cave Check
-        if (m_config.enableCaves && lodScale == 1) { // Only caves at LOD 0
+        if (m_config.enableCaves && lodScale == 1) { 
              float val = m_caveNoise->GenSingle3D(x * 0.02f, y * 0.04f, z * 0.02f, m_config.seed);
-             if (val > m_config.caveThreshold) return 0; // Air
+             if (val > m_config.caveThreshold) return 0; 
         }
 
-        if (wy > heightAtXZ) return 0; // Air above terrain
+        if (wy > heightAtXZ) return 0; 
 
-        // Surface Logic
         if (wy == heightAtXZ) {
-            // Top Block
-            if (wy > 550) return 4; // Snow
-            if (wy > 350) return 1; // Grass
-            return 2;              // Sand/Dirt
+            if (wy > 550) return 4; 
+            if (wy > 350) return 1; 
+            return 2;              
         } 
         else if (wy > heightAtXZ - (4 * lodScale)) {
-            // Sub-surface (4 blocks deep)
-            if (wy > 550) return 4; // Snow
-            if (wy > 350) return 2; // Dirt
-            return 5;              // SandStone
+            if (wy > 550) return 4; 
+            if (wy > 350) return 2; 
+            return 5;              
         }
         
-        return 3; // Deep Stone
+        return 3; 
     }
 
     void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) override {
@@ -176,7 +150,6 @@ public:
         int worldZ = cz * CHUNK_SIZE * scale;
         int size = CHUNK_SIZE * scale;
 
-        // Sample 5 points (corners + center) for rough AABB calculation
         int h1 = GetHeight(worldX, worldZ);
         int h2 = GetHeight(worldX + size, worldZ);
         int h3 = GetHeight(worldX, worldZ + size);
@@ -208,6 +181,7 @@ struct ChunkNode {
     size_t vertexCount = 0;
     int64_t id; 
 
+    // Bounding Box (Tight fit to geometry)
     glm::vec3 minAABB;
     glm::vec3 maxAABB;
 
@@ -220,6 +194,7 @@ struct ChunkNode {
         float size = (float)(CHUNK_SIZE * scale);
         position = glm::vec3(x * size, y * size, z * size);
         
+        // Default to full size, will be tightened in Generate
         minAABB = position;
         maxAABB = position + glm::vec3(size);
 
@@ -235,7 +210,6 @@ struct ChunkNode {
     }
 };
 
-// Helper for hashing chunk coordinates
 inline int64_t ChunkKey(int x, int y, int z, int lod) {
     uint64_t ulod = (uint64_t)(lod & 0x7) << 61; 
     uint64_t ux = (uint64_t)(uint32_t)x & 0xFFFFF; 
@@ -253,22 +227,15 @@ private:
     WorldConfig m_config;
     std::unique_ptr<ITerrainGenerator> m_generator;
     
-    // --- CHUNK STORAGE ---
-    // Protected by m_chunksMutex
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
-    std::shared_mutex m_chunksMutex; // R/W Lock for the map
-
+    std::shared_mutex m_chunksMutex; 
     ObjectPool<ChunkNode> m_chunkPool;
 
-    // --- ASYNC QUEUES ---
     std::mutex m_queueMutex;
     std::queue<ChunkNode*> m_generatedQueue; 
     std::queue<ChunkNode*> m_meshedQueue;    
-    
     ThreadPool m_pool; 
 
-    // --- ASYNC LOD UPDATING ---
-    // Struct to hold results from the calculation worker
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
     struct LODUpdateResult {
         std::vector<ChunkRequest> chunksToLoad;
@@ -279,43 +246,24 @@ private:
     std::atomic<bool> m_isLODWorkerRunning { false };
     std::mutex m_lodResultMutex;
     std::unique_ptr<LODUpdateResult> m_pendingLODResult = nullptr;
-    glm::vec3 m_lastLODCalculationPos = glm::vec3(-9999.0f); // For optimization
-    
-    // ------------------------------------
-
-
-    // --- LOD TRACKING ---
-    int lastPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
-    int lastPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
-    int lastUnloadPx[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
-    int lastUnloadPz[8] = {-999,-999,-999,-999,-999,-999,-999,-999};
-    bool m_lodComplete[8] = {false};
+    glm::vec3 m_lastLODCalculationPos = glm::vec3(-9999.0f); 
 
     int m_frameCounter = 0; 
     std::atomic<bool> m_shutdown{false};
+    bool m_freezeLODs = false; 
 
-    bool m_freezeLODs = false; // Toggle to pause chunk updates
-
-    // --- GPU RESOURCES ---
     std::unique_ptr<GpuMemoryManager> m_gpuMemory;
     std::unique_ptr<GpuCuller> m_culler;
     GLuint m_dummyVAO = 0; 
-    
-    // TEXTURE ARRAY HANDLE
-    // Bind your GL_TEXTURE_2D_ARRAY here via SetTextureArray()
     GLuint m_textureArrayID = 0;
-
 
     friend class ImGuiManager;
 
-
-    // Checks if the 8 sub-chunks of this parent are fully active (visible).
-    // Used to prevent holes when unloading parents.
     bool AreChildrenReady(int cx, int cy, int cz, int lod) {
-        if (lod == 0) return true; // LOD 0 has no children
+        if (lod == 0) return true; 
         
         int childLod = lod - 1;
-        int scale = 1 << childLod; // Scale of the children
+        int scale = 1 << childLod; 
         
         int startX = cx * 2;
         int startY = cy * 2;
@@ -323,9 +271,6 @@ private:
 
         for (int x = 0; x < 2; x++) {
             for (int z = 0; z < 2; z++) {
-                
-                // Optimization: Compute bounds for this column once
-                // This determines if children in this column SHOULD exist.
                 int minH, maxH;
                 m_generator->GetHeightBounds((startX + x), (startZ + z), scale, minH, maxH);
                 int chunkYStart = (minH / (CHUNK_SIZE * scale)) - 1; 
@@ -336,18 +281,12 @@ private:
                     auto it = m_chunks.find(key);
                     
                     if (it != m_chunks.end()) {
-                         // Child is in pipeline. Must be ACTIVE (visible).
                          if (it->second->state.load() != ChunkState::ACTIVE) return false;
                     } else {
-                        // Child is missing from map.
-                        // Is it missing because it's empty air (Valid), or pending load (Invalid)?
                         int myY = startY + y;
                         if (myY >= chunkYStart && myY <= chunkYEnd) {
-                            // It lies within terrain bounds, so it SHOULD exist.
-                            // Since it's missing, it hasn't loaded yet.
                             return false; 
                         }
-                        // Else: It's outside terrain bounds (Air/Deep Underground). Treat as Ready.
                     }
                 }
             }
@@ -355,14 +294,10 @@ private:
         return true;
     }
 
-    // --- HELPER: Is Parent Active? ---
-    // Checks if the Parent chunk (Lower Detail) is ready.
-    // Used to prevent holes when unloading children (moving away).
     bool IsParentReady(int cx, int cy, int cz, int lod) {
-        if (lod >= m_config.lodCount - 1) return true; // Lowest LOD has no parent
+        if (lod >= m_config.lodCount - 1) return true; 
         
         int parentLod = lod + 1;
-        // Integer division >> 1 works correctly for our coord system (spatial subdivision)
         int px = cx >> 1;
         int py = cy >> 1;
         int pz = cz >> 1;
@@ -370,24 +305,14 @@ private:
         int64_t key = ChunkKey(px, py, pz, parentLod);
         auto it = m_chunks.find(key);
         
-        // If parent missing or not active, we are NOT ready to unload.
-        // Waiting prevents a hole in the world.
         if (it == m_chunks.end() || it->second->state.load() != ChunkState::ACTIVE) {
             return false;
         }
         return true;
     }
 
-    //bool m_viewNormals = false;
-
 public:
-    // ================================================================================================
-    //                                     LIFECYCLE
-    // ================================================================================================
-
     World(WorldConfig config) : m_config(config) {
-        // PLUG IN: Swapping generators
-        // To use a custom generator, change this line:
         m_generator = std::make_unique<DefaultGenerator>(m_config);
 
         size_t maxChunks = 0;
@@ -398,7 +323,7 @@ public:
         size_t capacity = maxChunks + 5000; 
         
         m_chunkPool.Init(capacity); 
-        m_gpuMemory = std::make_unique<GpuMemoryManager>(config.VRAM_HEAP_ALLOCATION_MB * 1024 * 1024); // 1GB Voxel Heap
+        m_gpuMemory = std::make_unique<GpuMemoryManager>(config.VRAM_HEAP_ALLOCATION_MB * 1024 * 1024); 
 
         m_culler = std::make_unique<GpuCuller>(capacity);
         glCreateVertexArrays(1, &m_dummyVAO);
@@ -414,35 +339,18 @@ public:
         m_culler.reset();
     }
 
-    void SetTextureArray(GLuint textureID) {
-        m_textureArrayID = textureID;
-    }
-
-    void setCubeDebugMode(int mode) { 
-        m_config.cubeDebugMode = mode;
-    }
-
+    void SetTextureArray(GLuint textureID) { m_textureArrayID = textureID; }
+    void setCubeDebugMode(int mode) { m_config.cubeDebugMode = mode; }
+    void setOcclusionCulling (bool mode){ m_config.occlusionCulling = mode; }
+    bool getOcclusionCulling () { return m_config.occlusionCulling; }
     void SetLODFreeze(bool freeze) { m_freezeLODs = freeze; }
     bool GetLODFreeze() const { return m_freezeLODs; }
-
-    // // Toggles between 0 and 1
-    // void ToggleViewNormals() { 
-    //     m_config.viewNormals = !m_config.viewNormals; 
-    // }
-    
     const WorldConfig& GetConfig() const { return m_config; }
-
-    // ================================================================================================
-    //                                     MAIN UPDATE LOOP
-    // ================================================================================================
 
     void Update(glm::vec3 cameraPos) {
         if (m_shutdown) return;
         Engine::Profiler::ScopedTimer timer("World::Update Total");
         
-        // --- AUTO-DEFRAG / RELOAD ---
-        // Checks fragmentation of the persistent mapped buffer.
-        // If fragmentation > 60%, we wipe and reload to prevent allocation failures.
         if (m_gpuMemory->GetFragmentationRatio() > 0.6f) { 
              Reload(m_config);
              return;
@@ -450,19 +358,10 @@ public:
 
         ProcessQueues(); 
 
-        // Skip Chunk Loading/Unloading if frozen
         if (m_freezeLODs) return; 
-        
-        // --- [CHANGE] ASYNC DISPATCH ---
-        // Instead of calculating LODs on main thread, we delegate to worker.
         UpdateLODs_Async(cameraPos);
-        
         m_frameCounter++;
     }
-
-    // ================================================================================================
-    //                                  ASYNC TASK PROCESSING
-    // ================================================================================================
 
     void ProcessQueues() {
         if(m_shutdown) return;
@@ -471,11 +370,9 @@ public:
         std::vector<ChunkNode*> nodesToMesh;
         std::vector<ChunkNode*> nodesToUpload;
         
-        // 1. HARVEST RESULTS
         {
             std::lock_guard<std::mutex> lock(m_queueMutex);
             
-            // Limit throughput to prevent frame stutters, but keep it high to clear backlog.
             int limitGen = 1024; 
             while (!m_generatedQueue.empty() && limitGen > 0) {
                 nodesToMesh.push_back(m_generatedQueue.front());
@@ -491,11 +388,9 @@ public:
             }
         }
 
-        // 2. DISPATCH MESHING TASKS
         for (ChunkNode* node : nodesToMesh) {
             if(m_shutdown) return; 
             if (node->state == ChunkState::GENERATING) {
-                // Uniform chunks (all air/solid) don't need meshing
                 if (node->chunk.isUniform && node->chunk.uniformID == 0) {
                     node->state = ChunkState::ACTIVE;
                 } else {
@@ -505,15 +400,13 @@ public:
             }
         }
 
-        // 3. UPLOAD TO GPU
-        // This runs on the Main Thread (OpenGL Context required for non-persistent mapped buffers, 
-        // though we use persistent mapping here so it's just a memcpy).
         for (ChunkNode* node : nodesToUpload) {
             if(m_shutdown) return; 
             if (node->state == ChunkState::MESHING) {
                 if (!node->cachedMesh.empty()) {
                     size_t bytes = node->cachedMesh.size() * sizeof(PackedVertex);
                     long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
+                    //long long offset = m_gpuMemory->Allocate(bytes, 256); // FORCE 256 BYTE CACHE LINE ALIGNMENT
                     
                     if (offset != -1) {
                         m_gpuMemory->Upload(offset, node->cachedMesh.data(), bytes);
@@ -522,10 +415,11 @@ public:
                         node->cachedMesh.clear(); 
                         node->cachedMesh.shrink_to_fit();
                         
-                        // Register with GPU Driven Culler
+                        // [FIX] Pass tight bounding box to culler
                         m_culler->AddOrUpdateChunk(
                             node->id, 
                             node->minAABB,
+                            node->maxAABB,
                             (float)node->scale, 
                             (size_t)(offset / sizeof(PackedVertex)), 
                             node->vertexCount
@@ -537,20 +431,13 @@ public:
         }
     }
 
-        // ================================================================================================
-    //                             ASYNC LOD SYSTEM
-    // ================================================================================================
-
-    // This runs on the WORKER THREAD. Does the math, touches no GPU.
     void Task_CalculateLODs(glm::vec3 cameraPos) {
         if(m_shutdown) return;
         Engine::Profiler::ScopedTimer timer("[ASYNC] World::LOD Calc");
         auto result = std::make_unique<LODUpdateResult>();
 
-        // 1. SNAPSHOT STATE (Read-Only Lock)
         std::shared_lock<std::shared_mutex> readLock(m_chunksMutex);
 
-        // --- PART A: CALCULATE UNLOADS ---
         for (const auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
             int lod = node->lod;
@@ -564,21 +451,16 @@ public:
             
             bool shouldUnload = false;
 
-            // 1. Outer Radius (Too Far - Transition to LOWER detail)
             if (dx > m_config.lodRadius[lod] || dz > m_config.lodRadius[lod]) {
-                 // [FIX] Wait for Parent (Lower Detail) to be ready before unloading this child.
-                 // This overlaps them, preventing the flash/hole.
                  if (IsParentReady(node->cx, node->cy, node->cz, lod)) {
                      shouldUnload = true;
                  }
             }
-            // 2. Inner Radius (Too Close - Transition to HIGHER detail)
             else if (lod > 0) {
                 int prevRadius = m_config.lodRadius[lod - 1];
                 int innerBoundary = ((prevRadius + 1) / 2);
                 
                 if (dx < innerBoundary && dz < innerBoundary) {
-                    // [FIX] Wait for Children (Higher Detail) to be ready before unloading this parent.
                     if (AreChildrenReady(node->cx, node->cy, node->cz, lod)) {
                         shouldUnload = true;
                     }
@@ -593,7 +475,6 @@ public:
             }
         }
 
-        // --- PART B: CALCULATE LOADS ---
         static std::vector<std::pair<int, int>> spiralOffsets;
         static std::once_flag flag;
         std::call_once(flag, [](){
@@ -628,7 +509,6 @@ public:
                 
                 if (std::abs(offset.first) > r || std::abs(offset.second) > r) continue;
 
-                // Donut Check
                 if (lod > 0) {
                      if (std::abs(offset.first) < minR && std::abs(offset.second) < minR) continue;
                 }
@@ -636,7 +516,6 @@ public:
                 int x = px + offset.first;
                 int z = pz + offset.second;
                 
-                // Height Cull
                 int minH, maxH;
                 m_generator->GetHeightBounds(x, z, scale, minH, maxH);
                 int chunkYStart = std::max(0, (minH / (CHUNK_SIZE * scale)) - 1); 
@@ -668,13 +547,12 @@ public:
         m_isLODWorkerRunning = false;
     }
 
-    // This runs on the MAIN THREAD. Commits the results.
     void UpdateLODs_Async(glm::vec3 cameraPos) {
         
         {
+            Engine::Profiler::ScopedTimer timer("World::ApplyLODs");
             std::lock_guard<std::mutex> lock(m_lodResultMutex);
             if (m_pendingLODResult) {
-                Engine::Profiler::ScopedTimer timer("World::ApplyLODs");
                 
                 std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
 
@@ -735,72 +613,116 @@ public:
         }
     }
 
-    // ================================================================================================
-    //                                         RENDERING
-    // ================================================================================================
-
-    void Draw(Shader& shader, const glm::mat4& renderViewProj, const glm::mat4& cullViewProj) {
+    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix,const glm::mat4& previousViewMatrix, const glm::mat4& proj, const int CUR_SCR_WIDTH, const int CUR_SCR_HEIGHT, Shader* depthDebugShader, bool depthDebug, bool frustumLock) {
         if(m_shutdown) return;
-        //Engine::Profiler::ScopedTimer timer("World::Draw");
 
-        // 1. COMPUTE PASS (CULLING)
-        // Filters visible chunks into the Indirect Buffer
+
+        // ************************** FRUSTUM AND OCCLUSION CULL (CALLS CULL_COMPUTE) *********************** //
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
-            //Engine::Profiler::ScopedTimer timerGPU("GPU: Culling Compute"); 
-            m_culler->Cull(cullViewProj, m_gpuMemory->GetID());
+            m_culler->Cull(cullViewMatrix, previousViewMatrix, proj, g_fbo.hiZTex);
             Engine::Profiler::Get().EndGPU();
         }
+        // ************************** FRUSTUM AND OCCLUSION CULL (CALLS CULL_COMPUTE) *********************** //
 
-        // 2. GEOMETRY PASS
-        // MultiDrawIndirect using the buffer generated above
-        {
+
+
+
+
+        {   // ************************** DRAW CALL (ACTUAL CALL INSIDE GPU_CULLER) *********************** //
             Engine::Profiler::Get().BeginGPU("GPU: MDI DRAW"); 
 
             shader.use();
-            glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(renderViewProj));
-
-            // View normals by activating Frag shader debug uniform
-            // 0 = Normal, 1 = Debug Normals
+            glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
             glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config.cubeDebugMode);
             
-            // Bind Persistent Vertex Storage (SSBO Binding 0)
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
 
-            
-            
-            // --- TEXTURE ARRAY BINDING ---
-            // Ensure your shader has: uniform sampler2DArray u_Textures;
-            // And you bind it to Texture Unit 0.
             if (m_textureArrayID != 0) {
                  glActiveTexture(GL_TEXTURE0);
                  glBindTexture(GL_TEXTURE_2D_ARRAY, m_textureArrayID);
                  shader.setInt("u_Textures", 0);
             }
 
-            // --- Z-FIGHTING FIX ---
-            // Enable Polygon Offset to handle overlapping geometry cleanly.
-            // GL_POLYGON_OFFSET_FILL pushes geometry back. 
-            // Since we are drawing all LODs at once, this is a "Global" fix.
-            // Ideally, you'd split the MDI call by LOD and increase the factor for each.
             glEnable(GL_POLYGON_OFFSET_FILL);
             glPolygonOffset(1.0f, 1.0f);
 
-            m_culler->DrawIndirect(m_dummyVAO); ////////////////// ******************** PRIMARY WORLD DRAW CALL **************** ///////////////////
+            m_culler->DrawIndirect(m_dummyVAO); 
             glDisable(GL_POLYGON_OFFSET_FILL);
 
             Engine::Profiler::Get().EndGPU();
+            // ************************** DRAW CALL (ACTUAL CALL INSIDE GPU_CULLER) *********************** //
+
+
+
+
+            
+
+
+            // ************************** Hiearchical Z Buffer (OCCLUSION CULL DEPTH BUFFER AND MIPMAPS, CALLS HI_Z_DOWN.glsl) *********************** //
+             Engine::Profiler::Get().BeginGPU("GPU: Occlusion Cull COMPUTE"); 
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+            glCopyImageSubData(g_fbo.depthTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                            g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                            CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 1);
+            
+            // Barrier: Ensure copy finishes before Compute Shader reads it
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+
+            // Step B: Downsample the rest of the pyramid
+            GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+                            
+
+
+            if (!depthDebug)
+            {
+                // Draw normal rendered view to screen quad
+                glBlitNamedFramebuffer(g_fbo.fbo, 0, 
+                    0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
+                    0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
+                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                
+            } else {
+                // render depth view instead 
+                RenderHiZDebug(depthDebugShader, g_fbo.hiZTex, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+            }
+
+            Engine::Profiler::Get().EndGPU();
+
+            // ************************** Hiearchical Z Buffer (OCCLUSION CULL DEPTH BUFFER AND MIPMAPS, CALLS HI_Z_DOWN.glsl) *********************** //
+
+
         }
     }
 
+    GpuCuller* GetCuller() { return m_culler.get(); }
 
+    void RenderHiZDebug(Shader* debugShader, GLuint hizTexture, int mipLevel, int screenW, int screenH) {
+        glDisable(GL_DEPTH_TEST); 
+        glDisable(GL_CULL_FACE);
+        
+        debugShader->use();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, hizTexture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0); 
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 10); 
 
-    // ================================================================================================
-    //                                         RESET / RELOAD
-    // ================================================================================================
+        debugShader->setInt("u_DepthTexture", 0);
+        debugShader->setInt("u_MipLevel", mipLevel);
+        debugShader->setVec2("u_ScreenSize", glm::vec2(screenW, screenH));
+
+        glBindVertexArray(m_dummyVAO); 
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        
+        glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
+    }
 
     void Reload(WorldConfig newConfig) {
-        //Engine::Profiler::ScopedTimer timer("World::Reload");
         m_config = newConfig;
         
         m_generator = std::make_unique<DefaultGenerator>(m_config);
@@ -818,55 +740,23 @@ public:
             }
             m_chunks.clear();
         }
-
-        // Reset tracking vars
-        // [FIX] Reset position to negative infinity to force immediate update on next frame
         m_lastLODCalculationPos = glm::vec3(-99999.0f);
         m_pendingLODResult = nullptr;
     }
 
-
-
-    // ================================================================================================
-    //                                      WORKER TASKS
-    // ================================================================================================
 private:
-// older version, new version is at the top
-    // bool AreChildrenReady(int cx, int cy, int cz, int lod) {
-    //     if (lod == 0) return true; // Lowest LOD has no children
-        
-    //     int childLod = lod - 1;
-    //     // A chunk at LOD N (coord x) covers LOD N-1 coords [2x, 2x+1]
-    //     int startX = cx * 2;
-    //     int startY = cy * 2;
-    //     int startZ = cz * 2;
-
-    //     // Check all 8 children
-    //     for (int x = 0; x < 2; x++) {
-    //         for (int y = 0; y < 2; y++) {
-    //             for (int z = 0; z < 2; z++) {
-    //                 int64_t key = ChunkKey(startX + x, startY + y, startZ + z, childLod);
-                    
-    //                 // Note: We are already holding a Read Lock (shared_lock) in UnloadChunks,
-    //                 // so calling find() here is thread-safe.
-    //                 auto it = m_chunks.find(key);
-                    
-    //                 // If child is missing or still generating/meshing, we are NOT ready.
-    //                 if (it == m_chunks.end() || it->second->state != ChunkState::ACTIVE) {
-    //                     return false;
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     return true;
-    // }
-
-
     void Task_Generate(ChunkNode* node) {
         if (m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("Task: Generate");
+        Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Generate");
         
-        FillChunk(node->chunk, node->cx, node->cy, node->cz, node->scale);
+        // [FIX] FillChunk now outputs exact Y bounds
+        float minY, maxY;
+        FillChunk(node->chunk, node->cx, node->cy, node->cz, node->scale, minY, maxY);
+        
+        // Update AABB with tight bounds
+        // X and Z remain full size, but Y is clamped to geometry
+        node->minAABB.y = minY;
+        node->maxAABB.y = maxY;
         
         std::lock_guard<std::mutex> lock(m_queueMutex);
         if (m_shutdown) return;
@@ -875,12 +765,11 @@ private:
 
     void Task_Mesh(ChunkNode* node) {
         if (m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("Task: Mesh"); 
+        Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Mesh"); 
 
         LinearAllocator<PackedVertex> threadAllocator(1000000); 
         MeshChunk(node->chunk, threadAllocator, false);
         
-        // Copy to node storage
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
         
         std::lock_guard<std::mutex> lock(m_queueMutex);
@@ -888,8 +777,8 @@ private:
         m_meshedQueue.push(node);
     }
 
-    // Delegates logic to the Abstract Terrain Generator
-    void FillChunk(Chunk& chunk, int cx, int cy, int cz, int scale) {
+    // signature to return bounds
+    void FillChunk(Chunk& chunk, int cx, int cy, int cz, int scale, float& outMinY, float& outMaxY) {
         chunk.worldX = cx * CHUNK_SIZE * scale;
         chunk.worldY = cy * CHUNK_SIZE * scale;
         chunk.worldZ = cz * CHUNK_SIZE * scale;
@@ -897,7 +786,12 @@ private:
         int chunkBottomY = chunk.worldY;
         int chunkTopY = chunk.worldY + (CHUNK_SIZE * scale);
 
-        // Pre-calculate heights for optimization
+        // Initialize bounds inverted (or clamped)
+        // If no blocks are placed, these will be set to bottom Y
+        float actualMinY = (float)chunkTopY;
+        float actualMaxY = (float)chunkBottomY;
+        bool hasBlocks = false;
+
         int heights[CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED];
         int minHeight = 99999;
         int maxHeight = -99999;
@@ -908,7 +802,7 @@ private:
                 float wz = (float)(chunk.worldZ + (z - 1) * scale);
                 
                 int h = m_generator->GetHeight(wx, wz);
-                if (scale > 1) { h = (h / scale) * scale; } // Snap to grid for LOD
+                if (scale > 1) { h = (h / scale) * scale; } 
                 
                 heights[x][z] = h;
                 if (h < minHeight) minHeight = h;
@@ -916,26 +810,24 @@ private:
             }
         }
 
-        // Fast Fail: Empty Air
         if (maxHeight < chunkBottomY) { 
             chunk.FillUniform(0); 
+            outMinY = (float)chunkBottomY; outMaxY = (float)chunkBottomY; // Empty
             return; 
         } 
         
-        // Fast Fail: Solid Underground (only if caves disabled)
         if (minHeight > chunkTopY && !m_config.enableCaves) { 
             chunk.FillUniform(1); 
+            outMinY = (float)chunkBottomY; outMaxY = (float)chunkTopY; // Full
             return; 
         } 
 
         std::memset(chunk.voxels, 0, sizeof(chunk.voxels));
         
-        // Voxel Fill Loop
         for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
             for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
                 int height = heights[x][z]; 
                 
-                // Convert world height to local Y index
                 int localMaxY = (height - chunkBottomY) / scale;
                 localMaxY = std::min(localMaxY + 2, CHUNK_SIZE_PADDED - 1);
                 
@@ -950,11 +842,24 @@ private:
                     
                     if (blockID != 0) {
                         chunk.Set(x, y, z, blockID);
+                        
+                        // [FIX] Update precise bounds
+                        hasBlocks = true;
+                        float blockBase = (float)wy;
+                        float blockTop = blockBase + scale;
+                        if (blockBase < actualMinY) actualMinY = blockBase;
+                        if (blockTop > actualMaxY) actualMaxY = blockTop;
                     }
                 }
             }
         }
+
+        if (hasBlocks) {
+            outMinY = actualMinY;
+            outMaxY = actualMaxY;
+        } else {
+            outMinY = (float)chunkBottomY;
+            outMaxY = (float)chunkBottomY;
+        }
     }
-
-
 };

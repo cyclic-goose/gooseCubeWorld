@@ -1,5 +1,0 @@
-- Generate a simple test triangle and test winding order with new clipping and reversed z-depth
-    - compare to old method
-
-- render to custom rbo, fbo instead of to default buffer
-    - figure out how to get this to display to screen (probably a texture map to a screen quad)

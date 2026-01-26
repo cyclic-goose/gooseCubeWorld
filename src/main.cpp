@@ -1,3 +1,12 @@
+/* * ======================================================================================
+ * GOOSE VOXELS - MAIN ENTRY POINT
+ * ======================================================================================
+ * Overview:
+ * Initializes GLFW, GLAD, and ImGui. Sets up the main render loop, handles input 
+ * processing, manages window events, and coordinates the World, Camera, and Profiler.
+ * ======================================================================================
+ */
+
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
@@ -5,44 +14,55 @@
 #include <iostream>
 #include <iomanip> 
 #include <string>
+#include <vector>
 
 #include "world.h" 
 #include "camera.h"
 #include "shader.h"
 #include "ImGuiManager.hpp"
 #include "profiler.h"
+#include "screen_quad.h"
+#include "splash_screen.hpp"
+#include "texture_manager.h"
+#include "input_manager.h"
 
-// --- IMAGE LOADER IMPLEMENTATION ---
-// #define STB_IMAGE_IMPLEMENTATION
-#include "texture_manager.h" // Includes stb_image.h internally
+// ======================================================================================
+// --- CONFIGURATION & GLOBALS ---
+// ======================================================================================
 
-// --- CONFIGURATION ---
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 const bool START_FULLSCREEN = true; 
 
-// Camera setup
+// Camera 
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
 
+// Mouse State
 float lastX = SCR_WIDTH / 2.0f;
 float lastY = SCR_HEIGHT / 2.0f;
 bool firstMouse = true;
+
+// Timing
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
-// Debug Logic
+// Debug & State Flags
 bool lockFrustum = false;
-bool fKeyPressed = false;
+bool f3DepthDebug = false;
+int mipLevelDebug = 0;
 glm::mat4 lockedCullMatrix;
 
-// GLOBAL GUI MANAGERS
+// Systems
 ImGuiManager gui;
 UIConfig appState; 
 
+// ======================================================================================
+// --- CALLBACKS ---
+// ======================================================================================
 
-
-
-void framebuffer_size_callback(GLFWwindow* window, int width, int height) { glViewport(0, 0, width, height); }
+void framebuffer_size_callback(GLFWwindow* window, int width, int height) { 
+    glViewport(0, 0, width, height); 
+}
 
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     if (!appState.isGameMode) {
@@ -50,168 +70,118 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
         return;
     }
     
-    if (firstMouse) { lastX = xpos; lastY = ypos; firstMouse = false; }
+    if (firstMouse) { 
+        lastX = xpos; 
+        lastY = ypos; 
+        firstMouse = false; 
+    }
+    
     camera.ProcessMouseMovement(xpos - lastX, lastY - ypos);
-    lastX = xpos; lastY = ypos;
+    lastX = xpos; 
+    lastY = ypos;
 }
 
+// ======================================================================================
+// --- INPUT PROCESSING ---
+// ======================================================================================
 
 void processInput(GLFWwindow *window, World& world) {
-    // TAB: Toggle Cursor Lock
-    static bool tabPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS) {
-        if (!tabPressed) {
-            appState.isGameMode = !appState.isGameMode;
-            tabPressed = true;
-            if (appState.isGameMode) glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-            else glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-        }
-    } else { tabPressed = false; }
+    // --- Global Application Controls ---
     
-    // Click to capture cursor (only if not clicking on ImGui)
+    // TAB: Toggle Cursor Lock / Game Mode
+    if (Input::IsJustPressed(window, GLFW_KEY_TAB)) {
+        appState.isGameMode = !appState.isGameMode;
+        glfwSetInputMode(window, GLFW_CURSOR, appState.isGameMode ? GLFW_CURSOR_DISABLED : GLFW_CURSOR_NORMAL);
+    }
+    
+    // DELETE: Exit Application
+    if (glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS) {
+        glfwSetWindowShouldClose(window, true);
+    }
+
+    // ESCAPE: Toggle Game Controls Menu
+    if (Input::IsJustPressed(window, GLFW_KEY_ESCAPE)) {
+        appState.showGameControls = !appState.showGameControls;
+
+        if (appState.showGameControls) {
+            appState.isGameMode = false;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+        } else {
+            appState.isGameMode = true;
+            glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+            firstMouse = true; 
+        }
+    }
+
+    // Click to capture cursor (if not over UI)
     if (!appState.isGameMode && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
         if (!ImGui::GetIO().WantCaptureMouse) {
             appState.isGameMode = true;
+            appState.showGameControls = false;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
     }
     
-    // F2: Toggle Debug Window
-    static bool f2Pressed = false;
-    if (glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS) {
-        if (!f2Pressed) {
-            appState.showDebugPanel = !appState.showDebugPanel;
-            f2Pressed = true;
-        }
-    } else { f2Pressed = false; }
+    // --- Debug Toggles ---
+
+    // F2: Toggle Debug Panels
+    if (Input::IsJustPressed(window, GLFW_KEY_F2)) {
+        appState.showDebugPanel = !appState.showDebugPanel;
+        appState.showCameraControls = !appState.showCameraControls;
+        appState.showCullerControls = !appState.showCullerControls;
+        Engine::Profiler::Get().Toggle();
+    }
     
-    
-    // P: Toggle Profiler Window
-    static bool pPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
-        if (!pPressed) {
-            Engine::Profiler::Get().Toggle();
-            pPressed = true;
-        }
-    } else { pPressed = false; }
+    // F3: Toggle Depth Debug View
+    if (Input::IsJustPressed(window, GLFW_KEY_F3)) {
+        f3DepthDebug = !f3DepthDebug;
+    }
+
+    // F4: Cycle Mip Levels
+    if (Input::IsJustPressed(window, GLFW_KEY_F4)) {
+        mipLevelDebug = (mipLevelDebug + 1) % 6; // Cycles 0-5
+    }
     
     // M: Toggle World Gen Window
-    static bool mPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS) {
-        if (!mPressed) {
-            appState.showWorldSettings = !appState.showWorldSettings;
-            mPressed = true;
-        }
-    } else { mPressed = false; }
+    if (Input::IsJustPressed(window, GLFW_KEY_M)) {
+        appState.showWorldSettings = !appState.showWorldSettings;
+    }
     
-    // Standard Exit
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
+    // O: Toggle LOD Update Freeze (Observation Mode)
+    if (Input::IsJustPressed(window, GLFW_KEY_O)) {
+        bool current = world.GetLODFreeze();
+        world.SetLODFreeze(!current);
+        std::cout << "[DEBUG] LOD Freeze: " << (!current ? "ON" : "OFF") << std::endl;
+    }
+
+    // // R: Reload World
+    // if (Input::IsJustPressed(window, GLFW_KEY_R)) {
+    //     world.Reload(appState.editConfig);
+    // }
     
-    // Movement
+    // --- Movement (Game Mode Only) ---
     if (appState.isGameMode) {
-        if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) camera.MovementSpeed = 500.0f;
-        else camera.MovementSpeed = 50.0f;
+        // Speed Modifier
+        camera.MovementSpeed = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? 500.0f : 50.0f;
+
+        // Directional
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
         if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT, deltaTime);
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT, deltaTime);
+        
+        // Vertical
         if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
         if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
     }
-    
-    // R: Reload shortcut
-    static bool rPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS && !rPressed) {
-        world.Reload(appState.editConfig);
-        rPressed = true;
-    } else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_RELEASE) rPressed = false;
-    
-    // F: Freeze Frustum
-    if (glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS) {
-        if (!fKeyPressed) {
-            //lockFrustum = !lockFrustum;
-            appState.lockFrustum = !appState.lockFrustum;
-            fKeyPressed = true;
-            std::cout << "[DEBUG] Frustum Lock: " << (lockFrustum ? "ON" : "OFF") << std::endl;
-        }
-    } else { fKeyPressed = false; }
-
-    // O: Toggle LOD Update Freeze (Observation Mode)
-    static bool oPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_O) == GLFW_PRESS) {
-        if (!oPressed) {
-            bool current = world.GetLODFreeze();
-            world.SetLODFreeze(!current);
-            std::cout << "[DEBUG] LOD Freeze: " << (!current ? "ON" : "OFF") << std::endl;
-            oPressed = true;
-        }
-    } else { oPressed = false; }
-    
 }
 
-
-// a quick one off "splash screen" so the player doesnt think the computer just froze (although it is kind of, its allocating vram)
-void RenderLoadingScreen(GLFWwindow* window, const float HEAP_SIZE_FOR_DISPLAYING) {
-    // Force a few frames to render to clear out the swap chain buffers
-    // 3 iterations ensures we handle Double or Triple buffering correctly
-    for (int i = 0; i < 3; i++) {
-        // 1. Viewport & Clear
-        int display_w, display_h;
-        glfwGetFramebufferSize(window, &display_w, &display_h);
-        glViewport(0, 0, display_w, display_h);
-        
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        
-        // 2. Draw UI
-        gui.BeginFrame();
-        
-        ImVec2 center = ImGui::GetMainViewport()->GetCenter();
-        ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        
-        ImGui::Begin("Loading", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
-        ImGui::SetWindowFontScale(3.0f);
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Cyclic Goose Voxel Engine");
-        ImGui::SetWindowFontScale(2.0f);
-        ImGui::Separator();
-        ImGui::Text("Reserving Memory...");
-        ImGui::Text("Allocating %.1f MB VRAM...", HEAP_SIZE_FOR_DISPLAYING);
-        ImGui::Text("Spooling Threadpool...");
-        ImGui::Text("Please Wait...");
-        
-        // --- VERSION WINDOW (Anchored Relative to Main) ---
-        // Calculate position: Right edge of main box, 5 pixels down
-        // CAPTURE GEOMETRY: Get the bottom-right corner of this window
-        ImVec2 mainPos = ImGui::GetWindowPos();
-        ImVec2 mainSize = ImGui::GetWindowSize();
-        ImVec2 versionPos;
-        versionPos.x = mainPos.x + mainSize.x; 
-        versionPos.y = mainPos.y + mainSize.y + 5.0f; 
-        
-        // Pivot (1.0f, 0.0f) = Top-Right of the version text
-        // This aligns the right edge of the text with the right edge of the box above it
-        ImGui::SetNextWindowPos(versionPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-        ImGui::SetNextWindowBgAlpha(0.0f); 
-        
-        ImGui::Begin("Version", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.2.6-alpha"); 
-        ImGui::End();
-        ImGui::End();
-        
-        gui.EndFrame();
-        
-        // Swap and Poll
-        glfwSwapBuffers(window);
-        glfwPollEvents();
-    }
-    
-    // Force synchronization before hanging the CPU
-    glFinish(); 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-}
+// ======================================================================================
+// --- MAIN ---
+// ======================================================================================
 
 int main() {
-    
+    // 1. Initialize GLFW
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
@@ -231,116 +201,126 @@ int main() {
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     
+    // 2. Initialize GLAD
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
     
+    // 3. Initialize GUI & GL State
     gui.Init(window);
     
-    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE);
+    glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); // Reverse-Z requirement
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_GEQUAL); 
-    //glDepthFunc(GL_LEQUAL);
-    glClearDepth(0.0f);     
+    glDepthFunc(GL_GREATER); // Reverse-Z comparison
+    glClearDepth(0.0f);      // Reverse-Z clear value
     glEnable(GL_CULL_FACE); 
     glCullFace(GL_BACK);
     glClearColor(0.53f, 0.81f, 0.22f, 1.0f); 
+
+    // Initial FBO sizing
+    int curScrWidth = SCR_WIDTH, curScrHeight = SCR_HEIGHT;
+    int prevScrWidth = curScrWidth, prevScrHeight = curScrHeight;
+    glfwGetFramebufferSize(window, &curScrWidth, &curScrHeight);
     
+    // NOTE: g_fbo is assumed to be an external global. 
+    // Ideally this should be encapsulated, but maintained here for existing logic.
+    g_fbo.Resize(curScrWidth, curScrHeight);
+    
+    // 4. World & Resources Scope
     { 
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
+        Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl");
         
+        // --- World Configuration ---
         WorldConfig globalConfig;
-        globalConfig.VRAM_HEAP_ALLOCATION_MB = 1024; ////////////// ****************** THIS DICTATES HOW MUCH MEMORY ALLOCATED TO VRAM
-        RenderLoadingScreen(window, globalConfig.VRAM_HEAP_ALLOCATION_MB);
+        globalConfig.VRAM_HEAP_ALLOCATION_MB = 2048; // *********************************** VRAM STATIC ALLOCATION 
         
-        // We can call this the development debug LOD settings since the app will boot faster
-        globalConfig.lodCount = 4;
-        globalConfig.lodRadius[0] = 3;   
-        globalConfig.lodRadius[1] = 7;  
-        globalConfig.lodRadius[2] = 11;   
-        globalConfig.lodRadius[3] = 19;   
-        //globalConfig.lodRadius[4] = 3;  
-        //globalConfig.lodRadius[5] = 3; 
-        //globalConfig.lodRadius[6] = 3; 
-        //globalConfig.lodRadius[7] = 3; 
-        
-        // Higher LOD in general more expensive
-        // globalConfig.lodCount = 7;
-        // // new radii
-        // globalConfig.lodRadius[0] = 6;   
-        // globalConfig.lodRadius[1] = 12;  
-        // globalConfig.lodRadius[2] = 16;   
-        // globalConfig.lodRadius[3] = 20;   
-        // globalConfig.lodRadius[4] = 20;  
-        // globalConfig.lodRadius[5] = 20; 
-        // globalConfig.lodRadius[6] = 32; 
-        //globalConfig.lodRadius[7] = 12; 
+        RenderLoadingScreen(window, gui, globalConfig.VRAM_HEAP_ALLOCATION_MB);
 
+        // Configure LODs
+        globalConfig.lodCount = 5;
+        for (int i = 0; i < 5; i++) globalConfig.lodRadius[i] = 12;
+        for (int i = 5; i < 12; i++) globalConfig.lodRadius[i] = 0; // Reserves
 
-        World world(globalConfig);
+        World world(globalConfig); 
 
-
-
-        // --- LOAD TEXTURES ---
-        // Your shader subtracts 1 from the ID (max(0, TexID - 1))
-        // So BlockID 1 maps to Array Index 0.
+        // --- Load Textures ---
         std::vector<std::string> texturePaths = {
             "resources/textures/dirt1.jpg",   // ID 1
-            "resources/textures/dirt1.jpg",    // ID 2
+            "resources/textures/dirt1.jpg",   // ID 2
             "resources/textures/dirt1.jpg",   // ID 3
-            "resources/textures/dirt1.jpg",    // ID 4
-            "resources/textures/dirt1.jpg"     // ID 5
+            "resources/textures/dirt1.jpg",   // ID 4
+            "resources/textures/dirt1.jpg"    // ID 5
         };
 
-        // Ensure you have these images in resources/textures/ !
         GLuint texArray = TextureManager::LoadTextureArray(texturePaths);
         world.SetTextureArray(texArray);
 
+        glm::mat4 prevViewProj = glm::mat4(1.0f);
 
+        // 5. Main Render Loop
         while (!glfwWindowShouldClose(window)) {
+            // Timing
             float currentFrame = (float)glfwGetTime();
             deltaTime = currentFrame - lastFrame;
             lastFrame = currentFrame;
 
-            // ********* PROFILER UPDATE ********* // 
-            // Inside main loop, before rendering:
             Engine::Profiler::Get().Update();
-            //Engine::Profiler::ScopedTimer timer("ENTIRE MAIN THREAD");
-            // Inside your GUI rendering block:
-            // ********* PROFILER UPDATE ********* // 
             
+            // logic/world gen, chunk loading/unloading
             processInput(window, world);
             world.Update(camera.Position);
             
+            // GUI and PROFILER START (profiler returns in constant time if its disabled)
             gui.BeginFrame();
             Engine::Profiler::Get().DrawUI(appState.isGameMode);
 
+            // Handle Resize
+            glfwGetFramebufferSize(window, &curScrWidth, &curScrHeight);
+            if (curScrWidth != prevScrWidth || curScrHeight != prevScrHeight) {
+                g_fbo.Resize(curScrWidth, curScrHeight);
+                prevScrWidth = curScrWidth;
+                prevScrHeight = curScrHeight;
+            }
             
-            
-            // Recalc mvp
-            glm::mat4 projection = camera.GetProjectionMatrix((float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f);
+            // model view projection (mvp)
+            glm::mat4 projection = camera.GetProjectionMatrix((float)curScrWidth / (float)curScrHeight, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
             
-            // Handle Frustum Locking Logic
             if (!appState.lockFrustum) {
                 lockedCullMatrix = viewProj;
             }
             
-            // CLEAR 
+            // Render Prep
+            glBindFramebuffer(GL_FRAMEBUFFER, g_fbo.fbo);
+            glViewport(0, 0, curScrWidth, curScrHeight);
+            glDisable(GL_SCISSOR_TEST); // Fix for ImGui scissor issues
+            
             glClearColor(0.53f, 0.81f, 0.91f, 1.0f); 
+            glClearDepth(0.0f); // Reverse-Z
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            // RENDER WORLD
-            // Draw with separate ViewProj for Rendering and Culling
-            world.Draw(worldShader, viewProj, lockedCullMatrix);
 
+            // World Draw
+            // Triggers: Cull(PrevDepth) -> MultiDrawIndirect, then HI-Z occlusion calc for next frame
+            // see GPU_CULLING_RENDER_SYSTEM.md for render pipeline info
+            world.Draw(worldShader, viewProj, lockedCullMatrix, prevViewProj, projection, 
+                       curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum);
 
-            // Render GUI
+            // GUI Render
             gui.RenderUI(world, appState, camera, globalConfig.VRAM_HEAP_ALLOCATION_MB);
             gui.EndFrame();
 
+            // swap to screen buffer
             glfwSwapBuffers(window);
             glfwPollEvents();
+
+            // Reprojection History
+            if (!appState.lockFrustum) {
+                prevViewProj = viewProj;
+            }
         }
     }
+    
+    // 6. Shutdown
     Engine::Profiler::Get().Shutdown();
     gui.Shutdown();
     glfwTerminate();
