@@ -231,7 +231,7 @@ int main() {
         
         // --- World Configuration ---
         WorldConfig globalConfig;
-        globalConfig.VRAM_HEAP_ALLOCATION_MB = 1024; 
+        globalConfig.VRAM_HEAP_ALLOCATION_MB = 2048; // *********************************** VRAM STATIC ALLOCATION 
         
         RenderLoadingScreen(window, gui, globalConfig.VRAM_HEAP_ALLOCATION_MB);
 

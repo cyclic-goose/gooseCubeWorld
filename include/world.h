@@ -406,6 +406,7 @@ public:
                 if (!node->cachedMesh.empty()) {
                     size_t bytes = node->cachedMesh.size() * sizeof(PackedVertex);
                     long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
+                    //long long offset = m_gpuMemory->Allocate(bytes, 256); // FORCE 256 BYTE CACHE LINE ALIGNMENT
                     
                     if (offset != -1) {
                         m_gpuMemory->Upload(offset, node->cachedMesh.data(), bytes);

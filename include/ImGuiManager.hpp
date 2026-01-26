@@ -260,11 +260,11 @@ private:
 
                             // OPTIMIZATION: Static const to prevent re-allocation every frame
                             static const std::vector<LODPreset> presets = {
-                                { 4, { 8, 8, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0 } },                        // Low
-                                { 5, { 12, 12, 12, 12, 12, 0, 0, 0, 0, 0, 0, 0 } },                   // Standard
-                                { 6, { 14, 14, 14, 14, 14, 12, 0, 0, 0, 0, 0, 0 } },                  // Medium
-                                { 7, { 16, 16, 16, 16, 16, 16, 16, 0, 0, 0, 0, 0 } },                 // High
-                                { 9, { 20, 20, 20, 20, 20, 20, 20, 20, 20, 0, 0, 0 } }                // Extreme
+                                { 4, { 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0 } },                        // Low
+                                { 5, { 13, 13, 13, 13, 13, 0, 0, 0, 0, 0, 0, 0 } },                   // Standard
+                                { 6, { 17, 17, 17, 17, 17, 11, 0, 0, 0, 0, 0, 0 } },                  // Medium
+                                { 7, { 21, 21, 21, 21, 21, 21, 21, 0, 0, 0, 0, 0 } },                 // High
+                                { 9, { 25, 23, 21, 21, 21, 21, 21, 21, 21, 0, 0, 0 } }                // Extreme
                             };
 
                             if (config.currentLODPreset >= 0 && config.currentLODPreset < (int)presets.size()) {
