@@ -725,7 +725,7 @@ private:
         m_meshedQueue.push(node);
     }
 
-    // [FIX] Updated signature to return bounds
+    // signature to return bounds
     void FillChunk(Chunk& chunk, int cx, int cy, int cz, int scale, float& outMinY, float& outMaxY) {
         chunk.worldX = cx * CHUNK_SIZE * scale;
         chunk.worldY = cy * CHUNK_SIZE * scale;

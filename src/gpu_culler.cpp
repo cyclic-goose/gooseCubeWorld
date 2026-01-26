@@ -72,7 +72,7 @@ uint32_t GpuCuller::AddOrUpdateChunk(int64_t chunkID, const glm::vec3& minAABB, 
 
     ChunkGpuData data;
     data.minAABB_scale = glm::vec4(minAABB, scale);
-    data.maxAABB_pad = glm::vec4(maxAABB, 0.0f); // Use Tight Bounds
+    data.maxAABB_pad = glm::vec4(maxAABB, 0.0f); // tight Bounds
     data.firstVertex = (uint32_t)firstVertex;
     data.vertexCount = (uint32_t)vertexCount;
     data.pad1 = 0; data.pad2 = 0;
@@ -140,7 +140,7 @@ void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, c
     m_cullShader->setFloat("u_P00", proj[0][0]);
     m_cullShader->setFloat("u_P11", proj[1][1]);
     
-    // [TWEAK HERE] Massive Far Plane for Massive Worlds
+    // Massive Far Plane for Massive Worlds
     // Use 100,000 km to ensure we don't prematurely clip depth
     m_cullShader->setFloat("u_zNear", 0.1f);
     m_cullShader->setFloat("u_zFar", 100000000.0f);
