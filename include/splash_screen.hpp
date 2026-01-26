@@ -52,7 +52,7 @@ void RenderLoadingScreen(GLFWwindow* window, ImGuiManager &gui, float HEAP_SIZE_
         ImGui::SetNextWindowBgAlpha(0.0f); 
         
         ImGui::Begin("Version", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.2.6-alpha"); 
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.3.1-alpha"); 
         ImGui::End();
         ImGui::End();
         
