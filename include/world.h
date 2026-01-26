@@ -33,7 +33,8 @@
 #include "gpu_memory.h"
 #include "packedVertex.h"
 #include "profiler.h"
-#include "gpu_culler.h" 
+#include "gpu_culler.h"
+#include "screen_quad.h"
 
 // ================================================================================================
 //                                     CONFIGURATION
@@ -611,12 +612,12 @@ public:
         }
     }
 
-    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix,const glm::mat4& previousViewMatrix, const glm::mat4& proj, GLuint depthPyramidTex) {
+    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix,const glm::mat4& previousViewMatrix, const glm::mat4& proj, const int CUR_SCR_WIDTH, const int CUR_SCR_HEIGHT, Shader* depthDebugShader, bool depthDebug, bool frustumLock) {
         if(m_shutdown) return;
 
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
-            m_culler->Cull(cullViewMatrix, previousViewMatrix, proj, depthPyramidTex, m_config.occlusionCulling);
+            m_culler->Cull(cullViewMatrix, previousViewMatrix, proj, g_fbo.hiZTex);
             Engine::Profiler::Get().EndGPU();
         }
 
@@ -642,6 +643,40 @@ public:
             glDisable(GL_POLYGON_OFFSET_FILL);
 
             Engine::Profiler::Get().EndGPU();
+
+
+
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+            glCopyImageSubData(g_fbo.depthTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                            g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
+                            CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 1);
+            
+            // Barrier: Ensure copy finishes before Compute Shader reads it
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
+
+            // Step B: Downsample the rest of the pyramid
+            GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+                            
+
+
+            if (!depthDebug)
+            {
+                // Draw normal rendered view to screen quad
+                glBlitNamedFramebuffer(g_fbo.fbo, 0, 
+                    0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
+                    0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
+                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                
+            } else {
+                // render depth view instead 
+                RenderHiZDebug(depthDebugShader, g_fbo.hiZTex, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
+            }
+
+
+
+
+
         }
     }
 

@@ -11,25 +11,35 @@
 #include "camera.h"
 #include "profiler.h"
 
-// --- CONFIGURATION STRUCT ---
 struct UIConfig {
-    bool showDebugPanel = false;    // F2 to toggle
+    bool showDebugPanel = false;    // F2 to toggle (Controls Stats, Camera, Culler)
+    bool showGameControls = false;   // Default ON, contains basic settings
     bool showWorldSettings = false; // M to toggle
     bool showOverlay = true;        
     bool showWireframe = false;
     
+    // Internal toggles for specific windows if needed, 
+    // but now largely controlled by the master F2 switch
+    bool showCameraControls = true;
+    bool showCullerControls = true;
+
     bool vsync = false;
     bool lockFrustum = false;
     float FPS_OVERLAY_FONT_SCALE = 1.35f;
     float DEBUG_FONT_SCALE = 1.4f;
     
+    // NEW: Menu Scale (Default increased from 1.8f to 2.2f)
+    float menuFontScale = 1.8f;
+
     // Input State
     bool isGameMode = true;         // TAB to toggle (Mouse Lock)
 
     // Current settings being tweaked in the GUI
     WorldConfig editConfig;         
     bool editConfigInitialized = false;
-    bool occlusionCulling = true;
+
+    // 0 = Low, 1 = Medium, 2 = High, 3 = Extreme
+    int currentLODPreset = 1; 
 };
 
 class ImGuiManager {
@@ -85,7 +95,7 @@ public:
         m_Initialized = false;
     }
 
-    void RenderUI(World& world, UIConfig& config, const Camera& camera, const float VRAM_HEAP_SIZE_MB) {
+    void RenderUI(World& world, UIConfig& config, Camera& camera, const float VRAM_HEAP_SIZE_MB) {
         Engine::Profiler::ScopedTimer timer("ImGui::Render");
         if (!config.editConfigInitialized) {
             config.editConfig = world.GetConfig();
@@ -101,14 +111,21 @@ public:
         // Always render the minimal overlay
         if (config.showOverlay) RenderSimpleOverlay(config, camera);
 
-        // // Hide menus and windows if we are in Game Mode (Locked Mouse)
-        // if (!config.isGameMode) {
-        //     if (config.showDebugPanel) RenderDebugPanel(world, config);
-        //     if (config.showWorldSettings) RenderWorldSettings(world, config);
-        //     RenderMenuBar(config);
-        // }
-        if (config.showDebugPanel) RenderDebugPanel(world, config, VRAM_HEAP_SIZE_MB);
+        // --- GAME CONTROLS (Bottom Left) ---
+        if (config.showGameControls) RenderGameControls(world, config);
+
+        // --- DEBUG SUITE (F2) ---
+        // If F2 is pressed, we show the Debug Stats, Camera Controls, and Culler Controls
+        if (config.showDebugPanel) {
+            RenderDebugPanel(world, config, VRAM_HEAP_SIZE_MB); // Top Left
+            RenderCameraControls(camera, config);               // Top Right
+            RenderCullerControls(world, config);                // Bottom Right
+        }
+
+        // --- WORLD GEN (M) ---
         if (config.showWorldSettings) RenderWorldSettings(world, config);
+        
+        //RenderMenuBar(config);
     }
 
     void ToggleFullscreen() {
@@ -147,6 +164,373 @@ private:
         style.WindowPadding = ImVec2(10, 10);
     }
 
+
+void RenderGameControls(World& world, UIConfig& config) {
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse; 
+        // Note: We do NOT set NoInputs here because this is the Pause Menu, we need inputs!
+        ImGui::SetNextWindowBgAlpha(0.95f); 
+
+        // Center the window on screen
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(600, 500), ImGuiCond_FirstUseEver);
+
+        if (ImGui::Begin("PAUSE MENU", nullptr, flags)) {
+            // Use the configurable font scale (Default is now 2.2f)
+            ImGui::SetWindowFontScale(config.menuFontScale); 
+
+            // Calculate height for footer (Quit Button)
+            float footerHeight = 70.0f;
+            float availableHeight = ImGui::GetContentRegionAvail().y - footerHeight;
+
+            // Begin Child region for Tabs (takes up all space minus footer)
+            if (ImGui::BeginChild("MenuTabs", ImVec2(0, availableHeight), false)) {
+                // Fix: Apply Font Scale to Child Window as well (it doesn't inherit automatically)
+                ImGui::SetWindowFontScale(config.menuFontScale);
+
+                if (ImGui::BeginTabBar("PauseMenuTabs")) {
+                    
+                    // --- TAB 1: GAMEPLAY ---
+                    if (ImGui::BeginTabItem("Gameplay")) {
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "World Settings");
+                        ImGui::Separator();
+                        
+                        // Informational Text
+                        ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+                        ImGui::TextDisabled("The LOD (Level of Detail) system renders distant terrain at lower resolutions to save performance. "
+                                          "Adding more LOD levels exponentially increases view distance but consumes more VRAM. ONE CHUNK = 32x32x32 Blocks");
+                        ImGui::PopTextWrapPos();
+                        ImGui::Spacing();
+
+                        // --- LOD Density Presets ---
+                        ImGui::Text("Density Preset");
+                        bool presetChanged = false;
+                        if (ImGui::RadioButton("Very Low", &config.currentLODPreset, 0)) presetChanged = true;
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("For low performing PC's");
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton("Standard", &config.currentLODPreset, 1)) presetChanged = true;
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Balanced. Should run well on most PC's");
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton("High", &config.currentLODPreset, 2)) presetChanged = true;
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Good view range while still not hogging VRAM");
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton("Ultra", &config.currentLODPreset, 3)) presetChanged = true;
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Ultra Range. High Rasterization Cost.");
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton("Extreme", &config.currentLODPreset, 4)) presetChanged = true;
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("For GIGA GPUs with Insane Clock Speeds.");
+
+                        if (presetChanged) {
+                            struct LODPreset {
+                                int activeCount;
+                                std::vector<int> radii;
+                            };
+
+                            // Define presets: { Count, { Radius0, Radius1, ... Radius11 } }
+                            std::vector<LODPreset> presets = {
+                                // Low 
+                                { 4, { 8, 8, 8, 8, 0, 0, 0, 0, 0, 0, 0, 0 } }, 
+                                
+                                { 5, { 12, 12, 12, 12, 12, 0, 0, 0, 0, 0, 0, 0 } },
+                                // Medium - 5 LODs, Constant Radius 12
+                                // Good balance. Distance doubles every LOD level.
+                                { 6, { 14, 14, 14, 14, 14, 12, 0, 0, 0, 0, 0, 0 } },
+                                
+                                // High - 7 LODs, Constant Radius 16
+                                // The "Golden Standard" for 1080p. Cubes stay >1px size.
+                                { 7, { 16, 16, 16, 16, 16, 16, 16, 0, 0, 0, 0, 0 } },
+                                
+                                // Extreme - 9 LODs, Constant Radius 20
+                                // Pushes the horizon further. High VRAM usage.
+                                { 9, { 20, 20, 20, 20, 20, 20, 20, 20, 20, 0, 0, 0 } }
+
+                            };
+
+                            if (config.currentLODPreset >= 0 && config.currentLODPreset < presets.size()) {
+                                const auto& selected = presets[config.currentLODPreset];
+                                
+                                // Apply the count
+                                config.editConfig.lodCount = selected.activeCount;
+                                
+                                // Apply the radii
+                                for(int i = 0; i < 12; i++) {
+                                    config.editConfig.lodRadius[i] = selected.radii[i];
+                                }
+                                
+                                world.Reload(config.editConfig);
+                            }
+                        }
+
+                        ImGui::Spacing();
+
+                        int currentLODs = config.editConfig.lodCount;
+                        
+                        // Calculate "Effective Distance" to display to the user
+                        // Logic: Radius[LOD] * (2 ^ LOD_Level) = Total Distance in Units of LOD0 Chunks
+                        // currentLODs is 1-based count, so index is currentLODs - 1
+                        int lastLODIndex = currentLODs - 1;
+                        if (lastLODIndex < 0) lastLODIndex = 0;
+                        if (lastLODIndex > 11) lastLODIndex = 11;
+
+                        int radius = config.editConfig.lodRadius[lastLODIndex];
+                        int scale = 1 << lastLODIndex;
+                        int effectiveDistChunks = radius * scale;
+
+                        ImGui::Text("Effective Render Distance:");
+                        ImGui::SameLine();
+                        if (effectiveDistChunks == 0) {
+                            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Invalid (Radius 0)");
+                        } else {
+                            ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "%d Chunks", effectiveDistChunks);
+                        }
+
+                        // Use simple slider to control active LOD count
+                        if (ImGui::SliderInt("##lodslider", &currentLODs, 1, 12, "LOD Level: %d")) {
+                            config.editConfig.lodCount = currentLODs;
+                        }
+
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Directly controls the number of active LOD rings.\n"
+                                            "Level 1-6: Standard Playable Area\n"
+                                            "Level 7-9: Far Horizon\n"
+                                            "Level 10+: Extreme Distance (High VRAM)");
+                        }
+                        
+                        // Reload when user releases the slider
+                        if (ImGui::IsItemDeactivatedAfterEdit()) {
+                            world.Reload(config.editConfig);
+                        }
+
+                        ImGui::Spacing();
+
+                        // --- Advanced Manual Tuning ---
+                        if (ImGui::TreeNodeEx("Advanced LOD Tuning", ImGuiTreeNodeFlags_DefaultOpen)) {
+                            ImGui::TextDisabled("Adjust the radius (in chunks) for each detail ring.");
+                            ImGui::Spacing();
+
+                            for (int i = 0; i < config.editConfig.lodCount; i++) {
+                                std::string label = "LOD " + std::to_string(i);
+                                int currentScale = 1 << i;
+                                
+                                ImGui::Text("LOD %d (1:%dx Scale)", i, currentScale);
+                                ImGui::SameLine();
+                                
+                                std::string sliderLabel = "##lodradius" + std::to_string(i);
+                                if (ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig.lodRadius[i], 2, 64)) {
+                                    // Live update not recommended for individual sliders to avoid spamming reload
+                                }
+                                
+
+                                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                                    world.Reload(config.editConfig);
+                                }
+                            }
+                            ImGui::TreePop();
+                        }
+                        
+                        ImGui::Spacing();
+                        ImGui::Separator();
+                        if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
+                            world.Reload(config.editConfig);
+                        }
+                        ImGui::EndTabItem();
+                    }
+
+                    // --- TAB 2: GRAPHICS ---
+                    if (ImGui::BeginTabItem("Graphics")) {
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Display Options");
+                        ImGui::Separator();
+
+                        bool isFs = IsFullscreen();
+                        if (ImGui::Checkbox("Fullscreen Mode", &isFs)) {
+                            ToggleFullscreen();
+                        }
+                        
+                        ImGui::Checkbox("VSync", &config.vsync);
+                        
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Visuals");
+                        ImGui::Separator();
+                        ImGui::Checkbox("Wireframe Mode", &config.showWireframe);
+                        if (config.showWireframe) {
+                            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                        } else {
+                            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+                        }
+
+                        ImGui::EndTabItem();
+                    }
+
+                    // --- TAB 3: INTERFACE & STYLE ---
+                    if (ImGui::BeginTabItem("Interface")) {
+                        ImGuiStyle& style = ImGui::GetStyle();
+                        
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Scaling");
+                        ImGui::Separator();
+                        
+                        ImGui::SliderFloat("Menu Scale", &config.menuFontScale, 1.0f, 4.0f, "%.1fx");
+                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Adjusts the size of the Pause Menu text");
+
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Theme Presets");
+                        ImGui::Separator();
+                        
+                        if (ImGui::Button("Dark Mode", ImVec2(100, 0))) ImGui::StyleColorsDark();
+                        ImGui::SameLine();
+                        if (ImGui::Button("Light Mode", ImVec2(100, 0))) ImGui::StyleColorsLight();
+                        ImGui::SameLine();
+                        if (ImGui::Button("Classic", ImVec2(100, 0))) ImGui::StyleColorsClassic();
+
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Geometry & Opacity");
+                        ImGui::Separator();
+                        
+                        ImGui::SliderFloat("Global Alpha", &style.Alpha, 0.2f, 1.0f);
+                        ImGui::SliderFloat("Window Rounding", &style.WindowRounding, 0.0f, 20.0f);
+                        if (ImGui::IsItemEdited()) {
+                            style.FrameRounding = style.WindowRounding * 0.5f;
+                            style.GrabRounding = style.WindowRounding * 0.5f;
+                        }
+                        ImGui::SliderFloat("Item Spacing X", &style.ItemSpacing.x, 0.0f, 20.0f);
+                        ImGui::SliderFloat("Item Spacing Y", &style.ItemSpacing.y, 0.0f, 20.0f);
+
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Theme Colors");
+                        ImGui::Separator();
+                        
+                        ImGui::ColorEdit4("Text", (float*)&style.Colors[ImGuiCol_Text]);
+                        ImGui::ColorEdit4("Window Bg", (float*)&style.Colors[ImGuiCol_WindowBg]);
+                        ImGui::ColorEdit4("Border", (float*)&style.Colors[ImGuiCol_Border]);
+                        ImGui::ColorEdit4("Title Bar", (float*)&style.Colors[ImGuiCol_TitleBgActive]);
+                        
+                        ImGui::Dummy(ImVec2(0, 5));
+                        ImGui::Text("Controls");
+                        ImGui::ColorEdit4("Button", (float*)&style.Colors[ImGuiCol_Button]);
+                        ImGui::ColorEdit4("Button Hover", (float*)&style.Colors[ImGuiCol_ButtonHovered]);
+                        ImGui::ColorEdit4("Button Active", (float*)&style.Colors[ImGuiCol_ButtonActive]);
+                        
+                        ImGui::Dummy(ImVec2(0, 5));
+                        ImGui::Text("Accents");
+                        ImGui::ColorEdit4("Header", (float*)&style.Colors[ImGuiCol_Header]);
+                        ImGui::ColorEdit4("Checkmark", (float*)&style.Colors[ImGuiCol_CheckMark]);
+                        ImGui::ColorEdit4("Slider Grab", (float*)&style.Colors[ImGuiCol_SliderGrabActive]);
+
+                        ImGui::EndTabItem();
+                    }
+
+                    // --- TAB 4: RESOLUTION (Placeholder) ---
+                    if (ImGui::BeginTabItem("Resolution")) {
+                        ImGui::Spacing();
+                        ImGui::TextDisabled("(man you think i got time for this?)");
+                        ImGui::EndTabItem();
+                    }
+                    
+                    ImGui::EndTabBar();
+                }
+            }
+            ImGui::EndChild();
+
+            // --- FOOTER: QUIT GAME BUTTON ---
+            // This is outside the child window, anchored at bottom
+            ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 65.0f);
+            ImGui::Separator();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.1f, 0.1f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.1f, 0.1f, 1.0f));
+            if (ImGui::Button("QUIT GAME", ImVec2(-1, 55))) {
+                ImGui::TextDisabled("FREEING MEMORY/THREADS");
+                glfwSetWindowShouldClose(m_Window, true);
+            }
+            ImGui::PopStyleColor(2);
+
+            ImGui::End();
+        }
+    }
+
+
+    // --- Camera Control Window ---
+    void RenderCameraControls(Camera& camera, UIConfig& config) {
+        ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
+        if (config.isGameMode) ImGui::SetNextWindowBgAlpha(0.6f);
+
+        // Position: Top Right
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 330, vp->WorkPos.y + 16), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(310, 300), ImGuiCond_FirstUseEver);
+        
+        if (ImGui::Begin("Camera Settings", &config.showCameraControls, flags)) {
+            ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
+            
+            ImGui::TextColored(ImVec4(0,1,1,1), "Movement");
+            ImGui::DragFloat("Move Speed", &camera.MovementSpeed, 1.0f, 1.0f, 1000.0f);
+            ImGui::DragFloat("Sensitivity", &camera.MouseSensitivity, 0.01f, 0.01f, 2.0f);
+            
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0,1,1,1), "Lens");
+            ImGui::DragFloat("Zoom (FOV)", &camera.Zoom, 0.5f, 1.0f, 120.0f);
+            
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0,1,1,1), "Transform (Read Only)");
+            ImGui::Text("Pos: %.2f, %.2f, %.2f", camera.Position.x, camera.Position.y, camera.Position.z);
+            ImGui::Text("Yaw: %.2f  Pitch: %.2f", camera.Yaw, camera.Pitch);
+            
+            if (ImGui::Button("Reset Camera")) {
+                camera.Position = glm::vec3(0, 150, 150);
+                camera.Yaw = -90.0f;
+                camera.Pitch = -45.0f;
+                camera.Zoom = 60.0f;
+                camera.MovementSpeed = 50.0f;
+                camera.updateCameraVectors(); // Ensure this method is public in Camera class
+            }
+            ImGui::End();
+        }
+    }
+
+    // --- GPU Culler Control Window ---
+    void RenderCullerControls(World& world, UIConfig& config) {
+        ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
+        if (config.isGameMode) ImGui::SetNextWindowBgAlpha(0.6f);
+
+        GpuCuller* culler = world.GetCuller();
+        if (!culler) return;
+
+        // Position: Bottom Right
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 330, vp->WorkPos.y + vp->WorkSize.y - 350), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(310, 330), ImGuiCond_FirstUseEver);
+
+        if (ImGui::Begin("GPU Culler Controls", &config.showCullerControls, flags)) {
+            ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
+            
+            CullerSettings& settings = culler->GetSettings();
+
+            ImGui::TextColored(ImVec4(1, 0.5, 0, 1), "Shader Uniforms");
+            ImGui::Separator();
+            
+            ImGui::DragFloat("zNear", &settings.zNear, 0.01f, 0.001f, 10.0f);
+            // Using a logarithmic slider or just a large DragFloat for zFar
+            ImGui::DragFloat("zFar", &settings.zFar, 1000.0f, 100.0f, 100000000.0f, "%.0f");
+            
+            // ImGui::DragFloat("Frustum Pad", &settings.frustumPadding, 1.0f, -50.0f, 50.0f);
+            
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(1, 0.5, 0, 1), "Logic");
+            ImGui::Separator();
+            
+            ImGui::Checkbox("Enable Occlusion Culling", &settings.occlusionEnabled);
+            ImGui::Checkbox("Freeze Culling Result", &settings.freezeCulling);
+            
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Text("Chunks Drawn: %u", culler->GetDrawCount());
+            
+            ImGui::End();
+        }
+    }
+
+
     void RenderSimpleOverlay(const UIConfig& config, const Camera& camera) {
         const float PAD = 10.0f;
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -177,8 +561,12 @@ private:
             ImGui::SetNextWindowBgAlpha(0.85f); 
         }
 
-        ImGui::SetNextWindowPos(ImVec2(14,184), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(400,600), ImGuiCond_FirstUseEver);
+        //ImGui::SetNextWindowPos(ImVec2(14,184), ImGuiCond_FirstUseEver);
+        //ImGui::SetNextWindowSize(ImVec2(400,600), ImGuiCond_FirstUseEver);
+        // Position: Top Left (below overlay roughly)
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 16, vp->WorkPos.y + 100), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(350,550), ImGuiCond_FirstUseEver);
 
         if (ImGui::Begin("Engine Debug (F2)", &config.showDebugPanel, flags)) {
             ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
@@ -262,9 +650,9 @@ private:
             }
 
             
-            if (ImGui::Checkbox("Occlusion Culling (Not Perfect)", &config.occlusionCulling) ) {
-                world.setOcclusionCulling(config.occlusionCulling);
-            }
+            // if (ImGui::Checkbox("Occlusion Culling (Not Perfect)", &config.occlusionCulling) ) {
+            //     world.setOcclusionCulling(config.occlusionCulling);
+            // }
 
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "THREADING");

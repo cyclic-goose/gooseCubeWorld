@@ -18,28 +18,40 @@ struct alignas(16) ChunkGpuData {
     uint32_t pad2;
 };
 
+// New struct to expose controls to ImGui
+struct CullerSettings {
+    float zNear = 0.1f;
+    float zFar = 100000000.0f; // Default huge far plane
+    bool occlusionEnabled = true;
+    bool freezeCulling = false; // Useful for debugging frustum
+    float frustumPadding = 0.0f; // Expand/contract frustum slightly
+};
+
 class GpuCuller {
 public:
     GpuCuller(size_t maxChunks);
     ~GpuCuller();
 
-    // UPDATED: Now accepts maxAABB explicitly for tight fitting
     uint32_t AddOrUpdateChunk(int64_t chunkID, const glm::vec3& minAABB, const glm::vec3& maxAABB, float scale, size_t firstVertex, size_t vertexCount);
     
     void RemoveChunk(int64_t chunkID);
 
     void GenerateHiZ(GLuint depthTexture, int width, int height);
 
-    void Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, GLuint depthTexture, bool occlusionCullingOn);
+    void Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, GLuint depthTexture);
 
     void DrawIndirect(GLuint dummyVAO);
     
     uint32_t GetDrawCount() const { return m_drawnCount; }
 
+    // Accessor for ImGui
+    CullerSettings& GetSettings() { return m_settings; }
+
 private:
     void InitBuffers();
 
     size_t m_maxChunks;
+    CullerSettings m_settings; // Instance of settings
     
     std::unique_ptr<Shader> m_cullShader;
     std::unique_ptr<Shader> m_hizShader;

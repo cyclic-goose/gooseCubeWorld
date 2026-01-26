@@ -21,7 +21,7 @@
 // --- CONFIGURATION ---
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
-const bool START_FULLSCREEN = false; 
+const bool START_FULLSCREEN = true; 
 
 // Camera setup
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
@@ -76,6 +76,8 @@ void processInput(GLFWwindow *window, World& world) {
     if (!appState.isGameMode && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
         if (!ImGui::GetIO().WantCaptureMouse) {
             appState.isGameMode = true;
+            //appState.isGameMode = false;
+            appState.showGameControls = false;
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
         }
     }
@@ -85,6 +87,9 @@ void processInput(GLFWwindow *window, World& world) {
     if (glfwGetKey(window, GLFW_KEY_F2) == GLFW_PRESS) {
         if (!f2Pressed) {
             appState.showDebugPanel = !appState.showDebugPanel;
+            appState.showCameraControls = !appState.showCameraControls;
+            appState.showCullerControls = !appState.showCullerControls;
+            Engine::Profiler::Get().Toggle();
             f2Pressed = true;
         }
     } else { f2Pressed = false; }
@@ -106,14 +111,14 @@ void processInput(GLFWwindow *window, World& world) {
         }
     } else { f4Pressed = false; }
     
-    // P: Toggle Profiler Window
-    static bool pPressed = false;
-    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
-        if (!pPressed) {
-            Engine::Profiler::Get().Toggle();
-            pPressed = true;
-        }
-    } else { pPressed = false; }
+    // // P: Toggle Profiler Window
+    // static bool pPressed = false;
+    // if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
+    //     if (!pPressed) {
+    //         Engine::Profiler::Get().Toggle();
+    //         pPressed = true;
+    //     }
+    // } else { pPressed = false; }
     
     // M: Toggle World Gen Window
     static bool mPressed = false;
@@ -124,8 +129,28 @@ void processInput(GLFWwindow *window, World& world) {
         }
     } else { mPressed = false; }
     
-    // Standard Exit
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
+        // Exit mapped to DELETE
+    if (glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS) glfwSetWindowShouldClose(window, true);
+    
+    // Toggle Game Controls mapped to ESCAPE
+    static bool escPressed = false;
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        if (!escPressed) {
+            appState.showGameControls = !appState.showGameControls;
+
+            // capture or release mouse accordingly 
+            if (appState.showGameControls) {
+                appState.isGameMode = false;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+            } else {
+                appState.isGameMode = true;
+                glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                firstMouse = true; // Reset mouse delta to prevent jumps
+            }
+
+            escPressed = true;
+        }
+    } else { escPressed = false; }
     
     // Movement
     if (appState.isGameMode) {
@@ -178,6 +203,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    //glfwWindowHint(GLFW_DECORATED, GLFW_FALSE); 
     
     GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
@@ -222,17 +248,34 @@ int main() {
         globalConfig.VRAM_HEAP_ALLOCATION_MB = 1024; ////////////// ****************** THIS DICTATES HOW MUCH MEMORY ALLOCATED TO VRAM
         RenderLoadingScreen(window, gui, globalConfig.VRAM_HEAP_ALLOCATION_MB);
         
-        // We can call this the development debug LOD settings since the app will boot faster
-        globalConfig.lodCount = 8;
-        globalConfig.lodRadius[0] = 7;   
-        globalConfig.lodRadius[1] = 7;  
-        globalConfig.lodRadius[2] = 11;   
-        globalConfig.lodRadius[3] = 13;   
-        globalConfig.lodRadius[4] = 17;  
-        globalConfig.lodRadius[5] = 17; 
-        globalConfig.lodRadius[6] = 21; 
-        globalConfig.lodRadius[7] = 25; 
+        // // We can call this the development debug LOD settings since the app will boot faster
+        // globalConfig.lodCount = 8;
+        // globalConfig.lodRadius[0] = 7;   
+        // globalConfig.lodRadius[1] = 7;  
+        // globalConfig.lodRadius[2] = 11;   
+        // globalConfig.lodRadius[3] = 13;   
+        // globalConfig.lodRadius[4] = 17;  
+        // globalConfig.lodRadius[5] = 17; 
+        // globalConfig.lodRadius[6] = 21; 
+        // globalConfig.lodRadius[7] = 25; 
         
+                // 1. Initialize with MAX LODs to reserve full capacity in Chunk Pool and Culler
+        globalConfig.lodCount = 5;
+        
+        // Define ALL radii up to max
+        globalConfig.lodRadius[0] = 12;   
+        globalConfig.lodRadius[1] = 12;  
+        globalConfig.lodRadius[2] = 12;   
+        globalConfig.lodRadius[3] = 12;   
+        globalConfig.lodRadius[4] = 12;  
+        globalConfig.lodRadius[5] = 0; 
+        globalConfig.lodRadius[6] = 0; 
+        globalConfig.lodRadius[7] = 0; 
+        globalConfig.lodRadius[8] = 0; // Extra reserves
+        globalConfig.lodRadius[9] = 0;
+        globalConfig.lodRadius[10] = 0;
+        globalConfig.lodRadius[11] = 0;
+
         // Higher LOD in general more expensive
         // globalConfig.lodCount = 7;
         // // new radii
@@ -246,7 +289,11 @@ int main() {
         //globalConfig.lodRadius[7] = 12; 
 
 
-        World world(globalConfig);
+        World world(globalConfig); // Reserves capacity for 12 LODs
+
+        // 2. Immediately reload to the "Starter" count (8) so performance is good
+        world.Reload(globalConfig);
+        // Now the "Render Distance" slider can safely increase lodCount up to 12 at runtime!
 
 
 
@@ -330,47 +377,9 @@ int main() {
             // This triggers:
             // 1. Cull(PrevDepth)
             // 2. MultiDrawIndirect
-            world.Draw(worldShader, viewProj, lockedCullMatrix, prevViewProj, projection, g_fbo.hiZTex);
-
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-
-            //// **************** TODO: Move this to world.draw()
-            if (world.getOcclusionCulling())
-            {
-              // occlusion cull, generate HiZ and run compute shader
-              // no where near perfect right now but does incur a performance gain if needed
-                if (!appState.lockFrustum)
-                {
-                    glCopyImageSubData(g_fbo.depthTex, GL_TEXTURE_2D, 0, 0, 0, 0,
-                                    g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
-                                    CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 1);
-                    
-                    // Barrier: Ensure copy finishes before Compute Shader reads it
-                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
-        
-                    // Step B: Downsample the rest of the pyramid
-                    world.GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
-                }
-            }
-            //// **************** TODO: Move this to world.draw()
+            world.Draw(worldShader, viewProj, lockedCullMatrix, prevViewProj, projection , CUR_SCR_WIDTH, CUR_SCR_HEIGHT, &depthDebug, f3DepthDebug, lockFrustum);
 
             
-
-
-            if (!f3DepthDebug)
-            {
-                // Draw normal rendered view
-                glBlitNamedFramebuffer(g_fbo.fbo, 0, 
-                    0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
-                    0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
-                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
-                
-            } else {
-                // render depth view instead 
-                world.RenderHiZDebug(&depthDebug, g_fbo.hiZTex, mipLevelDebug, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
-            }
-
 
 
 

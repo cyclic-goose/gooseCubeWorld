@@ -126,7 +126,7 @@ void GpuCuller::GenerateHiZ(GLuint depthTexture, int width, int height) {
     }
 }
 
-void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, GLuint depthTexture, bool occlusionCullingOn) {
+void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, GLuint depthTexture) {
     glGetNamedBufferSubData(m_resultBuffer, 0, sizeof(GLuint), &m_drawnCount);
     
     uint32_t zero = 0;
@@ -140,12 +140,17 @@ void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, c
     m_cullShader->setFloat("u_P00", proj[0][0]);
     m_cullShader->setFloat("u_P11", proj[1][1]);
     
-    // Massive Far Plane for Massive Worlds
-    // Use 100,000 km to ensure we don't prematurely clip depth
-    m_cullShader->setFloat("u_zNear", 0.1f);
-    m_cullShader->setFloat("u_zFar", 100000000.0f);
+    // --- UPDATED: Use controls from ImGui / m_settings ---
+    m_cullShader->setFloat("u_zNear", m_settings.zNear);
+    m_cullShader->setFloat("u_zFar", m_settings.zFar);
+    
+    // Pass extra debug uniforms if needed (e.g., frustum padding)
+    // m_cullShader->setFloat("u_FrustumPadding", m_settings.frustumPadding); 
 
-    if (depthTexture != 0 && m_depthPyramidWidth > 0 && occlusionCullingOn) {
+    // Use settings for occlusion toggle
+    bool occlusionActive = m_settings.occlusionEnabled && depthTexture != 0 && m_depthPyramidWidth > 0;
+
+    if (occlusionActive) {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, depthTexture);
         glBindSampler(0, m_depthSampler); 
