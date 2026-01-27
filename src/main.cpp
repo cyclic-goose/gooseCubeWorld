@@ -25,6 +25,7 @@
 #include "splash_screen.hpp"
 #include "texture_manager.h"
 #include "input_manager.h"
+#include "terrain_system_alien_world.h"
 
 // ======================================================================================
 // --- CONFIGURATION & GLOBALS ---
@@ -32,7 +33,7 @@
 
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
-const bool START_FULLSCREEN = true; 
+const bool START_FULLSCREEN = false; 
 
 static const uint16_t GLOBAL_VRAM_ALLOC_SIZE_MB = 1024 * 2;
 
@@ -47,6 +48,7 @@ bool firstMouse = true;
 // Timing
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
+float switchCooldown = 0.0f; // Cooldown timer so user cant spam buttom presses
 
 // Debug & State Flags
 bool lockFrustum = false;
@@ -156,6 +158,47 @@ void processInput(GLFWwindow *window, World& world) {
         std::cout << "[DEBUG] LOD Freeze: " << (!current ? "ON" : "OFF") << std::endl;
     }
 
+
+    if (switchCooldown > 0.0f) {
+        switchCooldown -= deltaTime;
+    }
+
+    // ==========================================================
+    // RUNTIME SWITCHING LOGIC, will later use this to change dimensions in game
+    // ==========================================================
+    
+    if (Input::IsJustPressed(window, GLFW_KEY_T)) { // 'T' for Terraforming
+        if (world.IsBusy())
+        {
+            std::cout << "World is still generating. Please Wait..." << std::endl;
+        }else if (switchCooldown > 0.0f) 
+        {
+            std::cout << "Generation on cooldown..." << std::endl;
+        
+        } else {
+            std::cout << "[Main] Switching Generator..." << std::endl;
+
+            // A. Create the NEW Generator (e.g. Mars Generator)
+            // auto newGen = std::make_unique<MarsGenerator>(12345); 
+            // For now, let's just re-create Standard with a different seed to simulate a switch
+            auto newGen = std::make_unique<StandardGenerator>(rand());
+
+            // B. Load Textures for the NEW Generator
+            // Important: We must unload the old array if we are strictly managing VRAM, 
+            // but typically we just overwrite the ID reference in World.
+            // Ideally, TextureManager should have a 'DeleteTexture(id)' method.
+            std::vector<std::string> newPaths = newGen->GetTexturePaths();
+            GLuint newTexArray = TextureManager::LoadTextureArray(newPaths);
+
+            // C. Inject into World
+            
+            // Call the helper (assuming you added it to World class)
+            world.SwitchGenerator(std::move(newGen), newTexArray);
+            switchCooldown = 2.0f;
+        }
+        
+    }
+
     // // R: Reload World
     // if (Input::IsJustPressed(window, GLFW_KEY_R)) {
     //     world.Reload(appState.editConfig);
@@ -233,7 +276,7 @@ int main() {
         Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl");
         
         // --- World Configuration ---
-        WorldConfig globalConfig;
+        EngineConfig globalConfig; // GLOBAL CONFIG overwrites the engine config sent into world
         globalConfig.VRAM_HEAP_ALLOCATION_MB = GLOBAL_VRAM_ALLOC_SIZE_MB; // *********************************** VRAM STATIC ALLOCATION 
         
         // lil splash screen while VRAM and RAM buffers are allocated
@@ -244,19 +287,30 @@ int main() {
         for (int i = 0; i < 5; i++) globalConfig.lodRadius[i] = 12;
         for (int i = 5; i < 12; i++) globalConfig.lodRadius[i] = 0; // Reserves
 
-        World world(globalConfig); 
 
-        // --- Load Textures ---
-        std::vector<std::string> texturePaths = {
-            "resources/textures/dirt1.jpg",   // ID 1
-            "resources/textures/dirt1.jpg",   // ID 2
-            "resources/textures/dirt1.jpg",   // ID 3
-            "resources/textures/dirt1.jpg",   // ID 4
-            "resources/textures/dirt1.jpg"    // ID 5
-        };
 
+        // create our terrain generation by choosing which class we send in
+        auto defaultTerrainGenerator = std::make_unique<StandardGenerator>(1337); // seed input
+        // Ask the generator what textures it needs
+        std::vector<std::string> texturePaths = defaultTerrainGenerator->GetTexturePaths();
+        // Load them into GPU
         GLuint texArray = TextureManager::LoadTextureArray(texturePaths);
+        World world(globalConfig, std::move(defaultTerrainGenerator));
+
+
+        // *********** 
+        // --- Manually Load Textures for testing ---
+        // std::vector<std::string> texturePaths = {
+        //     "resources/textures/dirt1.jpg",   // ID 1
+        //     "resources/textures/dirt1.jpg",   // ID 2
+        //     "resources/textures/dirt1.jpg",   // ID 3
+        //     "resources/textures/dirt1.jpg",   // ID 4
+        //     "resources/textures/dirt1.jpg"    // ID 5
+        // };
+        // GLuint texArray = TextureManager::LoadTextureArray(texturePaths);
         world.SetTextureArray(texArray);
+
+
 
         glm::mat4 prevViewProj = glm::mat4(1.0f);
 

@@ -10,6 +10,7 @@
 #include "world.h"
 #include "camera.h"
 #include "profiler.h"
+#include "terrain_system.h"
 
 // ================================================================================================
 // UI CONFIGURATION
@@ -39,7 +40,7 @@ struct UIConfig {
     bool editConfigInitialized = false;
     
     // --- World Edit State ---
-    WorldConfig editConfig;         
+    EngineConfig editConfig;         
     int currentLODPreset = 1;       // 0=Low, 1=Med, 2=High, 3=Extreme
 };
 
@@ -237,20 +238,23 @@ private:
                         ImGui::Text("Render Distance Preset");
                         bool presetChanged = false;
                         
-                        // Helper lambda for radio buttons with tooltips
-                        auto RadioWithTooltip = [&](const char* label, int v, const char* tip) {
-                            if (ImGui::RadioButton(label, &config.currentLODPreset, v)) presetChanged = true;
-                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-                            ImGui::SameLine();
-                        };
+                        if (!world.IsBusy()) {
 
-                        RadioWithTooltip("Very Low", 0, "For low performing PCs");
-                        RadioWithTooltip("Standard", 1, "Balanced");
-                        RadioWithTooltip("High", 2, "Good view range, reasonable VRAM");
-                        RadioWithTooltip("Ultra", 3, "High Rasterization Cost");
-                        // Remove SameLine for the last one to wrap if needed, or keep it
-                        if (ImGui::RadioButton("Extreme", &config.currentLODPreset, 4)) presetChanged = true;
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("For GIGA GPUs");
+                            // Helper lambda for radio buttons with tooltips
+                            auto RadioWithTooltip = [&](const char* label, int v, const char* tip) {
+                                if (ImGui::RadioButton(label, &config.currentLODPreset, v)) presetChanged = true;
+                                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+                                ImGui::SameLine();
+                            };
+    
+                            RadioWithTooltip("Very Low", 0, "For low performing PCs");
+                            RadioWithTooltip("Standard", 1, "Balanced");
+                            RadioWithTooltip("High", 2, "Good view range, reasonable VRAM");
+                            RadioWithTooltip("Ultra", 3, "High Rasterization Cost");
+                            // Remove SameLine for the last one to wrap if needed, or keep it
+                            if (ImGui::RadioButton("Extreme", &config.currentLODPreset, 4)) presetChanged = true;
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("FOR SUPERCOMPUTERS (If you think you qualify, you probably still don't)");
+                        }
 
                         if (presetChanged) {
                             struct LODPreset {
@@ -295,13 +299,17 @@ private:
                             ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "%d Chunks", effectiveDistChunks);
                         }
 
-                        if (ImGui::SliderInt("##lodslider", &currentLODs, 1, 12, "LOD Level: %d")) {
-                            config.editConfig.lodCount = currentLODs;
-                        }
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Level 1-6: Standard Playable Area\nLevel 7-9: Far Horizon\nLevel 10+: Extreme Distance");
+                        if (!world.IsBusy())
+                        {
 
-                        if (ImGui::IsItemDeactivatedAfterEdit()) {
-                            world.Reload(config.editConfig);
+                            if (ImGui::SliderInt("##lodslider", &currentLODs, 1, 12, "LOD Level: %d")) {
+                                config.editConfig.lodCount = currentLODs;
+                            }
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Level 1-6: Standard Playable Area\nLevel 7-9: Far Horizon\nLevel 10+: Extreme Distance");
+    
+                            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                                world.Reload(config.editConfig);
+                            }
                         }
 
                         ImGui::Spacing();
@@ -310,16 +318,22 @@ private:
                         if (ImGui::TreeNodeEx("Advanced LOD Tuning", ImGuiTreeNodeFlags_DefaultOpen)) {
                             ImGui::TextDisabled("Adjust the radius (in chunks) for each detail ring.");
                             ImGui::Spacing();
+                            
+                            // check if the world threads are busy before allowing LOD tuning or else
+                            // program can crash hard
+                            if (!world.IsBusy())
+                            {
 
-                            for (int i = 0; i < config.editConfig.lodCount; i++) {
-                                int currentScale = 1 << i;
-                                ImGui::Text("LOD %d (1:%dx Scale)", i, currentScale);
-                                ImGui::SameLine();
-                                std::string sliderLabel = "##lodradius" + std::to_string(i);
-                                ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig.lodRadius[i], 2, 64);
-
-                                if (ImGui::IsItemDeactivatedAfterEdit()) {
-                                    world.Reload(config.editConfig);
+                                for (int i = 0; i < config.editConfig.lodCount; i++) {
+                                    int currentScale = 1 << i;
+                                    ImGui::Text("LOD %d (1:%dx Scale)", i, currentScale);
+                                    ImGui::SameLine();
+                                    std::string sliderLabel = "##lodradius" + std::to_string(i);
+                                    ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig.lodRadius[i], 2, 64);
+    
+                                    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                                        world.Reload(config.editConfig);
+                                    }
                                 }
                             }
                             ImGui::TreePop();
@@ -623,7 +637,15 @@ private:
             ImGui::Separator();
             ImGui::Text("Pool Tasks: %zu", world.m_pool.GetQueueSize());
             
+            // grab all of the ImGui controls its that easy
+            world.GetGenerator()->OnImGui();
+
+
+
             ImGui::End();
+
+
+
         }
     }
 
