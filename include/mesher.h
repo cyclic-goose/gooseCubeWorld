@@ -17,7 +17,7 @@ inline uint32_t ctz(uint64_t x) {
 #endif
 }
 
-// NOTE: Skirt generation removed. Stacked LODs render geometry underneath, filling gaps.
+//// BINARY GREEDY MESHER: thankg you google gemini I could NOT figure this out on my own
 
 inline void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, bool debug = false) {
     int quadCount = 0;

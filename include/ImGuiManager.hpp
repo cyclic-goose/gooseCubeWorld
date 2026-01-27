@@ -128,21 +128,21 @@ public:
             lastVsync = config.vsync;
         }
 
-        // 1. Overlay (Always on top/visible)
+        // Overlay (Always on top/visible)
         if (config.showOverlay) RenderSimpleOverlay(config, camera);
 
-        // 2. Game Controls (Pause Menu)
+        // Game Controls (Pause Menu)
         if (config.showGameControls) RenderGameControls(world, config);
 
-        // 3. Debug Suite (F2)
+        // Debug Suite (F2)
         if (config.showDebugPanel) {
             RenderDebugPanel(world, config, VRAM_HEAP_SIZE_MB); // Top Left
             RenderCameraControls(camera, config);               // Top Right
             RenderCullerControls(world, config);                // Bottom Right
         }
 
-        // 4. World Generation (M)
-        if (config.showWorldSettings) RenderWorldSettings(world, config);
+        // World Generation (M)
+        //if (config.showWorldSettings) RenderWorldSettings(world, config);
         
         // RenderMenuBar(config); // Optional: Currently disabled
     }
@@ -627,55 +627,55 @@ private:
         }
     }
 
-    void RenderWorldSettings(World& world, UIConfig& config) {
-        ImGuiWindowFlags flags = 0;
-        if (config.isGameMode) {
-            flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
-            ImGui::SetNextWindowBgAlpha(0.75f);
-        }
-        ImGui::SetNextWindowPos(ImVec2(16,801), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(593,550), ImGuiCond_FirstUseEver);
+    // void RenderWorldSettings(World& world, UIConfig& config) {
+    //     ImGuiWindowFlags flags = 0;
+    //     if (config.isGameMode) {
+    //         flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
+    //         ImGui::SetNextWindowBgAlpha(0.75f);
+    //     }
+    //     ImGui::SetNextWindowPos(ImVec2(16,801), ImGuiCond_FirstUseEver);
+    //     ImGui::SetNextWindowSize(ImVec2(593,550), ImGuiCond_FirstUseEver);
         
-        if (ImGui::Begin("World Generation (M)", &config.showWorldSettings)) {
-            ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
+    //     if (ImGui::Begin("World Generation (M)", &config.showWorldSettings)) {
+    //         ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
             
-            if (ImGui::CollapsingHeader("Terrain Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::DragInt("Seed", &config.editConfig.seed);
-                ImGui::SliderFloat("Noise Scale", &config.editConfig.scale, 0.001f, 0.1f);
-                ImGui::SliderFloat("Hill Amp", &config.editConfig.hillAmplitude, 0.0f, 500.0f);
-                ImGui::SliderFloat("Hill Freq", &config.editConfig.hillFrequency, 0.05f, 10.0f);
-                ImGui::SliderFloat("Mountain Amp", &config.editConfig.mountainAmplitude, 0.0f, 8000.0f);
-                ImGui::SliderFloat("Mountain Freq", &config.editConfig.mountainFrequency, 0.01f, 0.2f);
-                ImGui::SliderInt("Sea Level", &config.editConfig.seaLevel, 0, 500);
-            }
+    //         if (ImGui::CollapsingHeader("Terrain Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
+    //             ImGui::DragInt("Seed", &config.editConfig.seed);
+    //             ImGui::SliderFloat("Noise Scale", &config.editConfig.scale, 0.001f, 0.1f);
+    //             ImGui::SliderFloat("Hill Amp", &config.editConfig.hillAmplitude, 0.0f, 500.0f);
+    //             ImGui::SliderFloat("Hill Freq", &config.editConfig.hillFrequency, 0.05f, 10.0f);
+    //             ImGui::SliderFloat("Mountain Amp", &config.editConfig.mountainAmplitude, 0.0f, 8000.0f);
+    //             ImGui::SliderFloat("Mountain Freq", &config.editConfig.mountainFrequency, 0.01f, 0.2f);
+    //             ImGui::SliderInt("Sea Level", &config.editConfig.seaLevel, 0, 500);
+    //         }
 
-            if (ImGui::CollapsingHeader("World Dimensions")) {
-                ImGui::SliderInt("Height (Chunks)", &config.editConfig.worldHeightChunks, 8, 128);
-                ImGui::TextColored(ImVec4(0.7,0.7,0.7,1), "Note: Height changes require full reload.");
-            }
+    //         if (ImGui::CollapsingHeader("World Dimensions")) {
+    //             ImGui::SliderInt("Height (Chunks)", &config.editConfig.worldHeightChunks, 8, 128);
+    //             ImGui::TextColored(ImVec4(0.7,0.7,0.7,1), "Note: Height changes require full reload.");
+    //         }
 
-            if (ImGui::CollapsingHeader("LOD Settings")) {
-                ImGui::SliderInt("LOD Count", &config.editConfig.lodCount, 1, 12);
-                for (int i = 0; i < config.editConfig.lodCount; i++) {
-                    std::string label = "LOD " + std::to_string(i) + " Radius";
-                    ImGui::SliderInt(label.c_str(), &config.editConfig.lodRadius[i], 0, 64);
-                }
-            }
+    //         if (ImGui::CollapsingHeader("LOD Settings")) {
+    //             ImGui::SliderInt("LOD Count", &config.editConfig.lodCount, 1, 12);
+    //             for (int i = 0; i < config.editConfig.lodCount; i++) {
+    //                 std::string label = "LOD " + std::to_string(i) + " Radius";
+    //                 ImGui::SliderInt(label.c_str(), &config.editConfig.lodRadius[i], 0, 64);
+    //             }
+    //         }
 
-            if (ImGui::CollapsingHeader("Caves")) {
-                ImGui::Checkbox("Enable Caves", &config.editConfig.enableCaves);
-                if (config.editConfig.enableCaves) {
-                    ImGui::SliderFloat("Threshold", &config.editConfig.caveThreshold, 0.0f, 1.0f);
-                }
-            }
+    //         if (ImGui::CollapsingHeader("Caves")) {
+    //             ImGui::Checkbox("Enable Caves", &config.editConfig.enableCaves);
+    //             if (config.editConfig.enableCaves) {
+    //                 ImGui::SliderFloat("Threshold", &config.editConfig.caveThreshold, 0.0f, 1.0f);
+    //             }
+    //         }
             
-            ImGui::Separator();
-            if (ImGui::Button("REGENERATE WORLD (R)", ImVec2(-1, 40))) {
-                world.Reload(config.editConfig);
-            }
-            ImGui::End();
-        }
-    }
+    //         ImGui::Separator();
+    //         if (ImGui::Button("REGENERATE WORLD (R)", ImVec2(-1, 40))) {
+    //             world.Reload(config.editConfig);
+    //         }
+    //         ImGui::End();
+    //     }
+    // }
 
     void RenderMenuBar(UIConfig& config) {
         if (ImGui::BeginMainMenuBar()) {
