@@ -295,7 +295,7 @@ public:
                 limitGen--;
             }
             
-            int limitUpload = 1024; 
+            int limitUpload = 512; 
             while (!m_meshedQueue.empty() && limitUpload > 0) {
                 nodesToUpload.push_back(m_meshedQueue.front());
                 m_meshedQueue.pop();
@@ -516,7 +516,7 @@ public:
                 }
 
                 int queued = 0;
-                int MAX_PER_FRAME = 50; 
+                int MAX_PER_FRAME = 500; 
                 
                 size_t& idx = m_pendingLODResult->loadIndex;
                 const auto& loadList = m_pendingLODResult->chunksToLoad;
