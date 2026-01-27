@@ -175,7 +175,7 @@ struct ChunkNode {
     int lod;      
     int scale;    
     
-    std::vector<PackedVertex> cachedMesh; 
+    std::vector<PackedVertex> cachedMesh; // these are the magic supercompact meshes (post greedy meshing) that are sent to the gpu
     std::atomic<ChunkState> state{ChunkState::MISSING};
     
     long long gpuOffset = -1; 
@@ -335,7 +335,7 @@ public:
         size_t capacity = maxChunks + 5000; 
         
 
-        
+
         ///// RAM ALLOCATION //
         m_chunkPool.Init(capacity); 
         m_voxelPool.Init((int)(maxChunks/2)); // HOW MANY BYTES TO ALLOC FOR voxel pool
