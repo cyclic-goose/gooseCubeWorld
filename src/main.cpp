@@ -34,6 +34,8 @@ const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
 const bool START_FULLSCREEN = true; 
 
+static const uint16_t GLOBAL_VRAM_ALLOC_SIZE_MB = 1024 * 2;
+
 // Camera 
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
 
@@ -181,7 +183,7 @@ void processInput(GLFWwindow *window, World& world) {
 // ======================================================================================
 
 int main() {
-    // 1. Initialize GLFW
+    // Initialize GLFW
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
@@ -201,10 +203,10 @@ int main() {
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     
-    // 2. Initialize GLAD
+    // Initialize GLAD
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
     
-    // 3. Initialize GUI & GL State
+    //Initialize GUI & GL State
     gui.Init(window);
     
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); // Reverse-Z requirement
@@ -224,15 +226,17 @@ int main() {
     // Ideally this should be encapsulated, but maintained here for existing logic.
     g_fbo.Resize(curScrWidth, curScrHeight);
     
-    // 4. World & Resources Scope
+    // World & Resources Scope
     { 
+        // shader for world and then shader that helped me debug depth buffer
         Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl");
         
         // --- World Configuration ---
         WorldConfig globalConfig;
-        globalConfig.VRAM_HEAP_ALLOCATION_MB = 2048; // *********************************** VRAM STATIC ALLOCATION 
+        globalConfig.VRAM_HEAP_ALLOCATION_MB = GLOBAL_VRAM_ALLOC_SIZE_MB; // *********************************** VRAM STATIC ALLOCATION 
         
+        // lil splash screen while VRAM and RAM buffers are allocated
         RenderLoadingScreen(window, gui, globalConfig.VRAM_HEAP_ALLOCATION_MB);
 
         // Configure LODs
@@ -256,7 +260,10 @@ int main() {
 
         glm::mat4 prevViewProj = glm::mat4(1.0f);
 
-        // 5. Main Render Loop
+
+
+        // ****** GAME LOOP ******* // 
+
         while (!glfwWindowShouldClose(window)) {
             // Timing
             float currentFrame = (float)glfwGetTime();
@@ -265,13 +272,16 @@ int main() {
 
             Engine::Profiler::Get().Update();
             
+
             // logic/world gen, chunk loading/unloading
             processInput(window, world);
             world.Update(camera.Position);
             
+
             // GUI and PROFILER START (profiler returns in constant time if its disabled)
             gui.BeginFrame();
             Engine::Profiler::Get().DrawUI(appState.isGameMode);
+
 
             // Handle Resize
             glfwGetFramebufferSize(window, &curScrWidth, &curScrHeight);
@@ -281,6 +291,7 @@ int main() {
                 prevScrHeight = curScrHeight;
             }
             
+
             // model view projection (mvp)
             glm::mat4 projection = camera.GetProjectionMatrix((float)curScrWidth / (float)curScrHeight, 0.1f);
             glm::mat4 view = camera.GetViewMatrix();
@@ -290,6 +301,7 @@ int main() {
                 lockedCullMatrix = viewProj;
             }
             
+
             // Render Prep
             glBindFramebuffer(GL_FRAMEBUFFER, g_fbo.fbo);
             glViewport(0, 0, curScrWidth, curScrHeight);
@@ -299,11 +311,14 @@ int main() {
             glClearDepth(0.0f); // Reverse-Z
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+
+
             // World Draw
             // Triggers: Cull(PrevDepth) -> MultiDrawIndirect, then HI-Z occlusion calc for next frame
             // see GPU_CULLING_RENDER_SYSTEM.md for render pipeline info
             world.Draw(worldShader, viewProj, lockedCullMatrix, prevViewProj, projection, 
                        curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum);
+
 
             // GUI Render
             gui.RenderUI(world, appState, camera, globalConfig.VRAM_HEAP_ALLOCATION_MB);

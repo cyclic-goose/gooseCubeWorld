@@ -3,6 +3,9 @@
 #include <mutex>
 #include <iostream>
 
+// this is a generic object handler (that will mostly be used for chunks and chunk nodes)
+// it handles allocating and freeing ram for chunks and chunk nodes
+
 template <typename T>
 class ObjectPool {
 private:

@@ -29,7 +29,7 @@
 #include "linearAllocator.h"
 #include "shader.h"
 #include "threadpool.h"
-#include "chunk_pool.h"
+#include "object_pool.h"
 #include "gpu_memory.h"
 #include "packedVertex.h"
 #include "profiler.h"
@@ -334,9 +334,15 @@ public:
         }
         size_t capacity = maxChunks + 5000; 
         
+
+        
+        ///// RAM ALLOCATION //
         m_chunkPool.Init(capacity); 
-        m_voxelPool.Init(capacity); // HOW MANY BYTES TO ALLOC FOR ONE CHUNK 
+        m_voxelPool.Init((int)(maxChunks/2)); // HOW MANY BYTES TO ALLOC FOR voxel pool
+        // VRAM ALLOCATION // 
         m_gpuMemory = std::make_unique<GpuMemoryManager>(config.VRAM_HEAP_ALLOCATION_MB * 1024 * 1024); 
+
+
 
         m_culler = std::make_unique<GpuCuller>(capacity);
         glCreateVertexArrays(1, &m_dummyVAO);
@@ -393,7 +399,7 @@ public:
                 limitGen--;
             }
             
-            int limitUpload = 512; 
+            int limitUpload = 1024; 
             while (!m_meshedQueue.empty() && limitUpload > 0) {
                 nodesToUpload.push_back(m_meshedQueue.front());
                 m_meshedQueue.pop();

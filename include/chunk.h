@@ -8,11 +8,6 @@ constexpr int CHUNK_SIZE_PADDED = CHUNK_SIZE + 2;
 struct Chunk {
     uint8_t voxels[CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED];
     
-    int worldX = 0;
-    int worldY = 0;
-    int worldZ = 0;
-
-
 
     Chunk() {
         std::memset(voxels, 0, sizeof(voxels));
