@@ -12,9 +12,7 @@ struct Chunk {
     int worldY = 0;
     int worldZ = 0;
 
-    // OPTIMIZATION FLAGS
-    bool isUniform = false; // True if all blocks are the same ID
-    uint8_t uniformID = 0;  // The ID if uniform
+
 
     Chunk() {
         std::memset(voxels, 0, sizeof(voxels));
@@ -36,13 +34,13 @@ struct Chunk {
             y < 0 || y >= CHUNK_SIZE_PADDED || 
             z < 0 || z >= CHUNK_SIZE_PADDED) return;
         voxels[GetIndex(x, y, z)] = v;
-        isUniform = false; // Break uniform assumption on write
+        //isUniform = false; // Break uniform assumption on write
     }
     
-    // Fast fill for Air/Solid chunks
-    void FillUniform(uint8_t id) {
-        std::memset(voxels, id, sizeof(voxels));
-        isUniform = true;
-        uniformID = id;
-    }
+    // // Fast fill for Air/Solid chunks
+    // void FillUniform(uint8_t id) {
+    //     std::memset(voxels, id, sizeof(voxels));
+    //     isUniform = true;
+    //     uniformID = id;
+    // }
 };

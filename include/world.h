@@ -167,8 +167,9 @@ public:
 
 enum class ChunkState { MISSING, GENERATING, GENERATED, MESHING, MESHED, ACTIVE };
 
+// the chunk node acts as the meta data, the what, where, when, how to the chunks actual voxel data
 struct ChunkNode {
-    Chunk chunk;
+    Chunk *chunk = nullptr; // ptr to actual raw chunk voxel data
     glm::vec3 position;
     int cx, cy, cz; 
     int lod;      
@@ -185,7 +186,13 @@ struct ChunkNode {
     glm::vec3 minAABB;
     glm::vec3 maxAABB;
 
+    // we can store flags for if it is an all air or all solid block to skip rendering
+    bool isUniform = false; // True if all blocks are the same ID
+    uint8_t uniformID = 0;  // The ID if uniform
+
     void Reset(int x, int y, int z, int lodLevel) {
+        chunk = nullptr;
+
         lod = lodLevel;
         scale = 1 << lod; 
 
@@ -198,13 +205,14 @@ struct ChunkNode {
         minAABB = position;
         maxAABB = position + glm::vec3(size);
 
-        chunk.worldX = (int)position.x;
-        chunk.worldY = (int)position.y;
-        chunk.worldZ = (int)position.z;
+        //chunk.worldX = (int)position.x;
+        //chunk.worldY = (int)position.y;
+        //chunk.worldZ = (int)position.z;
         
         state = ChunkState::MISSING;
         cachedMesh.clear();
-        chunk.isUniform = false;
+        //chunk.isUniform = false;
+        isUniform = false;
         gpuOffset = -1;
         vertexCount = 0;
     }
@@ -229,7 +237,11 @@ private:
     
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
     std::shared_mutex m_chunksMutex; 
+
+    // This is the pool of chunk meta data: position, uniformity, id, LOD, etc
     ObjectPool<ChunkNode> m_chunkPool;
+    // This is the pool of strictly voxel data for the chunk, the actual packed vertices for the gpu
+    ObjectPool<Chunk> m_voxelPool;
 
     std::mutex m_queueMutex;
     std::queue<ChunkNode*> m_generatedQueue; 
@@ -323,6 +335,7 @@ public:
         size_t capacity = maxChunks + 5000; 
         
         m_chunkPool.Init(capacity); 
+        m_voxelPool.Init(capacity); // HOW MANY BYTES TO ALLOC FOR ONE CHUNK 
         m_gpuMemory = std::make_unique<GpuMemoryManager>(config.VRAM_HEAP_ALLOCATION_MB * 1024 * 1024); 
 
         m_culler = std::make_unique<GpuCuller>(capacity);
@@ -370,7 +383,7 @@ public:
         std::vector<ChunkNode*> nodesToMesh;
         std::vector<ChunkNode*> nodesToUpload;
         
-        {
+        { // Pop from thread safe queues only
             std::lock_guard<std::mutex> lock(m_queueMutex);
             
             int limitGen = 1024; 
@@ -388,12 +401,18 @@ public:
             }
         }
 
+        // dispatch to mesher when a node is ready
         for (ChunkNode* node : nodesToMesh) {
             if(m_shutdown) return; 
+
             if (node->state == ChunkState::GENERATING) {
-                if (node->chunk.isUniform && node->chunk.uniformID == 0) {
+
+                if (node->isUniform) {
+                    // mark it as active (skips meshing)
                     node->state = ChunkState::ACTIVE;
+
                 } else {
+                    // must be actual terrain, queue threadpool for meshing
                     node->state = ChunkState::MESHING;
                     m_pool.enqueue([this, node]() { this->Task_Mesh(node); });
                 }
@@ -402,7 +421,9 @@ public:
 
         for (ChunkNode* node : nodesToUpload) {
             if(m_shutdown) return; 
+
             if (node->state == ChunkState::MESHING) {
+                // only upload if we actually generated vertices (in normal ram right now)
                 if (!node->cachedMesh.empty()) {
                     size_t bytes = node->cachedMesh.size() * sizeof(PackedVertex);
                     long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
@@ -412,10 +433,13 @@ public:
                         m_gpuMemory->Upload(offset, node->cachedMesh.data(), bytes);
                         node->gpuOffset = offset;
                         node->vertexCount = node->cachedMesh.size();
+
+                        // clear cpu side cache to save ram
+                        // note this is clearing the nodes cached mesh (who, when, where) but not the m_voxelPool data (the what)
                         node->cachedMesh.clear(); 
                         node->cachedMesh.shrink_to_fit();
                         
-                        // [FIX] Pass tight bounding box to culler
+                        // pass bounding box to culler
                         m_culler->AddOrUpdateChunk(
                             node->id, 
                             node->minAABB,
@@ -424,8 +448,19 @@ public:
                             (size_t)(offset / sizeof(PackedVertex)), 
                             node->vertexCount
                         );
+
                     } 
                 }
+
+                // can release chunk from ram once its uploaded to VRAM
+                // if !nullptr
+                // THIS is clearing the voxel data from memory
+                if (node->chunk)
+                {
+                    m_voxelPool.Release(node->chunk);
+                    node->chunk = nullptr;
+                } 
+
                 node->state = ChunkState::ACTIVE;
             }
         }
@@ -749,9 +784,9 @@ private:
         if (m_shutdown) return;
         Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Generate");
         
-        // [FIX] FillChunk now outputs exact Y bounds
+        
         float minY, maxY;
-        FillChunk(node->chunk, node->cx, node->cy, node->cz, node->scale, minY, maxY);
+        FillChunk(node, minY, maxY);
         
         // Update AABB with tight bounds
         // X and Z remain full size, but Y is clamped to geometry
@@ -768,7 +803,7 @@ private:
         Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Mesh"); 
 
         LinearAllocator<PackedVertex> threadAllocator(1000000); 
-        MeshChunk(node->chunk, threadAllocator, false);
+        MeshChunk(*node->chunk, threadAllocator, false);
         
         node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
         
@@ -777,14 +812,28 @@ private:
         m_meshedQueue.push(node);
     }
 
-    // signature to return bounds
-    void FillChunk(Chunk& chunk, int cx, int cy, int cz, int scale, float& outMinY, float& outMaxY) {
-        chunk.worldX = cx * CHUNK_SIZE * scale;
-        chunk.worldY = cy * CHUNK_SIZE * scale;
-        chunk.worldZ = cz * CHUNK_SIZE * scale;
+
+    // --------------------------------------------------------------------------------------------
+    // FILL CHUNK 
+    // 1. Analyzes terrain height.
+    // 2. Decides if memory is needed (Optimization A).
+    // 3. Allocates ONLY if necessary.
+    // --------------------------------------------------------------------------------------------
+
+    void FillChunk(ChunkNode* node, float& outMinY, float& outMaxY) {
+        int cx = node->cx;
+        int cy = node->cy;
+        int cz = node->cz;
+        int scale = node->scale;
+
+        // position for voxels 
+        int worldX = cx * CHUNK_SIZE * scale;
+        int worldY = cy * CHUNK_SIZE * scale;
+        int worldZ = cz * CHUNK_SIZE * scale;
+
         
-        int chunkBottomY = chunk.worldY;
-        int chunkTopY = chunk.worldY + (CHUNK_SIZE * scale);
+        int chunkBottomY = worldY;
+        int chunkTopY = worldY + (CHUNK_SIZE * scale);
 
         // Initialize bounds inverted (or clamped)
         // If no blocks are placed, these will be set to bottom Y
@@ -798,8 +847,8 @@ private:
 
         for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
             for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
-                float wx = (float)(chunk.worldX + (x - 1) * scale);
-                float wz = (float)(chunk.worldZ + (z - 1) * scale);
+                float wx = (float)(worldX + (x - 1) * scale);
+                float wz = (float)(worldZ + (z - 1) * scale);
                 
                 int h = m_generator->GetHeight(wx, wz);
                 if (scale > 1) { h = (h / scale) * scale; } 
@@ -810,40 +859,67 @@ private:
             }
         }
 
+        // case A: chunk is completely above terrain and empty
         if (maxHeight < chunkBottomY) { 
-            chunk.FillUniform(0); 
-            outMinY = (float)chunkBottomY; outMaxY = (float)chunkBottomY; // Empty
+            node->isUniform = true;
+            node->uniformID = 0; // mark as air block
+            node->chunk = nullptr; // do not allocate voxels its not neccessary
+            outMinY = (float)chunkBottomY; 
+            outMaxY = (float)chunkBottomY; // Empty
             return; 
         } 
-        
+        // case B: completely below ground and full
         if (minHeight > chunkTopY && !m_config.enableCaves) { 
-            chunk.FillUniform(1); 
-            outMinY = (float)chunkBottomY; outMaxY = (float)chunkTopY; // Full
+            node->isUniform = true;
+            node->uniformID = 0; 
+            node->chunk = nullptr; // do not allocate voxels its not neccessary
+            outMinY = (float)chunkBottomY;
+            outMaxY = (float)chunkTopY; // Full
             return; 
         } 
 
-        std::memset(chunk.voxels, 0, sizeof(chunk.voxels));
-        
+        // case C: chunk has voxels
+        node->isUniform = false;
+        node->chunk = m_voxelPool.Acquire(); // allocate memory from pool
+
+        // we need to check if the voxel pool is nearing the allocated total limit
+        if (!node->chunk) {
+            // pools CLOSED
+            std::cerr << "[World] CRITICAL: Voxel Pool Exhausted. Allocate More m_voxelPool Memory" << std::endl;
+            node->isUniform = true;
+            node->uniformID = 0;
+            return;
+        }
+
+        std::memset(node->chunk->voxels, 0, sizeof(node->chunk->voxels));
+
         for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
             for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
                 int height = heights[x][z]; 
                 
+                // Optimization: Only loop Y where the surface intersects the chunk
                 int localMaxY = (height - chunkBottomY) / scale;
                 localMaxY = std::min(localMaxY + 2, CHUNK_SIZE_PADDED - 1);
                 
-                if (localMaxY < 0) continue; 
+                // If checking for caves, we might need to scan the whole height
+                int startY = 0;
+                if (!m_config.enableCaves) {
+                    if (localMaxY < 0) continue; 
+                } else {
+                    localMaxY = CHUNK_SIZE_PADDED - 1; // Check full chunk for caves
+                }
 
-                for (int y = 0; y <= localMaxY; y++) {
-                    int wy = chunk.worldY + (y - 1) * scale; 
-                    float wx = (float)(chunk.worldX + (x - 1) * scale);
-                    float wz = (float)(chunk.worldZ + (z - 1) * scale);
+                for (int y = startY; y <= localMaxY; y++) {
+                    int wy = worldY + (y - 1) * scale; 
+                    float wx = (float)(worldX + (x - 1) * scale);
+                    float wz = (float)(worldZ + (z - 1) * scale);
 
+                    // Use 'node->chunk->Set' since we are now using a pointer
                     uint8_t blockID = m_generator->GetBlock(wx, (float)wy, wz, height, scale);
                     
                     if (blockID != 0) {
-                        chunk.Set(x, y, z, blockID);
+                        node->chunk->Set(x, y, z, blockID);
                         
-                        // [FIX] Update precise bounds
                         hasBlocks = true;
                         float blockBase = (float)wy;
                         float blockTop = blockBase + scale;
@@ -858,6 +934,13 @@ private:
             outMinY = actualMinY;
             outMaxY = actualMaxY;
         } else {
+            // We allocated memory, but turns out it was empty (e.g. caves cleared everything)
+            // Optimization: Give the memory back immediately
+            m_voxelPool.Release(node->chunk);
+            node->chunk = nullptr;
+            node->isUniform = true;
+            node->uniformID = 0;
+            
             outMinY = (float)chunkBottomY;
             outMaxY = (float)chunkBottomY;
         }
