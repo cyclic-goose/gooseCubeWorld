@@ -25,7 +25,7 @@
 #include "splash_screen.hpp"
 #include "texture_manager.h"
 #include "input_manager.h"
-#include "terrain_system_alien_world.h"
+#include "terrain_superflat.h"
 #include "engine_config.h"
 
 // ======================================================================================
@@ -184,7 +184,7 @@ void processInput(GLFWwindow *window, World& world) {
             // A. Create the NEW Generator (e.g. Mars Generator)
             // auto newGen = std::make_unique<MarsGenerator>(12345); 
             // For now, let's just re-create Standard with a different seed to simulate a switch
-            auto newGen = std::make_unique<StandardGenerator>(rand());
+            auto newGen = std::make_unique<SuperflatGenerator>();
 
             // B. Load Textures for the NEW Generator
             // Important: We must unload the old array if we are strictly managing VRAM, 

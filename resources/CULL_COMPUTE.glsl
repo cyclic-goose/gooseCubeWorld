@@ -133,7 +133,7 @@ bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
     // -2.0 forces the shader to sample a texture that is 2x larger (higher res).
     // This allows it to see "thinner" occluders (like distant mountains) without
     // them getting blurred into the sky.
-    float lod = clamp(log2(maxDim) - 2.0, 0.0, 10.0);
+    float lod = clamp(log2(maxDim) - 3.0, 0.0, 10.0);
 
     // 4. Sample Hi-Z (5 Taps: Corners + Center)
     float d1 = textureLod(u_DepthPyramid, vec2(minUV.x, minUV.y), lod).r;
@@ -145,8 +145,8 @@ bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
     float furthestOccluder = min(d5, min(min(d1, d2), min(d3, d4)));
     
     // 5. Compare
-    // Reduced epsilon slightly to prevent flickering on distant objects
-    return maxZ < (furthestOccluder - 0.00001);
+    // high value can cause potentially more flicker, but be less Aggressive??? // actually 0.00001 was far more aggresive than 0.002
+    return maxZ < (furthestOccluder - 0.000001);
 }
 
 void main() {
