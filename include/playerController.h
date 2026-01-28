@@ -4,6 +4,7 @@
 #include "terrain_system.h"
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 class Player {
 public:
@@ -11,133 +12,184 @@ public:
     glm::vec3 position;
     glm::vec3 velocity;
     
+    // --- State ---
+    bool isCreativeMode = false; // Flying, No Gravity
+    bool isSprinting = false;
+    bool onGround = false;
+
+    // --- Settings ---
     // Physical dimensions
     float width = 0.6f;
     float height = 1.8f;
     float eyeLevel = 1.6f; 
     
-    // Movement settings
+    // Movement Speeds
     float walkSpeed = 5.0f;
-    float runSpeed = 8.0f;
-    float jumpForce = 8.0f;
-    float gravity = 22.0f; // Slightly higher than earth gravity feels snappier in games
-    float drag = 6.0f;     // Ground friction
-    float airDrag = 1.0f;  // Air resistance
-    
-    bool onGround = false;
+    float runSpeed = 20.0f;     // Fast sprint
+    float flySpeed = 70.0f;      // Creative flight speed
+    float flySprintSpeed = 100.0f; // Shift + Fly
+
+    // Physics Constants
+    float jumpForce = 18.5f;
+    float gravity = 22.0f;       // Snappy gravity
+    float groundDrag = 8.0f;     // High friction for tight controls
+    float airDrag = 1.0f;        // Lower friction in air
+    float flyDrag = 5.0f;        // Friction while flying (stops sliding)
+
+    // Double Tap Logic
+    float lastSpacePressTime = 0.0f;
+    bool wasSpaceDown = false;   // Fixed: Track state as member variable
 
     Player(glm::vec3 startPos) 
         : position(startPos), velocity(0.0f) 
     {
-        // Initialize camera at eye level
         camera.Position = position + glm::vec3(0, eyeLevel, 0);
     }
 
-    // Call this every frame before rendering
+
     void Update(float deltaTime, GLFWwindow* window, ITerrainGenerator* terrain) {
         HandleInput(deltaTime, window);
-        ApplyPhysics(deltaTime, terrain);
         
-        // Sync camera position to player head
+        if (isCreativeMode) {
+            ApplyCreativePhysics(deltaTime); // No collision, no gravity
+        } else {
+            ApplySurvivalPhysics(deltaTime, terrain); // Gravity + Collision
+        }
+        
+        // Sync camera
         camera.Position = position + glm::vec3(0, eyeLevel, 0);
     }
 
-    // Proxy for mouse movement to keep main.cpp clean
+    // Pass-through for camera rotation
     void ProcessMouseMovement(float xoffset, float yoffset) {
         camera.ProcessMouseMovement(xoffset, yoffset);
     }
 
+
+
 private:
+
     void HandleInput(float dt, GLFWwindow* window) {
-        float speed = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? runSpeed : walkSpeed;
-        
-        // Get generic direction vectors flattened to XZ plane (no flying)
+        // --- Double Tap Space for Creative Mode ---
+        bool isSpaceDown = (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS);
+
+        // Check for "Rising Edge" (Just Pressed)
+        if (isSpaceDown && !wasSpaceDown) {
+            float now = (float)glfwGetTime();
+            float timeSinceLast = now - lastSpacePressTime;
+
+            if (timeSinceLast < 0.25f) {
+                // Double tap detected!
+                isCreativeMode = !isCreativeMode;
+                velocity = glm::vec3(0); // Stop momentum
+                std::cout << "[Player] Creative Mode: " << (isCreativeMode ? "ON" : "OFF") << std::endl;
+                lastSpacePressTime = -1.0f; // Reset timer prevents triple-tap issues
+            } else {
+                lastSpacePressTime = now;
+            }
+        }
+        wasSpaceDown = isSpaceDown;
+
+        // --- Movement Request ---
+        isSprinting = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
+
+        // Calculate Target Speed
+        float targetSpeed = walkSpeed;
+        if (isCreativeMode) {
+            targetSpeed = isSprinting ? flySprintSpeed : flySpeed;
+        } else {
+            targetSpeed = isSprinting ? runSpeed : walkSpeed;
+        }
+
+        // Get Input Vectors
         glm::vec3 forward = glm::normalize(glm::vec3(camera.Front.x, 0, camera.Front.z));
         glm::vec3 right = glm::normalize(glm::vec3(camera.Right.x, 0, camera.Right.z));
-        
         glm::vec3 wishDir(0.0f);
-        
-        // Standard WASD
+
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) wishDir += forward;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) wishDir -= forward;
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) wishDir += right;
         if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) wishDir -= right;
 
-        // Apply acceleration if we have input
-        if (glm::length(wishDir) > 0.01f) {
-            wishDir = glm::normalize(wishDir);
+        // Normalize input
+        if (glm::length(wishDir) > 0.01f) wishDir = glm::normalize(wishDir);
+
+        // --- Apply Input Acceleration ---
+        if (isCreativeMode) {
+            // Vertical Fly Input
+            if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) wishDir.y += 1.0f;
+            if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) wishDir.y -= 1.0f;
             
-            // Ground acceleration is high for snappy movement, air control is lower
-            float accel = onGround ? 50.0f : 8.0f; 
+            // Immediate response in creative mode
+            velocity = glm::mix(velocity, wishDir * targetSpeed, flyDrag * dt);
             
-            velocity.x += wishDir.x * accel * dt;
-            velocity.z += wishDir.z * accel * dt;
+        } else {
+            // Survival Ground Movement
+            // Ground control is sharp (high acceleration), Air control is floaty
+            float accel = onGround ? 15.0f : 2.0f; 
+            
+            // We only effect X/Z with WASD. Y is gravity.
+            glm::vec3 targetVel = wishDir * targetSpeed;
+            
+            velocity.x = glm::mix(velocity.x, targetVel.x, accel * dt);
+            velocity.z = glm::mix(velocity.z, targetVel.z, accel * dt);
+            
+
+            // white boy cant jump
+            if (onGround && isSpaceDown && !isCreativeMode) {
+                 velocity.y = jumpForce;
+                 onGround = false;
+            }
+
         }
 
-        // Jump
-        if (onGround && glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-            velocity.y = jumpForce;
-            onGround = false;
-        }
     }
 
-    void ApplyPhysics(float dt, ITerrainGenerator* terrain) {
-        // 1. Apply Drag (Friction)
-        float currentDrag = onGround ? drag : airDrag;
-        // Simple damping
-        velocity.x *= std::max(0.0f, 1.0f - currentDrag * dt);
-        velocity.z *= std::max(0.0f, 1.0f - currentDrag * dt);
+    void ApplyCreativePhysics(float dt) {
+        // Simple Euler integration (velocity is already set by input)
+        position += velocity * dt;
+    }
 
-        // 2. Apply Gravity
+    void ApplySurvivalPhysics(float dt, ITerrainGenerator* terrain) {
+        //  Gravity
         velocity.y -= gravity * dt;
         if (velocity.y < -50.0f) velocity.y = -50.0f; // Terminal velocity
 
-        // 3. Move and Resolve Collisions per axis
-        // We move the player, check if they are inside a block, and if so, push them back.
-        
-        // --- X Axis ---
+        //  Collision & Integration per Axis
+        // X
         position.x += velocity.x * dt;
         if (CheckCollision(terrain)) {
-            position.x -= velocity.x * dt; // Undo move
+            position.x -= velocity.x * dt;
             velocity.x = 0;
         }
-
-        // --- Z Axis ---
+        // Z
         position.z += velocity.z * dt;
         if (CheckCollision(terrain)) {
-            position.z -= velocity.z * dt; // Undo move
+            position.z -= velocity.z * dt;
             velocity.z = 0;
         }
-
-        // --- Y Axis ---
+        // Y
         position.y += velocity.y * dt;
-        onGround = false; // Assume in air until we hit floor
+        onGround = false;
         if (CheckCollision(terrain)) {
             bool falling = velocity.y < 0;
-            
-            position.y -= velocity.y * dt; // Undo move
+            position.y -= velocity.y * dt;
             velocity.y = 0;
-            
-            if (falling) {
-                onGround = true;
-            }
+            if (falling) onGround = true;
         }
-        
-        // Basic kill floor
+
+        // Kill floor
         if (position.y < -50) {
             position = glm::vec3(0, 100, 0);
             velocity = glm::vec3(0);
         }
     }
 
-    // Returns true if the player's bounding box intersects with any solid block
+    // cast a wee ray 
     bool CheckCollision(ITerrainGenerator* terrain) {
-        // Define Player Bounding Box
-        // Position is at the bottom center of the feet
         glm::vec3 min = position - glm::vec3(width/2, 0, width/2);
         glm::vec3 max = position + glm::vec3(width/2, height, width/2);
 
-        // Convert to Voxel Coordinates
         int minX = static_cast<int>(std::floor(min.x));
         int maxX = static_cast<int>(std::floor(max.x));
         int minY = static_cast<int>(std::floor(min.y));
@@ -145,20 +197,12 @@ private:
         int minZ = static_cast<int>(std::floor(min.z));
         int maxZ = static_cast<int>(std::floor(max.z));
 
-        // Iterate over all voxels the player touches
         for (int x = minX; x <= maxX; x++) {
             for (int z = minZ; z <= maxZ; z++) {
-                
-                // Get terrain height for this column (optimization)
                 int h = terrain->GetHeight(x, z);
-
                 for (int y = minY; y <= maxY; y++) {
-                    // Check block solidity (LOD 1 for accurate physics)
-                    uint8_t block = terrain->GetBlock(x, y, z, h, 1);
-                    
-                    if (block != 0) { // 0 is Air
-                        return true;
-                    }
+                    // Check LOD 1 solidity
+                    if (terrain->GetBlock(x, y, z, h, 1) != 0) return true;
                 }
             }
         }

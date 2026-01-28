@@ -391,7 +391,7 @@ int main() {
 
 
             // GUI Render
-            gui.RenderUI(world, appState, player.camera, globalConfig.VRAM_HEAP_ALLOCATION_MB);
+            gui.RenderUI(world, appState, player, globalConfig.VRAM_HEAP_ALLOCATION_MB);
             gui.EndFrame();
 
             // swap to screen buffer

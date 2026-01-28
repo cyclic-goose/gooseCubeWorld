@@ -11,6 +11,7 @@
 #include "camera.h"
 #include "profiler.h"
 #include "terrain_system.h"
+#include "playerController.h"
 
 // ================================================================================================
 // UI CONFIGURATION
@@ -113,7 +114,8 @@ public:
     // MAIN RENDER INTERFACE
     // --------------------------------------------------------------------------------------------
 
-    void RenderUI(World& world, UIConfig& config, Camera& camera, const float VRAM_HEAP_SIZE_MB) {
+    // now takes in player which holds its camera 
+    void RenderUI(World& world, UIConfig& config, Player& player, const float VRAM_HEAP_SIZE_MB) {
         Engine::Profiler::ScopedTimer timer("ImGui::Render");
         
         // One-time init for edit config
@@ -130,15 +132,14 @@ public:
         }
 
         // Overlay (Always on top/visible)
-        if (config.showOverlay) RenderSimpleOverlay(config, camera);
+        if (config.showOverlay) RenderSimpleOverlay(config, player.camera);
 
-        // Game Controls (Pause Menu)
-        if (config.showGameControls) RenderGameControls(world, config);
+        if (config.showGameControls) RenderGameControls(world, config, player);
 
         // Debug Suite (F2)
         if (config.showDebugPanel) {
             RenderDebugPanel(world, config, VRAM_HEAP_SIZE_MB); // Top Left
-            RenderCameraControls(camera, config);               // Top Right
+            RenderCameraControls(player, config);               // Top Right
             RenderCullerControls(world, config);                // Bottom Right
         }
 
@@ -200,7 +201,7 @@ private:
     // RENDER WIDGETS
     // --------------------------------------------------------------------------------------------
 
-    void RenderGameControls(World& world, UIConfig& config) {
+    void RenderGameControls(World& world, UIConfig& config, Player& player) {
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse; 
         // Note: We do NOT set NoInputs here because this is the Pause Menu
         ImGui::SetNextWindowBgAlpha(0.95f); 
@@ -222,8 +223,47 @@ private:
 
                 if (ImGui::BeginTabBar("PauseMenuTabs")) {
                     
-                    // --- TAB 1: GAMEPLAY ---
-                    if (ImGui::BeginTabItem("Gameplay")) {
+
+
+                    if (ImGui::BeginTabItem("Player")) {
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Game Mode");
+                        ImGui::Separator();
+                        
+                        if (ImGui::Checkbox("Creative Mode (Fly)", &player.isCreativeMode)) {
+                            player.velocity = glm::vec3(0); // Stop physics glitch when switching
+                        }
+                        ImGui::SameLine(); ImGui::TextDisabled("(Double tap SPACE to toggle)");
+
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Movement Settings");
+                        ImGui::Separator();
+                        
+                        ImGui::SliderFloat("Walk Speed", &player.walkSpeed, 1.0f, 20.0f);
+                        ImGui::SliderFloat("Run Speed (Shift)", &player.runSpeed, 5.0f, 100.0f);
+                        ImGui::SliderFloat("Fly Speed", &player.flySpeed, 5.0f, 100.0f);
+                        
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Physics");
+                        ImGui::Separator();
+                        ImGui::SliderFloat("Jump Force", &player.jumpForce, 1.0f, 30.0f);
+                        ImGui::SliderFloat("Gravity", &player.gravity, 0.0f, 50.0f);
+
+                        ImGui::Spacing();
+                        if (ImGui::Button("Reset Player Stats")) {
+                            player.walkSpeed = 5.0f;
+                            player.runSpeed = 100.0f;
+                            player.flySpeed = 40.0f;
+                            player.jumpForce = 8.5f;
+                            player.gravity = 28.0f;
+                        }
+
+                        ImGui::EndTabItem();
+                    }
+
+
+                    // 
+                    if (ImGui::BeginTabItem("Engine")) {
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "World Settings");
                         ImGui::Separator();
@@ -458,42 +498,42 @@ private:
         }
     }
 
-    void RenderCameraControls(Camera& camera, UIConfig& config) {
+
+    // *********** TODO: Just make these another tab in the menu
+    void RenderCameraControls(Player& player, UIConfig& config) {
         ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
         if (config.isGameMode) ImGui::SetNextWindowBgAlpha(0.6f);
 
-        // Position: Top Right
         ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 330, vp->WorkPos.y + 16), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(310, 300), ImGuiCond_FirstUseEver);
         
-        if (ImGui::Begin("Camera Settings", &config.showCameraControls, flags)) {
+        if (ImGui::Begin("Camera/Player (F2)", &config.showCameraControls, flags)) {
             ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
             
-            ImGui::TextColored(ImVec4(0,1,1,1), "Movement");
-            ImGui::DragFloat("Move Speed", &camera.MovementSpeed, 1.0f, 1.0f, 1000.0f);
-            ImGui::DragFloat("Sensitivity", &camera.MouseSensitivity, 0.01f, 0.01f, 2.0f);
+            ImGui::TextColored(ImVec4(0,1,1,1), "Status");
+            ImGui::Text("Mode: %s", player.isCreativeMode ? "CREATIVE (Fly)" : "SURVIVAL");
+            ImGui::Text("Pos: %.1f, %.1f, %.1f", player.position.x, player.position.y, player.position.z);
+            ImGui::Text("Vel: %.1f, %.1f, %.1f", player.velocity.x, player.velocity.y, player.velocity.z);
+
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0,1,1,1), "Camera");
+            ImGui::DragFloat("FOV", &player.camera.Zoom, 0.5f, 10.0f, 120.0f);
+            ImGui::DragFloat("Sensitivity", &player.camera.MouseSensitivity, 0.01f, 0.01f, 2.0f);
             
             ImGui::Separator();
-            ImGui::TextColored(ImVec4(0,1,1,1), "Lens");
-            ImGui::DragFloat("Zoom (FOV)", &camera.Zoom, 0.5f, 1.0f, 120.0f);
-            
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0,1,1,1), "Transform (Read Only)");
-            ImGui::Text("Pos: %.2f, %.2f, %.2f", camera.Position.x, camera.Position.y, camera.Position.z);
-            ImGui::Text("Yaw: %.2f  Pitch: %.2f", camera.Yaw, camera.Pitch);
-            
-            if (ImGui::Button("Reset Camera")) {
-                camera.Position = glm::vec3(0, 150, 150);
-                camera.Yaw = -90.0f;
-                camera.Pitch = -45.0f;
-                camera.Zoom = 60.0f;
-                camera.MovementSpeed = 50.0f;
-                camera.updateCameraVectors();
+            if (ImGui::Button("Teleport Up")) player.position.y += 50.0f;
+            ImGui::SameLine();
+            if (ImGui::Button("Reset")) {
+                player.position = glm::vec3(0, 150, 150);
+                player.velocity = glm::vec3(0);
             }
             ImGui::End();
         }
     }
+    // *********** TODO: Just make these another tab in the menu
+
+
 
     void RenderCullerControls(World& world, UIConfig& config) {
         ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;

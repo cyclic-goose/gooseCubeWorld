@@ -146,7 +146,7 @@ bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
     
     // 5. Compare
     // high value can cause potentially more flicker, but be less Aggressive??? // actually 0.00001 was far more aggresive than 0.002
-    return maxZ < (furthestOccluder - 0.000001);
+    return maxZ < (furthestOccluder - 0.00001);
 }
 
 void main() {
