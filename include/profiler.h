@@ -288,7 +288,7 @@ public:
                 ImGui::ProgressBar(meshPressure, ImVec2(-1, 0), "");
 
                 // Upload Queue Pressure (Meshed -> Waiting for GPU Upload)
-                float uploadPressure = (float)m_pipeline.waitingUpload / 512.0f; // Soft limit 512
+                float uploadPressure = (float)m_pipeline.waitingUpload / 512.0f; // Soft limit 512A
                 ImGui::Text("Upload Queue: %zu", m_pipeline.waitingUpload);
                 ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.9f, 0.4f, 0.4f, 1.0f)); // Reddish
                 ImGui::ProgressBar(uploadPressure, ImVec2(-1, 0), "");
@@ -307,7 +307,7 @@ public:
                 ImGui::ProgressBar(poolPressure, ImVec2(-1, 0), "Pool Saturation");
                 ImGui::PopStyleColor();
 
-                ImGui::Text("Total Active Chunks (How Many Chunks(ChunkNode*), including LODS, can possibly be rendered right now ): %zu", m_pipeline.totalChunks);
+                ImGui::Text("Total Active Chunks(ChunkNode*): %zu", m_pipeline.totalChunks);
 
                 ImGui::Separator();
                 float voxRamPressure = m_pipeline.voxelRamUsed/m_pipeline.voxelRamAllocated;

@@ -329,7 +329,7 @@ private:
                                     ImGui::Text("LOD %d (1:%dx Scale)", i, currentScale);
                                     ImGui::SameLine();
                                     std::string sliderLabel = "##lodradius" + std::to_string(i);
-                                    ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig->settings.lodRadius[i], 2, 64);
+                                    ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig->settings.lodRadius[i], 2, (int)(64.0));
     
                                     if (ImGui::IsItemDeactivatedAfterEdit()) {
                                         world.Reload(*config.editConfig);

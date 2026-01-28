@@ -542,8 +542,8 @@ public:
                 const auto& loadList = m_pendingLODResult->chunksToLoad;
 
                 /////////////////// BACKPRESSURE THRESHOLD
-                // We keep a 10% safety buffer from the hard limit
-                size_t limit = (size_t)m_config->MAX_TRANSIENT_VOXEL_MESHES;
+                
+                size_t limit = (size_t)((float)m_config->MAX_TRANSIENT_VOXEL_MESHES*0.9f);
                 if (limit > 100) limit -= 100;
                 // CRITICAL BACKPRESSURE CHECK
                 // Check if the "Kitchen" (Queues + Workers) is full before taking more "Orders" (Chunks)
