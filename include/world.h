@@ -36,6 +36,7 @@
 #include "gpu_culler.h"
 #include "screen_quad.h"
 #include "terrain_system.h"
+#include "engine_config.h"
 
 
 // ================================================================================================
@@ -110,7 +111,7 @@ inline int64_t ChunkKey(int x, int y, int z, int lod) {
 class World {
 private:
     // separate basic engine config such as LOD, occlusion, vram, etc from actual terrain stuff
-    EngineConfig m_config;
+    std::unique_ptr<EngineConfig> m_config; 
     std::unique_ptr<ITerrainGenerator> m_generator;
     
     // ***** chunk stuff ***** //
@@ -155,27 +156,43 @@ private:
 public:
 
     // constructor takes ptr to superclass which will create a vtable for us, love cpp
-    World(EngineConfig config, std::unique_ptr<ITerrainGenerator> generator) : m_config(config), m_generator(std::move(generator)) {
-        
+    World(EngineConfig config, std::unique_ptr<ITerrainGenerator> generator) : m_generator(std::move(generator)) {
+        // Move config into heap storage
+        m_config = std::make_unique<EngineConfig>(config);
 
-        size_t maxChunks = 0;
-        for(int i=0; i<m_config.lodCount; i++) {
-            int r = m_config.lodRadius[i];
-            maxChunks += (r * 2 + 1) * (r * 2 + 1) * m_config.worldHeightChunks;
+        size_t steadyStateNodes = 0;
+        for(int i=0; i< m_config->settings.lodCount; i++) {
+            int r = m_config->settings.lodRadius[i];
+            // Calculates volume of chunks for this LOD level
+            steadyStateNodes += (size_t)(r * 2 + 1) * (r * 2 + 1) * m_config->settings.worldHeightChunks;
         }
-        size_t capacity = maxChunks + 5000; 
         
+        // Add a 20% buffer for chunks currently unloading or edge cases
+        size_t nodeCapacity = steadyStateNodes + (steadyStateNodes / 5); 
+        
+        std::cout << "NODE CAPACITY " << nodeCapacity << std::endl;
 
+       // ***** RAM ALLOCATION OPTIMIZATION *****
+        
+        // 1. Chunk Nodes (Metadata)
+        // Light weight (bytes). 
+        // Growth: 512 nodes at a time
+        // Initial: 1024 nodes
+        // Max: nodeCapacity
+        m_chunkPool.Init(m_config->NODE_POOL_GROWTH_STRIDE, steadyStateNodes, nodeCapacity); 
 
-        ///// RAM ALLOCATION //
-        m_chunkPool.Init(capacity); 
-        m_voxelPool.Init((int)(maxChunks)); // HOW MANY BYTES TO ALLOC FOR voxel pool
-        // VRAM ALLOCATION // 
-        m_gpuMemory = std::make_unique<GpuMemoryManager>(config.VRAM_HEAP_ALLOCATION_MB * 1024 * 1024); 
+        // 2. Voxels (Heavy Data)
+        // Heavy weight (~39KB per chunk).
+        // Growth: 32 chunks at a time (~1.2 MB allocation) - keeps frame times smooth
+        // Initial: 0 (Don't allocate anything until needed!)
+        // Max: maxChunks (Hard limit)
+        m_voxelPool.Init(m_config->VOXEL_POOL_GROWTH_STRIDE, m_config->VOXEL_POOL_INITIAL_SIZE, m_config->MAX_TRANSIENT_VOXEL_MESHES); 
 
-
-
-        m_culler = std::make_unique<GpuCuller>(capacity);
+        // GPU memory allocation
+        m_gpuMemory = std::make_unique<GpuMemoryManager>(static_cast<size_t>(m_config->VRAM_HEAP_ALLOCATION_MB) * 1024 * 1024);
+        m_culler = std::make_unique<GpuCuller>(nodeCapacity);
+        
+        
         glCreateVertexArrays(1, &m_dummyVAO);
     }
 
@@ -242,7 +259,7 @@ public:
         m_textureArrayID = newTextureArrayID;
         
         // Unfreeze and Reload
-        Reload(m_config);
+        Reload(*m_config);
         m_freezeLODs = wasFrozen;
     }
 
@@ -255,19 +272,19 @@ public:
     ITerrainGenerator* GetGenerator() { return m_generator.get(); }
 
     void SetTextureArray(GLuint textureID) { m_textureArrayID = textureID; }
-    void setCubeDebugMode(int mode) { m_config.cubeDebugMode = mode; }
-    void setOcclusionCulling (bool mode){ m_config.occlusionCulling = mode; }
-    bool getOcclusionCulling () { return m_config.occlusionCulling; }
+    void setCubeDebugMode(int mode) { m_config->settings.cubeDebugMode = mode; }
+    void setOcclusionCulling (bool mode){ m_config->settings.occlusionCulling = mode; }
+    bool getOcclusionCulling () { return m_config->settings.occlusionCulling; }
     void SetLODFreeze(bool freeze) { m_freezeLODs = freeze; }
     bool GetLODFreeze() const { return m_freezeLODs; }
-    const EngineConfig& GetConfig() const { return m_config; }
+    const EngineConfig& GetConfig() const { return *m_config; }
 
     void Update(glm::vec3 cameraPos) {
         if (m_shutdown) return;
         Engine::Profiler::ScopedTimer timer("World::Update Total");
         
         if (m_gpuMemory->GetFragmentationRatio() > 0.6f) { 
-             Reload(m_config);
+             Reload(*m_config);
              return;
         }
 
@@ -275,6 +292,9 @@ public:
 
         if (m_freezeLODs) return; 
         UpdateLODs_Async(cameraPos);
+
+
+        UpdateProfilerPressure(); // this function is defined at the VERRRY bottom of this file
         m_frameCounter++;
     }
 
@@ -288,14 +308,14 @@ public:
         { // Pop from thread safe queues only
             std::lock_guard<std::mutex> lock(m_queueMutex);
             
-            int limitGen = 1024; 
+            int limitGen = m_config->NODE_GENERATION_LIMIT; 
             while (!m_generatedQueue.empty() && limitGen > 0) {
                 nodesToMesh.push_back(m_generatedQueue.front());
                 m_generatedQueue.pop();
                 limitGen--;
             }
             
-            int limitUpload = 512; 
+            int limitUpload = m_config->NODE_UPLOAD_LIMIT; 
             while (!m_meshedQueue.empty() && limitUpload > 0) {
                 nodesToUpload.push_back(m_meshedQueue.front());
                 m_meshedQueue.pop();
@@ -394,13 +414,13 @@ public:
             
             bool shouldUnload = false;
 
-            if (dx > m_config.lodRadius[lod] || dz > m_config.lodRadius[lod]) {
+            if (dx > m_config->settings.lodRadius[lod] || dz > m_config->settings.lodRadius[lod]) {
                  if (IsParentReady(node->cx, node->cy, node->cz, lod)) {
                      shouldUnload = true;
                  }
             }
             else if (lod > 0) {
-                int prevRadius = m_config.lodRadius[lod - 1];
+                int prevRadius = m_config->settings.lodRadius[lod - 1];
                 int innerBoundary = ((prevRadius + 1) / 2);
                 
                 if (dx < innerBoundary && dz < innerBoundary) {
@@ -432,17 +452,17 @@ public:
             });
         });
 
-        for(int lod = 0; lod < m_config.lodCount; lod++) {
+        for(int lod = 0; lod < m_config->settings.lodCount; lod++) {
             int scale = 1 << lod;
             int px = (int)floor(cameraPos.x / (CHUNK_SIZE * scale));
             int pz = (int)floor(cameraPos.z / (CHUNK_SIZE * scale));
             
-            int r = m_config.lodRadius[lod];
+            int r = m_config->settings.lodRadius[lod];
             int rSq = r * r; 
             
             int minR = 0;
             if (lod > 0) {
-                int prevR = m_config.lodRadius[lod - 1];
+                int prevR = m_config->settings.lodRadius[lod - 1];
                 minR = ((prevR + 1) / 2); 
             }
 
@@ -462,7 +482,7 @@ public:
                 int minH, maxH;
                 m_generator->GetHeightBounds(x, z, scale, minH, maxH);
                 int chunkYStart = std::max(0, (minH / (CHUNK_SIZE * scale)) - 1); 
-                int chunkYEnd = std::min(m_config.worldHeightChunks - 1, (maxH / (CHUNK_SIZE * scale)) + 1);
+                int chunkYEnd = std::min(m_config->settings.worldHeightChunks - 1, (maxH / (CHUNK_SIZE * scale)) + 1);
 
                 for (int y = chunkYStart; y <= chunkYEnd; y++) {
                     int64_t key = ChunkKey(x, y, z, lod);
@@ -490,7 +510,7 @@ public:
         m_isLODWorkerRunning = false;
     }
 
-    void UpdateLODs_Async(glm::vec3 cameraPos) {
+        void UpdateLODs_Async(glm::vec3 cameraPos) {
         
         {
             Engine::Profiler::ScopedTimer timer("World::ApplyLODs");
@@ -521,7 +541,27 @@ public:
                 size_t& idx = m_pendingLODResult->loadIndex;
                 const auto& loadList = m_pendingLODResult->chunksToLoad;
 
+                /////////////////// BACKPRESSURE THRESHOLD
+                // We keep a 10% safety buffer from the hard limit
+                size_t limit = (size_t)m_config->MAX_TRANSIENT_VOXEL_MESHES;
+                if (limit > 100) limit -= 100;
+                // CRITICAL BACKPRESSURE CHECK
+                // Check if the "Kitchen" (Queues + Workers) is full before taking more "Orders" (Chunks)
+                // If full, we break the loop and resume next frame.
+                // This prevents queueing 30,000 tasks that exhaust the voxel pool.
+                {
+                    std::lock_guard<std::mutex> qLock(m_queueMutex);
+                    size_t totalInFlight = m_generatedQueue.size() + m_meshedQueue.size() + m_activeWorkCount;
+                    if (totalInFlight >= limit) {
+                        // Pipeline full. Stop loading for this frame.
+                        return; 
+                    }
+                }
+                //////////////////////
+
                 while (idx < loadList.size() && queued < MAX_PER_FRAME) {
+                    
+
                     const auto& req = loadList[idx];
                     idx++;
                     
@@ -534,6 +574,9 @@ public:
                             m_chunks[key] = newNode;
                             
                             newNode->state = ChunkState::GENERATING;
+                            
+                            // Increment worker count BEFORE enqueueing
+                            m_activeWorkCount++; 
                             m_pool.enqueue([this, newNode]() { 
                                 this->Task_Generate(newNode); 
                                 m_activeWorkCount--; // Decrement when done
@@ -554,6 +597,7 @@ public:
             if (distSq > 64.0f) { 
                 m_lastLODCalculationPos = cameraPos;
                 m_isLODWorkerRunning = true;
+                m_activeWorkCount++; // add a worker count before each enqueue
                 m_pool.enqueue([this, cameraPos](){ 
                     this->Task_CalculateLODs(cameraPos); 
                     m_activeWorkCount--; // Decrement when done
@@ -586,7 +630,7 @@ public:
 
             shader.use();
             glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
-            glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config.cubeDebugMode);
+            glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config->settings.cubeDebugMode);
             
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
 
@@ -681,7 +725,9 @@ public:
     // resets terrain gen and inits
 
     void Reload(EngineConfig newConfig) {
-        m_config = newConfig;
+        
+
+        m_config = std::make_unique<EngineConfig>(newConfig);
         
         m_generator->Init();
         
@@ -794,7 +840,7 @@ private:
             return; 
         } 
         // case B: completely below ground and full
-        if (minHeight > chunkTopY && !m_config.enableCaves) { 
+        if (minHeight > chunkTopY && !m_config->settings.enableCaves) { 
             node->isUniform = true;
             node->uniformID = 0; 
             node->chunk = nullptr; // do not allocate voxels its not neccessary
@@ -828,7 +874,7 @@ private:
                 
                 // If checking for caves, we might need to scan the whole height
                 int startY = 0;
-                if (!m_config.enableCaves) {
+                if (!m_config->settings.enableCaves) {
                     if (localMaxY < 0) continue; 
                 } else {
                     localMaxY = CHUNK_SIZE_PADDED - 1; // Check full chunk for caves
@@ -908,7 +954,7 @@ private:
     }
 
     bool IsParentReady(int cx, int cy, int cz, int lod) {
-        if (lod >= m_config.lodCount - 1) return true; 
+        if (lod >= m_config->settings.lodCount - 1) return true; 
         
         int parentLod = lod + 1;
         int px = cx >> 1;
@@ -923,4 +969,48 @@ private:
         }
         return true;
     }
+
+    void UpdateProfilerPressure() {
+        if (!Engine::Profiler::Get().m_Enabled) return;
+
+        // 1. Pending LODs (Waiting to be generated)
+        size_t pendingGen = 0;
+        {
+            // Try to get count, but don't stall if LOD worker is busy writing
+            std::unique_lock<std::mutex> lock(m_lodResultMutex, std::try_to_lock);
+            if (lock.owns_lock() && m_pendingLODResult) {
+                pendingGen = m_pendingLODResult->chunksToLoad.size() - m_pendingLODResult->loadIndex;
+            }
+        }
+
+        // 2. Queue Pressure (Dirty read for performance - approximates are fine for UI)
+        size_t waitingMesh = m_generatedQueue.size();
+        size_t waitingUpload = m_meshedQueue.size();
+        
+        // 3. Active Threads (Atomic read)
+        size_t activeThreads = m_activeWorkCount.load();
+
+        // 4. Total Chunks in VRAM (Approximation via map size)
+        // Note: m_chunks includes nodes that are GENERATING/MESHING, not just those in VRAM.
+        // If you want strict VRAM count, ask m_culler or count nodes with gpuOffset != -1.
+        size_t totalActive = m_chunks.size(); 
+
+        
+
+        // Send to Profiler
+        Engine::Profiler::Get().SetPipelineStats(
+            pendingGen, 
+            waitingMesh, 
+            waitingUpload, 
+            activeThreads, 
+            totalActive,
+            (size_t)m_config->MAX_TRANSIENT_VOXEL_MESHES,
+            m_voxelPool.GetAllocatedMB(),
+            m_voxelPool.GetUsedMB(),
+            m_chunkPool.GetAllocatedMB(),
+            m_chunkPool.GetUsedMB()
+        );
+    }
+
+
 };

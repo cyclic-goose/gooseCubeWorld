@@ -29,7 +29,7 @@ struct UIConfig {
     bool showCullerControls = true;
 
     // --- Settings ---
-    bool vsync = false;
+    bool vsync = true;
     bool lockFrustum = false;
     float FPS_OVERLAY_FONT_SCALE = 1.35f;
     float DEBUG_FONT_SCALE = 1.4f;
@@ -40,7 +40,7 @@ struct UIConfig {
     bool editConfigInitialized = false;
     
     // --- World Edit State ---
-    EngineConfig editConfig;         
+    std::unique_ptr<EngineConfig> editConfig;        
     int currentLODPreset = 1;       // 0=Low, 1=Med, 2=High, 3=Extreme
 };
 
@@ -117,9 +117,9 @@ public:
         Engine::Profiler::ScopedTimer timer("ImGui::Render");
         
         // One-time init for edit config
-        if (!config.editConfigInitialized) {
-            config.editConfig = world.GetConfig();
-            config.editConfigInitialized = true;
+        if (!config.editConfig) {
+            // Copy the current world config into our editable pointer
+            config.editConfig = std::make_unique<EngineConfig>(world.GetConfig());
         }
 
         // Handle VSync State
@@ -273,21 +273,21 @@ private:
 
                             if (config.currentLODPreset >= 0 && config.currentLODPreset < (int)presets.size()) {
                                 const auto& selected = presets[config.currentLODPreset];
-                                config.editConfig.lodCount = selected.activeCount;
+                                config.editConfig->settings.lodCount = selected.activeCount;
                                 for(int i = 0; i < 12; i++) {
                                     if(i < (int)selected.radii.size()) 
-                                        config.editConfig.lodRadius[i] = selected.radii[i];
+                                        config.editConfig->settings.lodRadius[i] = selected.radii[i];
                                 }
-                                world.Reload(config.editConfig);
+                                world.Reload(*config.editConfig);
                             }
                         }
 
                         ImGui::Spacing();
 
                         // --- Effective Distance Calculation ---
-                        int currentLODs = config.editConfig.lodCount;
+                        int currentLODs = config.editConfig->settings.lodCount;
                         int lastLODIndex = std::clamp(currentLODs - 1, 0, 11);
-                        int radius = config.editConfig.lodRadius[lastLODIndex];
+                        int radius = config.editConfig->settings.lodRadius[lastLODIndex];
                         int scale = 1 << lastLODIndex;
                         int effectiveDistChunks = radius * scale;
 
@@ -303,12 +303,12 @@ private:
                         {
 
                             if (ImGui::SliderInt("##lodslider", &currentLODs, 1, 12, "LOD Level: %d")) {
-                                config.editConfig.lodCount = currentLODs;
+                                config.editConfig->settings.lodCount = currentLODs;
                             }
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Level 1-6: Standard Playable Area\nLevel 7-9: Far Horizon\nLevel 10+: Extreme Distance");
     
                             if (ImGui::IsItemDeactivatedAfterEdit()) {
-                                world.Reload(config.editConfig);
+                                world.Reload(*config.editConfig);
                             }
                         }
 
@@ -324,15 +324,15 @@ private:
                             if (!world.IsBusy())
                             {
 
-                                for (int i = 0; i < config.editConfig.lodCount; i++) {
+                                for (int i = 0; i < config.editConfig->settings.lodCount; i++) {
                                     int currentScale = 1 << i;
                                     ImGui::Text("LOD %d (1:%dx Scale)", i, currentScale);
                                     ImGui::SameLine();
                                     std::string sliderLabel = "##lodradius" + std::to_string(i);
-                                    ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig.lodRadius[i], 2, 64);
+                                    ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig->settings.lodRadius[i], 2, 64);
     
                                     if (ImGui::IsItemDeactivatedAfterEdit()) {
-                                        world.Reload(config.editConfig);
+                                        world.Reload(*config.editConfig);
                                     }
                                 }
                             }
@@ -342,7 +342,7 @@ private:
                         ImGui::Spacing();
                         ImGui::Separator();
                         if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
-                            world.Reload(config.editConfig);
+                            world.Reload(*config.editConfig);
                         }
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("SPAMMING THIS CAN CAUSE VRAM CRASH. ALLOW WORLD TO GENERATE");
                         ImGui::EndTabItem();
@@ -622,14 +622,14 @@ private:
             // --- Shader Debugging ---
             ImGui::Text("Cube Texture Debugging:");
             bool debugChanged = false;
-            if (ImGui::RadioButton("Normal Shader", &config.editConfig.cubeDebugMode, 0)) debugChanged = true;
-            if (ImGui::RadioButton("Debug Normals", &config.editConfig.cubeDebugMode, 1)) debugChanged = true;
-            if (ImGui::RadioButton("Debug AO", &config.editConfig.cubeDebugMode, 2)) debugChanged = true;
-            if (ImGui::RadioButton("Debug UVs", &config.editConfig.cubeDebugMode, 3)) debugChanged = true;
-            if (ImGui::RadioButton("Flat Color", &config.editConfig.cubeDebugMode, 4)) debugChanged = true;
+            if (ImGui::RadioButton("Normal Shader", &config.editConfig->settings.cubeDebugMode, 0)) debugChanged = true;
+            if (ImGui::RadioButton("Debug Normals", &config.editConfig->settings.cubeDebugMode, 1)) debugChanged = true;
+            if (ImGui::RadioButton("Debug AO", &config.editConfig->settings.cubeDebugMode, 2)) debugChanged = true;
+            if (ImGui::RadioButton("Debug UVs", &config.editConfig->settings.cubeDebugMode, 3)) debugChanged = true;
+            if (ImGui::RadioButton("Flat Color", &config.editConfig->settings.cubeDebugMode, 4)) debugChanged = true;
 
             if (debugChanged) {
-                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+                world.setCubeDebugMode(config.editConfig->settings.cubeDebugMode);
             }
 
             ImGui::Spacing();

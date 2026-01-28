@@ -26,16 +26,19 @@
 #include "texture_manager.h"
 #include "input_manager.h"
 #include "terrain_system_alien_world.h"
+#include "engine_config.h"
 
 // ======================================================================================
 // --- CONFIGURATION & GLOBALS ---
 // ======================================================================================
 
+
+
 const unsigned int SCR_WIDTH = 1920;
 const unsigned int SCR_HEIGHT = 1080;
-const bool START_FULLSCREEN = false; 
+const bool START_FULLSCREEN = true; 
 
-static const uint16_t GLOBAL_VRAM_ALLOC_SIZE_MB = 1024 * 2;
+//static const uint16_t GLOBAL_VRAM_ALLOC_SIZE_MB = 1024 * 2;
 
 // Camera 
 Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
@@ -277,15 +280,15 @@ int main() {
         
         // --- World Configuration ---
         EngineConfig globalConfig; // GLOBAL CONFIG overwrites the engine config sent into world
-        globalConfig.VRAM_HEAP_ALLOCATION_MB = GLOBAL_VRAM_ALLOC_SIZE_MB; // *********************************** VRAM STATIC ALLOCATION 
+        //globalConfig.VRAM_HEAP_ALLOCATION_MB = GLOBAL_VRAM_ALLOC_SIZE_MB; // *********************************** VRAM STATIC ALLOCATION 
         
         // lil splash screen while VRAM and RAM buffers are allocated
         RenderLoadingScreen(window, gui, globalConfig.VRAM_HEAP_ALLOCATION_MB);
 
         // Configure LODs
-        globalConfig.lodCount = 5;
-        for (int i = 0; i < 5; i++) globalConfig.lodRadius[i] = 12;
-        for (int i = 5; i < 12; i++) globalConfig.lodRadius[i] = 0; // Reserves
+        // globalConfig.lodCount = 5;
+        // for (int i = 0; i < 5; i++) globalConfig.lodRadius[i] = 12;
+        // for (int i = 5; i < 12; i++) globalConfig.lodRadius[i] = 0; // Reserves
 
 
 

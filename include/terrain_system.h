@@ -7,22 +7,7 @@
 #include <cstdint>
 #include <FastNoise/FastNoise.h>
 
-// ================================================================================================
-// 1. ENGINE CONFIGURATION
-// Technical settings only. No terrain generation parameters here.
-// ================================================================================================
-struct EngineConfig {
-    // LOD & Culling
-    int lodCount = 5;
-    int lodRadius[12] = { 10, 16, 24, 32, 48, 0, 0, 0 , 0, 0, 0, 0};
-    bool occlusionCulling = true;
-    bool enableCaves = false; 
 
-    // Memory & Debug
-    float VRAM_HEAP_ALLOCATION_MB = 1024;
-    int worldHeightChunks = 64;
-    int cubeDebugMode = 4;
-};
 
 // ================================================================================================
 // 2. TERRAIN GENERATOR INTERFACE
