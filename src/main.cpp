@@ -27,6 +27,8 @@
 #include "input_manager.h"
 #include "terrain_superflat.h"
 #include "engine_config.h"
+#include "playerController.h"
+
 
 // ======================================================================================
 // --- CONFIGURATION & GLOBALS ---
@@ -41,7 +43,8 @@ const bool START_FULLSCREEN = true;
 //static const uint16_t GLOBAL_VRAM_ALLOC_SIZE_MB = 1024 * 2;
 
 // Camera 
-Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
+//Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
+Player player(glm::vec3(0.0f, 150.0f, 150.0f));
 
 // Mouse State
 float lastX = SCR_WIDTH / 2.0f;
@@ -83,7 +86,7 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
         firstMouse = false; 
     }
     
-    camera.ProcessMouseMovement(xpos - lastX, lastY - ypos);
+    player.ProcessMouseMovement(xpos - lastX, lastY - ypos);
     lastX = xpos; 
     lastY = ypos;
 }
@@ -181,19 +184,19 @@ void processInput(GLFWwindow *window, World& world) {
         } else {
             std::cout << "[Main] Switching Generator..." << std::endl;
 
-            // A. Create the NEW Generator (e.g. Mars Generator)
+            // Create the NEW Generator (e.g. Mars Generator)
             // auto newGen = std::make_unique<MarsGenerator>(12345); 
             // For now, let's just re-create Standard with a different seed to simulate a switch
             auto newGen = std::make_unique<SuperflatGenerator>();
 
-            // B. Load Textures for the NEW Generator
+            // Load Textures for the NEW Generator
             // Important: We must unload the old array if we are strictly managing VRAM, 
             // but typically we just overwrite the ID reference in World.
             // Ideally, TextureManager should have a 'DeleteTexture(id)' method.
             std::vector<std::string> newPaths = newGen->GetTexturePaths();
             GLuint newTexArray = TextureManager::LoadTextureArray(newPaths);
 
-            // C. Inject into World
+            // Inject into World
             
             // Call the helper (assuming you added it to World class)
             world.SwitchGenerator(std::move(newGen), newTexArray);
@@ -208,20 +211,20 @@ void processInput(GLFWwindow *window, World& world) {
     // }
     
     // --- Movement (Game Mode Only) ---
-    if (appState.isGameMode) {
-        // Speed Modifier
-        camera.MovementSpeed = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? 500.0f : 50.0f;
+    // if (appState.isGameMode) {
+    //     // Speed Modifier
+    //     camera.MovementSpeed = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? 500.0f : 50.0f;
 
-        // Directional
-        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
-        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
-        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT, deltaTime);
-        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT, deltaTime);
+    //     // Directional
+    //     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
+    //     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
+    //     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT, deltaTime);
+    //     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT, deltaTime);
         
-        // Vertical
-        if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
-        if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
-    }
+    //     // Vertical
+    //     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
+    //     if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
+    // }
 }
 
 // ======================================================================================
@@ -271,6 +274,10 @@ int main() {
     // NOTE: g_fbo is assumed to be an external global. 
     // Ideally this should be encapsulated, but maintained here for existing logic.
     g_fbo.Resize(curScrWidth, curScrHeight);
+
+    player.camera.Yaw = -90.0f;
+    player.camera.Pitch = -45.0f;
+    player.camera.updateCameraVectors();
     
     // World & Resources Scope
     { 
@@ -328,11 +335,17 @@ int main() {
             lastFrame = currentFrame;
 
             Engine::Profiler::Get().Update();
+
+            // update player before? or after world update???
+            if (appState.isGameMode) {
+                // player needs world generator because it exposes getBlock (needed for raycasting/collisions etc)
+                player.Update(deltaTime, window, world.GetGenerator());
+            }
             
 
             // logic/world gen, chunk loading/unloading
             processInput(window, world);
-            world.Update(camera.Position);
+            world.Update(player.camera.Position);
             
 
             // GUI and PROFILER START (profiler returns in constant time if its disabled)
@@ -350,8 +363,8 @@ int main() {
             
 
             // model view projection (mvp)
-            glm::mat4 projection = camera.GetProjectionMatrix((float)curScrWidth / (float)curScrHeight, 0.1f);
-            glm::mat4 view = camera.GetViewMatrix();
+            glm::mat4 projection = player.camera.GetProjectionMatrix((float)curScrWidth / (float)curScrHeight, 0.1f);
+            glm::mat4 view = player.camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
             
             if (!appState.lockFrustum) {
@@ -378,7 +391,7 @@ int main() {
 
 
             // GUI Render
-            gui.RenderUI(world, appState, camera, globalConfig.VRAM_HEAP_ALLOCATION_MB);
+            gui.RenderUI(world, appState, player.camera, globalConfig.VRAM_HEAP_ALLOCATION_MB);
             gui.EndFrame();
 
             // swap to screen buffer
