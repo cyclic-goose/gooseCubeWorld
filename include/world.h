@@ -526,7 +526,9 @@ public:
         m_isLODWorkerRunning = false;
     }
 
-        void UpdateLODs_Async(glm::vec3 cameraPos) {
+
+
+ void UpdateLODs_Async(glm::vec3 cameraPos) {
         
         // Helper: Process unloads immediately.
         // We define this here to reuse it in both the movement check and the normal update loop.
@@ -553,21 +555,21 @@ public:
             }
         };
 
-        // 1. Check for Movement & Stale Queues
+        // Check for Movement & Stale Queues
         // If we have moved significantly, we must CANCEL the old stalled queue.
         // Otherwise, backpressure prevents us from ever calculating unloads for the new position.
         if (!m_isLODWorkerRunning) {
              float distSq = glm::dot(cameraPos - m_lastLODCalculationPos, cameraPos - m_lastLODCalculationPos);
              if (distSq > 64.0f) { 
                  
-                 // FIX: Force process unloads from the pending result before discarding it.
-                 // This ensures that even if we cancel the *loading* of new chunks due to movement,
-                 // we still clean up the old chunks that are out of range.
-                 ProcessUnloads();
-
-                 {
+                 // THRASHING FIX:
+                 // Only clear the queue if we moved a MASSIVE amount (teleport).
+                 // If we are just running/flying fast, we KEEP the old queue. 
+                 // Processing slightly stale chunks (from 10 meters ago) is better than processing nothing (thrashing).
+                 if (distSq > 10000.0f) { 
+                     ProcessUnloads(); // Ensure we unload before clearing
                      std::lock_guard<std::mutex> lock(m_lodResultMutex);
-                     m_pendingLODResult = nullptr; // Discard old loads, forcing a fresh calc next frame
+                     m_pendingLODResult = nullptr; 
                  }
                  
                  m_lastLODCalculationPos = cameraPos;
@@ -578,7 +580,9 @@ public:
                      m_activeWorkCount--; 
                  });
                  
-                 return; // Don't process the old queue this frame, we just killed it.
+                 // REMOVED RETURN:
+                 // We allow the function to fall through to "Normal Frame Processing".
+                 // This ensures we continue consuming the current queue (if it exists) while the worker prepares the next one.
              }
         }
 
