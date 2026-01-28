@@ -275,26 +275,26 @@ public:
             if (ImGui::CollapsingHeader("CPU Pipeline Pressure", ImGuiTreeNodeFlags_DefaultOpen)) {
                 float limit = (float)m_pipeline.voxelPoolLimit;
                 if (limit == 0) limit = 1.0f; // Prevent div/0
+                // Active Worker Threads (Combined Gen + Mesh)
+                ImGui::Text("Active Tasks: %zu", m_pipeline.activeThreads);
 
-                // 1. Pending Generation (LOD Requests)
+                // Pending Generation (LOD Requests)
                 ImGui::Text("Pending Gen (LODs): %zu", m_pipeline.pendingGen);
                 
-                // 2. Active Worker Threads (Combined Gen + Mesh)
-                ImGui::Text("Active Threads: %zu", m_pipeline.activeThreads);
 
-                // 3. Meshing Queue Pressure (Generated -> Waiting for Mesher)
+                // Meshing Queue Pressure (Generated -> Waiting for Mesher)
                 float meshPressure = (float)m_pipeline.waitingMesh / 1024.0f; // Soft limit 1024
                 ImGui::Text("Mesh Queue: %zu", m_pipeline.waitingMesh);
                 ImGui::ProgressBar(meshPressure, ImVec2(-1, 0), "");
 
-                // 4. Upload Queue Pressure (Meshed -> Waiting for GPU Upload)
+                // Upload Queue Pressure (Meshed -> Waiting for GPU Upload)
                 float uploadPressure = (float)m_pipeline.waitingUpload / 512.0f; // Soft limit 512
                 ImGui::Text("Upload Queue: %zu", m_pipeline.waitingUpload);
                 ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.9f, 0.4f, 0.4f, 1.0f)); // Reddish
                 ImGui::ProgressBar(uploadPressure, ImVec2(-1, 0), "");
                 ImGui::PopStyleColor();
 
-                // 5. Total Voxel Pool Usage (Safety Limit)
+                // Total Voxel Pool Usage (Safety Limit)
                 // We estimate 'in flight' as the sum of all queues + active threads
                 size_t totalInFlight = m_pipeline.waitingMesh + m_pipeline.waitingUpload + m_pipeline.activeThreads;
                 float poolPressure = (float)totalInFlight / limit;

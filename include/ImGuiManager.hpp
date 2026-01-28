@@ -29,7 +29,7 @@ struct UIConfig {
     bool showCullerControls = true;
 
     // --- Settings ---
-    bool vsync = true;
+    bool vsync = false;
     bool lockFrustum = false;
     float FPS_OVERLAY_FONT_SCALE = 1.35f;
     float DEBUG_FONT_SCALE = 1.4f;
@@ -265,7 +265,7 @@ private:
                             // OPTIMIZATION: Static const to prevent re-allocation every frame
                             static const std::vector<LODPreset> presets = {
                                 { 4, { 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0 } },                        // Low
-                                { 5, { 13, 13, 13, 13, 13, 0, 0, 0, 0, 0, 0, 0 } },                   // Standard
+                                { 5, { 31, 31, 23, 15, 7, 0, 0, 0 , 0, 0, 0, 0} },                   // Standard
                                 { 6, { 17, 17, 17, 17, 17, 11, 0, 0, 0, 0, 0, 0 } },                  // Medium
                                 { 7, { 21, 21, 21, 21, 21, 21, 21, 0, 0, 0, 0, 0 } },                 // High
                                 { 9, { 25, 23, 21, 21, 21, 21, 21, 21, 21, 0, 0, 0 } }                // Extreme
