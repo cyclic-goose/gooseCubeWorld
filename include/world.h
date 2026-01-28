@@ -394,7 +394,7 @@ public:
         }
     }
 
-    void Task_CalculateLODs(glm::vec3 cameraPos) {
+ void Task_CalculateLODs(glm::vec3 cameraPos) {
         if(m_shutdown) return;
         Engine::Profiler::ScopedTimer timer("[ASYNC] World::LOD Calc");
         auto result = std::make_unique<LODUpdateResult>();
@@ -417,6 +417,22 @@ public:
             if (dx > m_config->settings.lodRadius[lod] || dz > m_config->settings.lodRadius[lod]) {
                  if (IsParentReady(node->cx, node->cy, node->cz, lod)) {
                      shouldUnload = true;
+                 }
+                 // *** ORPHAN FIX: If parent is also out of range, force unload ***
+                 // Otherwise the child waits for a parent that will never be generated.
+                 else if (lod < m_config->settings.lodCount - 1) {
+                     int pLod = lod + 1;
+                     int pRadius = m_config->settings.lodRadius[pLod];
+                     int pScale = 1 << pLod;
+                     
+                     int pCamX = (int)floor(cameraPos.x / (CHUNK_SIZE * pScale));
+                     int pCamZ = (int)floor(cameraPos.z / (CHUNK_SIZE * pScale));
+                     int px = node->cx >> 1;
+                     int pz = node->cz >> 1;
+                     
+                     if (abs(px - pCamX) > pRadius || abs(pz - pCamZ) > pRadius) {
+                         shouldUnload = true;
+                     }
                  }
             }
             else if (lod > 0) {
@@ -512,28 +528,73 @@ public:
 
         void UpdateLODs_Async(glm::vec3 cameraPos) {
         
+        // Helper: Process unloads immediately.
+        // We define this here to reuse it in both the movement check and the normal update loop.
+        auto ProcessUnloads = [this]() {
+            std::lock_guard<std::mutex> lock(m_lodResultMutex);
+            if (m_pendingLODResult && !m_pendingLODResult->chunksToUnload.empty()) {
+                 std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
+                 for (int64_t key : m_pendingLODResult->chunksToUnload) {
+                    auto it = m_chunks.find(key);
+                    if (it != m_chunks.end()) {
+                        ChunkNode* node = it->second;
+                        // Always free GPU memory before returning node to pool
+                        if (node->gpuOffset != -1) {
+                            m_culler->RemoveChunk(node->id);
+                            m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
+                            node->gpuOffset = -1;
+                        }
+                        m_chunkPool.Release(node);
+                        m_chunks.erase(it);
+                    }
+                }
+                // Clear unloads so we don't process them twice
+                m_pendingLODResult->chunksToUnload.clear();
+            }
+        };
+
+        // 1. Check for Movement & Stale Queues
+        // If we have moved significantly, we must CANCEL the old stalled queue.
+        // Otherwise, backpressure prevents us from ever calculating unloads for the new position.
+        if (!m_isLODWorkerRunning) {
+             float distSq = glm::dot(cameraPos - m_lastLODCalculationPos, cameraPos - m_lastLODCalculationPos);
+             if (distSq > 64.0f) { 
+                 
+                 // FIX: Force process unloads from the pending result before discarding it.
+                 // This ensures that even if we cancel the *loading* of new chunks due to movement,
+                 // we still clean up the old chunks that are out of range.
+                 ProcessUnloads();
+
+                 {
+                     std::lock_guard<std::mutex> lock(m_lodResultMutex);
+                     m_pendingLODResult = nullptr; // Discard old loads, forcing a fresh calc next frame
+                 }
+                 
+                 m_lastLODCalculationPos = cameraPos;
+                 m_isLODWorkerRunning = true;
+                 m_activeWorkCount++;
+                 m_pool.enqueue([this, cameraPos](){ 
+                     this->Task_CalculateLODs(cameraPos); 
+                     m_activeWorkCount--; 
+                 });
+                 
+                 return; // Don't process the old queue this frame, we just killed it.
+             }
+        }
+
         {
             Engine::Profiler::ScopedTimer timer("World::ApplyLODs");
+            
+            // 2. Normal Frame Processing
+            // First, process any pending unloads (this is fast and frees up memory)
+            ProcessUnloads();
+
             std::lock_guard<std::mutex> lock(m_lodResultMutex);
             if (m_pendingLODResult) {
                 
                 std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
 
-                if (m_pendingLODResult->loadIndex == 0) {
-                    for (int64_t key : m_pendingLODResult->chunksToUnload) {
-                        auto it = m_chunks.find(key);
-                        if (it != m_chunks.end()) {
-                            ChunkNode* node = it->second;
-                            if (node->gpuOffset != -1) {
-                                m_culler->RemoveChunk(node->id);
-                                m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
-                                node->gpuOffset = -1;
-                            }
-                            m_chunkPool.Release(node);
-                            m_chunks.erase(it);
-                        }
-                    }
-                }
+                // No need to check chunksToUnload here, ProcessUnloads() handled it.
 
                 int queued = 0;
                 int MAX_PER_FRAME = 500; 
@@ -541,26 +602,25 @@ public:
                 size_t& idx = m_pendingLODResult->loadIndex;
                 const auto& loadList = m_pendingLODResult->chunksToLoad;
 
-                /////////////////// BACKPRESSURE THRESHOLD
-                
-                size_t limit = (size_t)((float)m_config->MAX_TRANSIENT_VOXEL_MESHES*0.9f);
+                // BACKPRESSURE THRESHOLD
+                // We keep a 10% safety buffer from the hard limit
+                size_t limit = (size_t)m_config->MAX_TRANSIENT_VOXEL_MESHES;
                 if (limit > 100) limit -= 100;
-                // CRITICAL BACKPRESSURE CHECK
-                // Check if the "Kitchen" (Queues + Workers) is full before taking more "Orders" (Chunks)
-                // If full, we break the loop and resume next frame.
-                // This prevents queueing 30,000 tasks that exhaust the voxel pool.
-                {
-                    std::lock_guard<std::mutex> qLock(m_queueMutex);
-                    size_t totalInFlight = m_generatedQueue.size() + m_meshedQueue.size() + m_activeWorkCount;
-                    if (totalInFlight >= limit) {
-                        // Pipeline full. Stop loading for this frame.
-                        return; 
-                    }
-                }
-                //////////////////////
 
                 while (idx < loadList.size() && queued < MAX_PER_FRAME) {
                     
+                    // CRITICAL BACKPRESSURE CHECK
+                    // Check if the "Kitchen" (Queues + Workers) is full before taking more "Orders" (Chunks)
+                    // If full, we break the loop and resume next frame.
+                    // This prevents queueing 30,000 tasks that exhaust the voxel pool.
+                    {
+                        std::lock_guard<std::mutex> qLock(m_queueMutex);
+                        size_t totalInFlight = m_generatedQueue.size() + m_meshedQueue.size() + m_activeWorkCount;
+                        if (totalInFlight >= limit) {
+                            // Pipeline full. Stop loading for this frame.
+                            break; 
+                        }
+                    }
 
                     const auto& req = loadList[idx];
                     idx++;
@@ -575,7 +635,7 @@ public:
                             
                             newNode->state = ChunkState::GENERATING;
                             
-                            // Increment worker count BEFORE enqueueing
+                            // FIX: Increment worker count BEFORE enqueueing
                             m_activeWorkCount++; 
                             m_pool.enqueue([this, newNode]() { 
                                 this->Task_Generate(newNode); 
@@ -589,19 +649,6 @@ public:
                 if (idx >= loadList.size()) {
                     m_pendingLODResult = nullptr;
                 }
-            }
-        }
-
-        if (!m_isLODWorkerRunning && !m_pendingLODResult) {
-            float distSq = glm::dot(cameraPos - m_lastLODCalculationPos, cameraPos - m_lastLODCalculationPos);
-            if (distSq > 64.0f) { 
-                m_lastLODCalculationPos = cameraPos;
-                m_isLODWorkerRunning = true;
-                m_activeWorkCount++; // add a worker count before each enqueue
-                m_pool.enqueue([this, cameraPos](){ 
-                    this->Task_CalculateLODs(cameraPos); 
-                    m_activeWorkCount--; // Decrement when done
-                });
             }
         }
     }
