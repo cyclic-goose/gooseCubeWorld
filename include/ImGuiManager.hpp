@@ -679,7 +679,9 @@ private:
             
             // grab all of the ImGui controls its that easy
             world.GetGenerator()->OnImGui();
-
+            if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
+                world.Reload(*config.editConfig);
+            }
 
 
             ImGui::End();

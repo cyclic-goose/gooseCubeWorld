@@ -13,7 +13,7 @@
 class SuperflatGenerator : public ITerrainGenerator {
 public:
     struct FlatSettings {
-        int groundLevel = 10;
+        int groundLevel = 1;
         int dirtLayerDepth = 3;
         bool bedrockFloor = true;
         
@@ -24,8 +24,9 @@ public:
         uint8_t bedrockId = 4;
         
         // TEST: Specific ID defined as 'Transparent' in mesher.h (usually 6 or 7)
-        uint8_t glassId = 4; 
+        uint8_t glassId = 6; 
         bool enableGlassLayer = true; 
+        int glassLayerHeight = 30;
     };
 
     SuperflatGenerator() = default;
@@ -35,14 +36,14 @@ public:
 
     int GetHeight(float x, float z) const override {
         // Return height of glass layer if enabled, otherwise ground
-        return m_settings.enableGlassLayer ? m_settings.groundLevel + 10 : m_settings.groundLevel;
+        return m_settings.enableGlassLayer ? m_settings.groundLevel + m_settings.glassLayerHeight : m_settings.groundLevel;
     }
 
     uint8_t GetBlock(float x, float y, float z, int heightAtXZ, int lodScale) const override {
         int iY = static_cast<int>(y);
 
         // TEST LAYER: Glass floating 2 blocks above ground
-        if (m_settings.enableGlassLayer && iY == m_settings.groundLevel + 10) {
+        if (m_settings.enableGlassLayer && iY == m_settings.glassLayerHeight) {
             return m_settings.glassId; 
         }
 
@@ -52,7 +53,7 @@ public:
         
         if (iY > m_settings.groundLevel - m_settings.dirtLayerDepth) return m_settings.dirtId;
         
-        if (m_settings.bedrockFloor && iY == 0) return m_settings.bedrockId;
+        //if (m_settings.bedrockFloor && iY == 0) return m_settings.bedrockId;
         
         return m_settings.stoneId;
     }
@@ -60,7 +61,7 @@ public:
     void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) override {
         // Adjust bounds to include the floating glass
         minH = m_settings.groundLevel;
-        maxH = m_settings.enableGlassLayer ? m_settings.groundLevel + 10 : m_settings.groundLevel;
+        maxH = m_settings.enableGlassLayer ? m_settings.groundLevel + m_settings.glassLayerHeight : m_settings.groundLevel;
     }
 
     std::vector<std::string> GetTexturePaths() const override {
@@ -79,6 +80,7 @@ public:
             bool changed = false;
             changed |= ImGui::SliderInt("Ground Level", &m_settings.groundLevel, 1, 250);
             changed |= ImGui::Checkbox("Enable Secondary Mesh", &m_settings.enableGlassLayer);
+            changed |= ImGui::SliderInt("Glass Level", &m_settings.glassLayerHeight, 1, 250);
             if (changed) m_dirty = true;
         }
     }
