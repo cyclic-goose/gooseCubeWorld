@@ -241,12 +241,12 @@ private:
                         
                         ImGui::SliderFloat("Walk Speed", &player.walkSpeed, 1.0f, 20.0f);
                         ImGui::SliderFloat("Run Speed (Shift)", &player.runSpeed, 5.0f, 100.0f);
-                        ImGui::SliderFloat("Fly Speed", &player.flySpeed, 5.0f, 100.0f);
+                        ImGui::SliderFloat("Fly Speed", &player.flySpeed, 5.0f, 200.0f);
                         
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Physics");
                         ImGui::Separator();
-                        ImGui::SliderFloat("Jump Force", &player.jumpForce, 1.0f, 30.0f);
+                        ImGui::SliderFloat("Jump Force", &player.jumpForce, 1.0f, 80.0f);
                         ImGui::SliderFloat("Gravity", &player.gravity, 0.0f, 50.0f);
 
                         ImGui::Spacing();

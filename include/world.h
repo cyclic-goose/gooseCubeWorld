@@ -298,6 +298,9 @@ public:
                 size_t opaqueIdx = (node->gpuOffsetOpaque != -1) ? (size_t)(node->gpuOffsetOpaque / sizeof(PackedVertex)) : 0;
                 size_t transIdx = (node->gpuOffsetTrans != -1) ? (size_t)(node->gpuOffsetTrans / sizeof(PackedVertex)) : 0;
 
+                // IMPORTANT: Use node->position or minAABB? 
+                // Since minAABB is no longer modified to be "tight", it equals node->position.
+                // This ensures the shader translates vertices from the chunk grid origin.
                 m_culler->AddOrUpdateChunk(node->id, node->minAABB, node->maxAABB, (float)node->scale, opaqueIdx, node->vertexCountOpaque, transIdx, node->vertexCountTrans);
 
                 node->cachedMeshOpaque.clear(); 
@@ -667,8 +670,15 @@ private:
         float outMinY, outMaxY;
         FillChunk(node, outMinY, outMaxY);
         
-        node->minAABB.y = outMinY;
-        node->maxAABB.y = outMaxY;
+        // FIX: DO NOT update minAABB.y with the tight fit (outMinY).
+        // The shader uses minAABB as the CHUNK ORIGIN to translate vertices.
+        // If we set minAABB.y to outMinY (which might be > 0 if the bottom of chunk is air),
+        // the shader will translate vertices upwards, doubling the offset.
+        // node->minAABB.y = outMinY; <--- REMOVED
+        
+        // Updating maxAABB is safe (usually used for culling only), but to be 100% safe against
+        // center-point calculation issues in culler, we leave it standard too.
+        // node->maxAABB.y = outMaxY; 
         
         std::lock_guard<std::mutex> lock(m_queueMutex);
         if (m_shutdown) return;

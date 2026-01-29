@@ -51,7 +51,6 @@ void main() {
 
     // 4. World Position Calculation
     // We access the vec4 directly using swizzles (.xyz, .w)
-    // FIX: Removed .minAABB_scale member access which doesn't exist on vec4
     vec4 chunkData = chunkPositions[gl_BaseInstance];
     
     vec3 chunkOffset = chunkData.xyz;

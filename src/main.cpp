@@ -276,8 +276,8 @@ int main() {
     // Ideally this should be encapsulated, but maintained here for existing logic.
     g_fbo.Resize(curScrWidth, curScrHeight);
 
-    player.camera.Yaw = -90.0f;
-    player.camera.Pitch = -45.0f;
+    player.camera.Yaw = 30.0f;
+    player.camera.Pitch = 5.0f;
     player.camera.updateCameraVectors();
     
     // World & Resources Scope
