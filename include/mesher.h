@@ -17,10 +17,94 @@ inline uint32_t ctz(uint64_t x) {
 #endif
 }
 
-//// BINARY GREEDY MESHER: thankg you google gemini I could NOT figure this out on my own
+// --- BLOCK TYPE HELPERS ---
+// Adjust these IDs based on your game's block dictionary
+inline bool IsTransparent(uint8_t id) {
+    return id == 6 || id == 7; // Example: 6=Water, 7=Glass
+}
 
-inline void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocator, bool debug = false) {
-    int quadCount = 0;
+inline bool IsOpaque(uint8_t id) {
+    return id != 0 && !IsTransparent(id);
+}
+
+//// BINARY GREEDY MESHER (Updated for Opaque/Trans Split)
+inline void MeshChunk(const Chunk& chunk, 
+                      LinearAllocator<PackedVertex>& allocatorOpaque, 
+                      LinearAllocator<PackedVertex>& allocatorTrans,
+                      bool debug = false) 
+{
+    // Helper to run the Greedy Quad merging algorithm on a prepared mask set
+    // UPDATED: Added 'face' to arguments
+    auto GreedyPass = [&](uint32_t* colMasks, LinearAllocator<PackedVertex>& targetAllocator, int face, int axis, int direction, int slice) {
+        for (int i = 0; i < 32; i++) {
+            uint32_t mask = colMasks[i];
+            while (mask != 0) {
+                int widthStart = ctz(mask); 
+                int widthEnd = widthStart;
+                while (widthEnd < 32 && (mask & (1u << widthEnd))) widthEnd++;
+                int width = widthEnd - widthStart;
+
+                uint32_t runMask;
+                if (width == 32) runMask = 0xFFFFFFFFu;
+                else runMask = ((1u << width) - 1u) << widthStart;
+
+                int height = 1;
+                for (int j = i + 1; j < 32; j++) {
+                    uint32_t nextRow = colMasks[j];
+                    // Strict Merge: Only merge if geometry identical. 
+                    // Note: This simple mesher merges based on geometry only. 
+                    // Texturing assumes the entire run uses the texture of the bottom-left block.
+                    if ((nextRow & runMask) == runMask) {
+                        height++;
+                        colMasks[j] &= ~runMask;
+                    } else {
+                        break;
+                    }
+                }
+                mask &= ~runMask;
+
+                int u = widthStart;
+                int v = i;
+                int w = width;
+                int h = height;
+
+                int bx, by, bz;
+                if (axis == 0)      { bx = slice; by = u + 1; bz = v + 1; }
+                else if (axis == 1) { bx = v + 1; by = slice; bz = u + 1; }
+                else                { bx = u + 1; by = v + 1; bz = slice; }
+                
+                uint32_t texID = chunk.Get(bx, by, bz);
+
+                auto PushVert = [&](int du, int dv) {
+                    float vx, vy, vz;
+                    int r_row = v + dv; 
+                    int r_col = u + du; 
+                    
+                    if (axis == 0)      { vx = slice; vy = r_col + 1; vz = r_row + 1; }
+                    else if (axis == 1) { vx = r_row + 1; vy = slice; vz = r_col + 1; }
+                    else                { vx = r_col + 1; vy = r_row + 1; vz = slice; }
+                    
+                    vx -= 1; vy -= 1; vz -= 1; 
+
+                    if (direction == 1) {
+                        if (axis == 0) vx += 1.0f;
+                        if (axis == 1) vy += 1.0f;
+                        if (axis == 2) vz += 1.0f;
+                    }
+
+                    targetAllocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f, texID));
+                };
+
+                if (direction == 1) {
+                    PushVert(0, 0); PushVert(w, 0); PushVert(w, h);
+                    PushVert(0, 0); PushVert(w, h); PushVert(0, h);
+                } else {
+                    PushVert(0, 0); PushVert(w, h); PushVert(w, 0);
+                    PushVert(0, 0); PushVert(0, h); PushVert(w, h);
+                }
+            }
+        }
+    };
 
     for (int face = 0; face < 6; face++) {
         int axis = face / 2;
@@ -28,123 +112,56 @@ inline void MeshChunk(const Chunk& chunk, LinearAllocator<PackedVertex>& allocat
 
         for (int slice = 1; slice <= CHUNK_SIZE; slice++) {
             
-            uint32_t colMasks[32]; 
+            uint32_t colMasksOpaque[32]; 
+            uint32_t colMasksTrans[32];
 
+            // 1. Generate Masks
             for (int row = 0; row < 32; row++) {
-                // AVX2 OPTIMIZATION (Axis 0 Only)
-                if (axis == 0) { 
-                    const int P = CHUNK_SIZE_PADDED;
-                    const int P2 = P * P;
-
-                    int c_idx = slice * P2 + (row + 1) * P + 1;
-                    int n_idx = (slice + direction) * P2 + (row + 1) * P + 1;
+                uint32_t maskOp = 0;
+                uint32_t maskTr = 0;
+                
+                // Note: Reverted to scalar for clarity and correctness with dual-material logic.
+                // AVX can be reintroduced if strict Block ID layout is known.
+                for (int col = 0; col < 32; col++) {
+                    int x, y, z;
+                    if (axis == 1) { x = row + 1; y = slice; z = col + 1; }
+                    else           { x = col + 1; y = row + 1; z = slice; }
                     
-                    const uint8_t* pCurrentRow = &chunk.voxels[c_idx];
-                    const uint8_t* pNeighborRow = &chunk.voxels[n_idx];
+                    // Current Block
+                    uint8_t current = chunk.Get(x, y, z);
+                    if (current == 0) continue; // Optimization: Skip if air
 
-                    __m256i vCurrent = _mm256_loadu_si256((const __m256i*)pCurrentRow);
-                    __m256i vNeighbor = _mm256_loadu_si256((const __m256i*)pNeighborRow);
-                    
-                    __m256i vZero = _mm256_setzero_si256();
-                    __m256i vCurrIsZero = _mm256_cmpeq_epi8(vCurrent, vZero);
-                    __m256i vNeighIsZero = _mm256_cmpeq_epi8(vNeighbor, vZero);
-                    
-                    __m256i vResult = _mm256_andnot_si256(vCurrIsZero, vNeighIsZero);
-                    colMasks[row] = (uint32_t)_mm256_movemask_epi8(vResult);
-                } 
-                else {
-                    // OPTIMIZED SCALAR FALLBACK
-                    uint32_t mask = 0;
-                    
-                    // Precompute pointers for speed if possible, or just raw access
-                    // Axis 1: y=slice. x=row+1. z=col+1.
-                    // Axis 2: z=slice. y=row+1. x=col+1.
-                    
-                    for (int col = 0; col < 32; col++) {
-                        int x, y, z;
-                        if (axis == 1) { x = row + 1; y = slice; z = col + 1; }
-                        else           { x = col + 1; y = row + 1; z = slice; }
-                        
-                        // Raw access is safe here because loops are strictly 0..31 and Padded size is 34.
-                        // However, chunk.Get() is inlined and simple. 
-                        // To be safer, we stick to Get() but rely on compiler inlining.
-                        
-                        uint8_t current = chunk.Get(x, y, z);
-                        uint8_t neighbor = chunk.Get(x + (axis == 0 ? direction : 0), 
-                                                     y + (axis == 1 ? direction : 0), 
-                                                     z + (axis == 2 ? direction : 0));
-                        if (current != 0 && neighbor == 0) mask |= (1u << col);
-                    }
-                    colMasks[row] = mask;
-                }
-            }
+                    // Neighbor Block
+                    uint8_t neighbor = chunk.Get(x + (axis == 0 ? direction : 0), 
+                                                 y + (axis == 1 ? direction : 0), 
+                                                 z + (axis == 2 ? direction : 0));
 
-            for (int i = 0; i < 32; i++) {
-                uint32_t mask = colMasks[i];
-                while (mask != 0) {
-                    int widthStart = ctz(mask); 
-                    int widthEnd = widthStart;
-                    while (widthEnd < 32 && (mask & (1u << widthEnd))) widthEnd++;
-                    int width = widthEnd - widthStart;
+                    // LOGIC:
+                    // 1. Opaque draws if Neighbor is Air OR Transparent (Under-water dirt visible)
+                    // 2. Transparent draws if Neighbor is Air (Water-against-water is culled)
 
-                    uint32_t runMask;
-                    if (width == 32) runMask = 0xFFFFFFFFu;
-                    else runMask = ((1u << width) - 1u) << widthStart;
-
-                    int height = 1;
-                    for (int j = i + 1; j < 32; j++) {
-                        uint32_t nextRow = colMasks[j];
-                        if ((nextRow & runMask) == runMask) {
-                            height++;
-                            colMasks[j] &= ~runMask;
-                        } else {
-                            break;
+                    if (IsOpaque(current)) {
+                        if (neighbor == 0 || IsTransparent(neighbor)) {
+                            maskOp |= (1u << col);
+                        }
+                    } 
+                    else if (IsTransparent(current)) {
+                        if (neighbor == 0) {
+                            maskTr |= (1u << col);
                         }
                     }
-                    mask &= ~runMask;
-
-                    int u = widthStart;
-                    int v = i;
-                    int w = width;
-                    int h = height;
-                    quadCount++;
-
-                    int bx, by, bz;
-                    if (axis == 0)      { bx = slice; by = u + 1; bz = v + 1; }
-                    else if (axis == 1) { bx = v + 1; by = slice; bz = u + 1; }
-                    else                { bx = u + 1; by = v + 1; bz = slice; }
-                    
-                    uint32_t texID = chunk.Get(bx, by, bz);
-
-                    auto PushVert = [&](int du, int dv) {
-                        float vx, vy, vz;
-                        int r_row = v + dv; 
-                        int r_col = u + du; 
-                        
-                        if (axis == 0)      { vx = slice; vy = r_col + 1; vz = r_row + 1; }
-                        else if (axis == 1) { vx = r_row + 1; vy = slice; vz = r_col + 1; }
-                        else                { vx = r_col + 1; vy = r_row + 1; vz = slice; }
-                        
-                        vx -= 1; vy -= 1; vz -= 1; 
-
-                        if (direction == 1) {
-                            if (axis == 0) vx += 1.0f;
-                            if (axis == 1) vy += 1.0f;
-                            if (axis == 2) vz += 1.0f;
-                        }
-
-                        allocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f, texID));
-                    };
-
-                    if (direction == 1) {
-                        PushVert(0, 0); PushVert(w, 0); PushVert(w, h);
-                        PushVert(0, 0); PushVert(w, h); PushVert(0, h);
-                    } else {
-                        PushVert(0, 0); PushVert(w, h); PushVert(w, 0);
-                        PushVert(0, 0); PushVert(0, h); PushVert(w, h);
-                    }
                 }
+                colMasksOpaque[row] = maskOp;
+                colMasksTrans[row]  = maskTr;
             }
+
+            // 2. Run Greedy Pass for Opaque
+            // UPDATED: Passing 'face' argument
+            GreedyPass(colMasksOpaque, allocatorOpaque, face, axis, direction, slice);
+            
+            // 3. Run Greedy Pass for Transparent
+            // UPDATED: Passing 'face' argument
+            GreedyPass(colMasksTrans, allocatorTrans, face, axis, direction, slice);
         }
     }
 }

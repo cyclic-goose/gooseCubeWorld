@@ -53,11 +53,18 @@ struct ChunkNode {
     int lod;      
     int scale;    
     
-    std::vector<PackedVertex> cachedMesh; // these are the magic supercompact meshes (post greedy meshing) that are sent to the gpu
+    // these are the magic supercompact meshes (post greedy meshing) that are sent to the gpu
+    std::vector<PackedVertex> cachedMeshOpaque; 
+    std::vector<PackedVertex> cachedMeshTrans;
+    //std::vector<PackedVertex> cachedMesh; 
     std::atomic<ChunkState> state{ChunkState::MISSING};
     
-    long long gpuOffset = -1; 
-    size_t vertexCount = 0;
+    long long gpuOffsetOpaque = -1; // where in gpu to place the data above
+    long long gpuOffsetTrans = -1;
+
+
+    size_t vertexCountOpaque = 0;
+    size_t vertexCountTrans = 0;
     int64_t id; 
 
     // Bounding Box (Tight fit to geometry)
@@ -88,11 +95,13 @@ struct ChunkNode {
         //chunk.worldZ = (int)position.z;
         
         state = ChunkState::MISSING;
-        cachedMesh.clear();
-        //chunk.isUniform = false;
-        isUniform = false;
-        gpuOffset = -1;
-        vertexCount = 0;
+        // Reset Vectors and Offsets
+        cachedMeshOpaque.clear();
+        cachedMeshTrans.clear();
+        gpuOffsetOpaque = -1;
+        gpuOffsetTrans = -1;
+        vertexCountOpaque = 0;
+        vertexCountTrans = 0;
     }
 };
 
@@ -352,39 +361,57 @@ public:
 
             if (node->state == ChunkState::MESHING) {
                 // only upload if we actually generated vertices (in normal ram right now)
-                if (!node->cachedMesh.empty()) {
-                    size_t bytes = node->cachedMesh.size() * sizeof(PackedVertex);
+                
+                // --- 1. Upload Opaque Mesh ---
+                if (!node->cachedMeshOpaque.empty()) {
+                    size_t bytes = node->cachedMeshOpaque.size() * sizeof(PackedVertex);
                     long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
-                    //long long offset = m_gpuMemory->Allocate(bytes, 256); // FORCE 256 BYTE CACHE LINE ALIGNMENT
                     
                     if (offset != -1) {
-                        m_gpuMemory->Upload(offset, node->cachedMesh.data(), bytes);
-                        node->gpuOffset = offset;
-                        node->vertexCount = node->cachedMesh.size();
-
-                        // clear cpu side cache to save ram
-                        // note this is clearing the nodes cached mesh (who, when, where) but not the m_voxelPool data (the what)
-                        node->cachedMesh.clear(); 
-                        node->cachedMesh.shrink_to_fit();
-                        
-                        // pass bounding box to culler
-                        m_culler->AddOrUpdateChunk(
-                            node->id, 
-                            node->minAABB,
-                            node->maxAABB,
-                            (float)node->scale, 
-                            (size_t)(offset / sizeof(PackedVertex)), 
-                            node->vertexCount
-                        );
-
-                    } 
+                        m_gpuMemory->Upload(offset, node->cachedMeshOpaque.data(), bytes);
+                        node->gpuOffsetOpaque = offset;
+                        node->vertexCountOpaque = node->cachedMeshOpaque.size();
+                    }
                 }
 
-                // can release chunk from ram once its uploaded to VRAM
-                // if !nullptr
-                // THIS is clearing the voxel data from memory
-                if (node->chunk)
-                {
+                // --- 2. Upload Transparent Mesh ---
+                if (!node->cachedMeshTrans.empty()) {
+                    size_t bytes = node->cachedMeshTrans.size() * sizeof(PackedVertex);
+                    long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
+                    
+                    if (offset != -1) {
+                        m_gpuMemory->Upload(offset, node->cachedMeshTrans.data(), bytes);
+                        node->gpuOffsetTrans = offset;
+                        node->vertexCountTrans = node->cachedMeshTrans.size();
+                    }
+                }
+
+                // --- 3. Pass BOTH Offsets to Culler ---
+                // Even if count is 0, we update the culler.
+                // Note: Divide offset by sizeof(PackedVertex) to get vertex index
+                
+                size_t opaqueIdx = (node->gpuOffsetOpaque != -1) ? (size_t)(node->gpuOffsetOpaque / sizeof(PackedVertex)) : 0;
+                size_t transIdx = (node->gpuOffsetTrans != -1) ? (size_t)(node->gpuOffsetTrans / sizeof(PackedVertex)) : 0;
+
+                m_culler->AddOrUpdateChunk(
+                    node->id, 
+                    node->minAABB,
+                    node->maxAABB,
+                    (float)node->scale, 
+                    opaqueIdx, 
+                    node->vertexCountOpaque,
+                    transIdx, 
+                    node->vertexCountTrans
+                );
+
+                // --- 4. Cleanup RAM ---
+                node->cachedMeshOpaque.clear(); 
+                node->cachedMeshOpaque.shrink_to_fit();
+                node->cachedMeshTrans.clear(); 
+                node->cachedMeshTrans.shrink_to_fit();
+
+                // Release Chunk Voxel Data
+                if (node->chunk) {
                     m_voxelPool.Release(node->chunk);
                     node->chunk = nullptr;
                 } 
@@ -541,11 +568,18 @@ public:
                     if (it != m_chunks.end()) {
                         ChunkNode* node = it->second;
                         // Always free GPU memory before returning node to pool
-                        if (node->gpuOffset != -1) {
-                            m_culler->RemoveChunk(node->id);
-                            m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
-                            node->gpuOffset = -1;
+                        
+                        // --- UPDATED: Free Both Opaque and Trans Memory ---
+                        m_culler->RemoveChunk(node->id);
+                        if (node->gpuOffsetOpaque != -1) {
+                            m_gpuMemory->Free(node->gpuOffsetOpaque, node->vertexCountOpaque * sizeof(PackedVertex));
+                            node->gpuOffsetOpaque = -1;
                         }
+                        if (node->gpuOffsetTrans != -1) {
+                            m_gpuMemory->Free(node->gpuOffsetTrans, node->vertexCountTrans * sizeof(PackedVertex));
+                            node->gpuOffsetTrans = -1;
+                        }
+
                         m_chunkPool.Release(node);
                         m_chunks.erase(it);
                     }
@@ -663,27 +697,26 @@ public:
     void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix,const glm::mat4& previousViewMatrix, const glm::mat4& proj, const int CUR_SCR_WIDTH, const int CUR_SCR_HEIGHT, Shader* depthDebugShader, bool depthDebug, bool frustumLock) {
         if(m_shutdown) return;
 
-
-        // ************************** FRUSTUM AND OCCLUSION CULL (CALLS CULL_COMPUTE) *********************** //
+        // ************************** FRUSTUM AND OCCLUSION CULL *********************** //
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
             m_culler->Cull(cullViewMatrix, previousViewMatrix, proj, g_fbo.hiZTex);
             Engine::Profiler::Get().EndGPU();
         }
-        // ************************** FRUSTUM AND OCCLUSION CULL (CALLS CULL_COMPUTE) *********************** //
 
-
-
-
-
-        {   // ************************** DRAW CALL (ACTUAL CALL INSIDE GPU_CULLER) *********************** //
+        // ************************** DRAW CALLS *********************** //
+        {   
             Engine::Profiler::Get().BeginGPU("GPU: MDI DRAW"); 
 
             shader.use();
             glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
             glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config->settings.cubeDebugMode);
             
+            // Layout 0: Vertex Data (Shared)
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
+
+            // Layout 1: Chunk Transforms (Shared)
+            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_culler->GetVisibleChunkBuffer());
 
             if (m_textureArrayID != 0) {
                  glActiveTexture(GL_TEXTURE0);
@@ -691,22 +724,40 @@ public:
                  shader.setInt("u_Textures", 0);
             }
 
+            // --- PASS 1: OPAQUE & FOLIAGE ---
             glEnable(GL_POLYGON_OFFSET_FILL);
             glPolygonOffset(1.0f, 1.0f);
+            
+            glDisable(GL_BLEND);
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(GL_TRUE); // Write Depth
 
-            m_culler->DrawIndirect(m_dummyVAO); 
+            // Bind Indirect Buffer 1 (Opaque)
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_culler->GetIndirectOpaque());
+            glBindBuffer(GL_PARAMETER_BUFFER, m_culler->GetAtomicCounter());
+            
+            glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_culler->GetMaxChunks(), 0);
+
+            // --- PASS 2: TRANSPARENT (Water/Glass) ---
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDepthMask(GL_FALSE); // Read-Only Depth for Transparency
+
+            // Bind Indirect Buffer 2 (Transparent)
+            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_culler->GetIndirectTrans());
+            // Parameter buffer is the same (shared count)
+            // VisibleChunkBuffer is the same (shared transforms)
+            
+            glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_culler->GetMaxChunks(), 0);
+
+            // Restore State
+            glDepthMask(GL_TRUE);
+            glDisable(GL_BLEND);
             glDisable(GL_POLYGON_OFFSET_FILL);
 
             Engine::Profiler::Get().EndGPU();
-            // ************************** DRAW CALL (ACTUAL CALL INSIDE GPU_CULLER) *********************** //
-
-
-
-
             
-
-
-            // ************************** Hiearchical Z Buffer (OCCLUSION CULL DEPTH BUFFER AND MIPMAPS, CALLS HI_Z_DOWN.glsl) *********************** //
+            // ************************** Hiearchical Z Buffer (OCCLUSION CULL) *********************** //
              Engine::Profiler::Get().BeginGPU("GPU: Occlusion Cull COMPUTE"); 
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -715,32 +766,19 @@ public:
                             g_fbo.hiZTex, GL_TEXTURE_2D, 0, 0, 0, 0,
                             CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 1);
             
-            // Barrier: Ensure copy finishes before Compute Shader reads it
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
-
-            // Step B: Downsample the rest of the pyramid
             GetCuller()->GenerateHiZ(g_fbo.hiZTex, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
                             
-
-
-            if (!depthDebug)
-            {
-                // Draw normal rendered view to screen quad
+            if (!depthDebug) {
                 glBlitNamedFramebuffer(g_fbo.fbo, 0, 
                     0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
                     0, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT, 
                     GL_COLOR_BUFFER_BIT, GL_NEAREST);
-                
             } else {
-                // render depth view instead 
                 RenderHiZDebug(depthDebugShader, g_fbo.hiZTex, 0, CUR_SCR_WIDTH, CUR_SCR_HEIGHT);
             }
 
             Engine::Profiler::Get().EndGPU();
-
-            // ************************** Hiearchical Z Buffer (OCCLUSION CULL DEPTH BUFFER AND MIPMAPS, CALLS HI_Z_DOWN.glsl) *********************** //
-
-
         }
     }
 
@@ -786,11 +824,18 @@ public:
             std::unique_lock<std::shared_mutex> lock(m_chunksMutex);
             for (auto& pair : m_chunks) {
                 ChunkNode* node = pair.second;
-                if (node->gpuOffset != -1) {
-                    m_culler->RemoveChunk(node->id); 
-                    m_gpuMemory->Free(node->gpuOffset, node->vertexCount * sizeof(PackedVertex));
-                    node->gpuOffset = -1;
+                m_culler->RemoveChunk(node->id); 
+                
+                // --- UPDATED: Free both buffers ---
+                if (node->gpuOffsetOpaque != -1) {
+                    m_gpuMemory->Free(node->gpuOffsetOpaque, node->vertexCountOpaque * sizeof(PackedVertex));
+                    node->gpuOffsetOpaque = -1;
                 }
+                if (node->gpuOffsetTrans != -1) {
+                    m_gpuMemory->Free(node->gpuOffsetTrans, node->vertexCountTrans * sizeof(PackedVertex));
+                    node->gpuOffsetTrans = -1;
+                }
+
                 m_chunkPool.Release(node);
             }
             m_chunks.clear();
@@ -823,11 +868,17 @@ private:
     void Task_Mesh(ChunkNode* node) {
         if (m_shutdown) return;
         Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Mesh"); 
-
-        LinearAllocator<PackedVertex> threadAllocator(1000000); 
-        MeshChunk(*node->chunk, threadAllocator, false);
         
-        node->cachedMesh.assign(threadAllocator.Data(), threadAllocator.Data() + threadAllocator.Count());
+        // --- UPDATED: Use Two Allocators ---
+        LinearAllocator<PackedVertex> opaqueAllocator(100000); 
+        LinearAllocator<PackedVertex> transAllocator(50000); 
+
+        // Assumption: You must update `MeshChunk` to accept two allocators!
+        MeshChunk(*node->chunk, opaqueAllocator, transAllocator, false);
+        
+        // --- UPDATED: Store data in split vectors ---
+        node->cachedMeshOpaque.assign(opaqueAllocator.Data(), opaqueAllocator.Data() + opaqueAllocator.Count());
+        node->cachedMeshTrans.assign(transAllocator.Data(), transAllocator.Data() + transAllocator.Count());
         
         std::lock_guard<std::mutex> lock(m_queueMutex);
         if (m_shutdown) return;

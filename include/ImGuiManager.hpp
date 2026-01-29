@@ -643,7 +643,7 @@ private:
             for (const auto& pair : world.m_chunks) {
                 if (pair.second->state == ChunkState::ACTIVE) {
                     activeChunks++;
-                    totalVertices += pair.second->vertexCount;
+                    totalVertices += pair.second->vertexCountOpaque;
                 }
             }
             

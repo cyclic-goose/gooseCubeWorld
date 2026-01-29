@@ -25,7 +25,8 @@
 #include "splash_screen.hpp"
 #include "texture_manager.h"
 #include "input_manager.h"
-#include "terrain_superflat.h"
+//#include "terrain_superflat.h"
+#include "terrain_superflat_withGlass.h"
 #include "engine_config.h"
 #include "playerController.h"
 
@@ -300,7 +301,7 @@ int main() {
 
 
         // create our terrain generation by choosing which class we send in
-        auto defaultTerrainGenerator = std::make_unique<StandardGenerator>(1337); // seed input
+        auto defaultTerrainGenerator = std::make_unique<SuperflatGenerator>(); // seed input
         // Ask the generator what textures it needs
         std::vector<std::string> texturePaths = defaultTerrainGenerator->GetTexturePaths();
         // Load them into GPU
