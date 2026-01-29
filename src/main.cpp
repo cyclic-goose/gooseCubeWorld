@@ -374,12 +374,21 @@ int main() {
             
 
             // Render Prep
+            
+            // Clear Screen (Framebuffer 0) to Debug Magenta
+            // If you see this color, the Blit from FBO to Screen failed.
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, curScrWidth, curScrHeight);
+            glClearColor(1.0f, 0.0f, 1.0f, 1.0f); 
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            // Clear FBO (Game View)
             glBindFramebuffer(GL_FRAMEBUFFER, g_fbo.fbo);
             glViewport(0, 0, curScrWidth, curScrHeight);
-            glDisable(GL_SCISSOR_TEST); // Fix for ImGui scissor issues
+            glDisable(GL_SCISSOR_TEST); 
             
             glClearColor(0.53f, 0.81f, 0.91f, 1.0f); 
-            glClearDepth(0.0f); // Reverse-Z
+            glClearDepth(0.000000000f); // Reverse-Z
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 

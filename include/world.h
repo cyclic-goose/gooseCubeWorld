@@ -725,10 +725,12 @@ public:
             }
 
             // --- PASS 1: OPAQUE & FOLIAGE ---
+            glBindVertexArray(m_dummyVAO); // bind the ghad damn dummy buffer wow it took me hours to debug this
+
             glEnable(GL_POLYGON_OFFSET_FILL);
             glPolygonOffset(1.0f, 1.0f);
             
-            glDisable(GL_BLEND);
+            //glDisable(GL_BLEND);
             glEnable(GL_DEPTH_TEST);
             glDepthMask(GL_TRUE); // Write Depth
 

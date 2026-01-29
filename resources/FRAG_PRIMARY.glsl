@@ -21,7 +21,7 @@ vec3 GetFallbackColor(int id) {
         case 3: return vec3(0.6, 0.6, 0.6); // Stone
         case 4: return vec3(0.95, 0.95, 0.95); // Snow
         case 5: return vec3(0.8, 0.7, 0.5); // Sand
-        default: return vec3(1.0, 0.0, 1.0); // Magenta
+        default: return vec3(1.0, 0.2, 1.0); // Magenta
     }
 }
 

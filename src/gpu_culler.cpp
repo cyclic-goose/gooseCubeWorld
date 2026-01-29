@@ -142,16 +142,7 @@ void GpuCuller::RemoveChunk(int64_t chunkID) {
     m_freeSlots.push(slot);
 
     // Zero out the vertex count on GPU so the compute shader ignores this slot immediately
-    // We only need to zero one count (e.g. Opaque) if the shader checks "total count", 
-    // but safer to zero the structure or specific fields.
-    // Assuming shader checks "vertexCountOpaque" or "vertexCountTrans", let's zero the whole struct 
-    // or just valid flags. Here we zero counts.
-    
     ChunkGpuData zeroData = {}; 
-    // Writing just zero counts is sufficient if Compute shader checks them.
-    // But DSA allows writing smaller chunks. Let's just zero opaque count which is usually primary check.
-    // Actually, let's just write a clean struct with 0 counts to be safe.
-    
     glNamedBufferSubData(m_globalChunkBuffer, slot * sizeof(ChunkGpuData), sizeof(ChunkGpuData), &zeroData);
 }
 
@@ -233,7 +224,13 @@ void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, c
     m_cullShader->setFloat("u_zFar", m_settings.zFar);
     
     // Occlusion Settings
-    bool occlusionActive = m_settings.occlusionEnabled && depthTexture != 0 && m_depthPyramidWidth > 0;
+    // CRITICAL FIX: Only enable occlusion if we actually drew something previously!
+    // If m_drawnCount == 0, the depth buffer is likely empty/clear. 
+    // If the shader compares against "Clear Depth" (Wall), it will cull everything forever.
+    bool occlusionActive = m_settings.occlusionEnabled && 
+                           depthTexture != 0 && 
+                           m_depthPyramidWidth > 0 &&
+                           m_drawnCount > 0; // <--- SELF HEALING CHECK
 
     if (occlusionActive) {
         glActiveTexture(GL_TEXTURE0);
@@ -253,7 +250,7 @@ void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, c
     // Output Buffers (Bindings must match CULL_COMPUTE.glsl)
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_indirectBufferOpaque);      
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_visibleChunkBuffer);  
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_indirectBufferTrans); // NEW Binding for Transparent cmds
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_indirectBufferTrans); 
 
     glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, 0, m_atomicCounterBuffer); // Binding 0: Counter
 

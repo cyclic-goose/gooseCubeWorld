@@ -24,7 +24,7 @@ public:
         uint8_t bedrockId = 4;
         
         // TEST: Specific ID defined as 'Transparent' in mesher.h (usually 6 or 7)
-        uint8_t glassId = 7; 
+        uint8_t glassId = 4; 
         bool enableGlassLayer = true; 
     };
 
@@ -35,14 +35,14 @@ public:
 
     int GetHeight(float x, float z) const override {
         // Return height of glass layer if enabled, otherwise ground
-        return m_settings.enableGlassLayer ? m_settings.groundLevel + 2 : m_settings.groundLevel;
+        return m_settings.enableGlassLayer ? m_settings.groundLevel + 10 : m_settings.groundLevel;
     }
 
     uint8_t GetBlock(float x, float y, float z, int heightAtXZ, int lodScale) const override {
         int iY = static_cast<int>(y);
 
         // TEST LAYER: Glass floating 2 blocks above ground
-        if (m_settings.enableGlassLayer && iY == m_settings.groundLevel + 2) {
+        if (m_settings.enableGlassLayer && iY == m_settings.groundLevel + 10) {
             return m_settings.glassId; 
         }
 
@@ -60,7 +60,7 @@ public:
     void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) override {
         // Adjust bounds to include the floating glass
         minH = m_settings.groundLevel;
-        maxH = m_settings.enableGlassLayer ? m_settings.groundLevel + 2 : m_settings.groundLevel;
+        maxH = m_settings.enableGlassLayer ? m_settings.groundLevel + 10 : m_settings.groundLevel;
     }
 
     std::vector<std::string> GetTexturePaths() const override {
@@ -78,7 +78,7 @@ public:
         if (ImGui::CollapsingHeader("Superflat Settings", ImGuiTreeNodeFlags_DefaultOpen)) {
             bool changed = false;
             changed |= ImGui::SliderInt("Ground Level", &m_settings.groundLevel, 1, 250);
-            changed |= ImGui::Checkbox("Enable Glass Layer", &m_settings.enableGlassLayer);
+            changed |= ImGui::Checkbox("Enable Secondary Mesh", &m_settings.enableGlassLayer);
             if (changed) m_dirty = true;
         }
     }
