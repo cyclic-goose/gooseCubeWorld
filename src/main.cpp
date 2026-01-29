@@ -301,7 +301,7 @@ int main() {
 
 
         // create our terrain generation by choosing which class we send in
-        auto defaultTerrainGenerator = std::make_unique<StandardGenerator>(); // seed input
+        auto defaultTerrainGenerator = std::make_unique<StandardGenerator>(1337); // seed input
         // Ask the generator what textures it needs
         std::vector<std::string> texturePaths = defaultTerrainGenerator->GetTexturePaths();
         // Load them into GPU

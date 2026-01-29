@@ -18,23 +18,20 @@ inline uint32_t ctz(uint64_t x) {
 }
 
 // --- BLOCK TYPE HELPERS ---
-// Adjust these IDs based on your game's block dictionary
 inline bool IsTransparent(uint8_t id) {
-    return id == 6 || id == 7; // Example: 6=Water, 7=Glass
+    return id == 6 || id == 7; // Water/Glass
 }
 
 inline bool IsOpaque(uint8_t id) {
     return id != 0 && !IsTransparent(id);
 }
 
-//// BINARY GREEDY MESHER (Updated for Opaque/Trans Split)
+//// BINARY GREEDY MESHER
 inline void MeshChunk(const Chunk& chunk, 
                       LinearAllocator<PackedVertex>& allocatorOpaque, 
                       LinearAllocator<PackedVertex>& allocatorTrans,
                       bool debug = false) 
 {
-    // Helper to run the Greedy Quad merging algorithm on a prepared mask set
-    // UPDATED: Added 'face' to arguments
     auto GreedyPass = [&](uint32_t* colMasks, LinearAllocator<PackedVertex>& targetAllocator, int face, int axis, int direction, int slice) {
         for (int i = 0; i < 32; i++) {
             uint32_t mask = colMasks[i];
@@ -51,9 +48,6 @@ inline void MeshChunk(const Chunk& chunk,
                 int height = 1;
                 for (int j = i + 1; j < 32; j++) {
                     uint32_t nextRow = colMasks[j];
-                    // Strict Merge: Only merge if geometry identical. 
-                    // Note: This simple mesher merges based on geometry only. 
-                    // Texturing assumes the entire run uses the texture of the bottom-left block.
                     if ((nextRow & runMask) == runMask) {
                         height++;
                         colMasks[j] &= ~runMask;
@@ -63,23 +57,35 @@ inline void MeshChunk(const Chunk& chunk,
                 }
                 mask &= ~runMask;
 
-                int u = widthStart;
-                int v = i;
+                int u = widthStart; // Inner Loop (Mask Bits)
+                int v = i;          // Outer Loop (Rows)
                 int w = width;
                 int h = height;
 
-                int bx, by, bz;
-                if (axis == 0)      { bx = slice; by = u + 1; bz = v + 1; }
-                else if (axis == 1) { bx = v + 1; by = slice; bz = u + 1; }
-                else                { bx = u + 1; by = v + 1; bz = slice; }
+                // --- QUAD VERTEX GENERATION ---
+                // Config: Side faces (Axis 0) merge Vertically (Col=Y).
+                // Config: Top/Bottom (Axis 1) merge Horizontally (Col=Z).
+                // Config: Front/Back (Axis 2) merge Horizontally (Col=X).
+
+                int bx, by, bz; 
+                
+                // MAPPING (Corrected for Cyclic Order to fix Winding on Axis 2):
+                // Axis 0 (X-Face): Y=Col(u), Z=Row(v).
+                // Axis 1 (Y-Face): Z=Col(u), X=Row(v). 
+                // Axis 2 (Z-Face): X=Col(u), Y=Row(v). 
+
+                if (axis == 0)      { bx = slice; by = u + 1; bz = v + 1; } 
+                else if (axis == 1) { bx = v + 1; by = slice; bz = u + 1; } 
+                else                { bx = u + 1; by = v + 1; bz = slice; } 
                 
                 uint32_t texID = chunk.Get(bx, by, bz);
 
                 auto PushVert = [&](int du, int dv) {
                     float vx, vy, vz;
-                    int r_row = v + dv; 
-                    int r_col = u + du; 
+                    int r_row = v + dv; // Outer
+                    int r_col = u + du; // Inner
                     
+                    // REVERSE MAPPING (Must match block lookup above)
                     if (axis == 0)      { vx = slice; vy = r_col + 1; vz = r_row + 1; }
                     else if (axis == 1) { vx = r_row + 1; vy = slice; vz = r_col + 1; }
                     else                { vx = r_col + 1; vy = r_row + 1; vz = slice; }
@@ -95,6 +101,7 @@ inline void MeshChunk(const Chunk& chunk,
                     targetAllocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f, texID));
                 };
 
+                // Standard Winding
                 if (direction == 1) {
                     PushVert(0, 0); PushVert(w, 0); PushVert(w, h);
                     PushVert(0, 0); PushVert(w, h); PushVert(0, h);
@@ -115,30 +122,29 @@ inline void MeshChunk(const Chunk& chunk,
             uint32_t colMasksOpaque[32]; 
             uint32_t colMasksTrans[32];
 
-            // 1. Generate Masks
             for (int row = 0; row < 32; row++) {
                 uint32_t maskOp = 0;
                 uint32_t maskTr = 0;
                 
-                // Note: Reverted to scalar for clarity and correctness with dual-material logic.
-                // AVX can be reintroduced if strict Block ID layout is known.
                 for (int col = 0; col < 32; col++) {
                     int x, y, z;
-                    if (axis == 1) { x = row + 1; y = slice; z = col + 1; }
-                    else           { x = col + 1; y = row + 1; z = slice; }
                     
-                    // Current Block
+                    // --- MASK GENERATION ---
+                    // row = Outer Loop. col = Inner Loop (Bits).
+                    // Fixed Axis 2 to be Cyclic (X=Col, Y=Row) to preserve winding order.
+
+                    if (axis == 0)      { x = slice;   y = col + 1; z = row + 1; } // Axis 0: Y=Col
+                    else if (axis == 1) { x = row + 1; y = slice;   z = col + 1; } // Axis 1: Y=Slice
+                    else                { x = col + 1; y = row + 1; z = slice;   } // Axis 2: X=Col
+                    
                     uint8_t current = chunk.Get(x, y, z);
-                    if (current == 0) continue; // Optimization: Skip if air
+                    if (current == 0) continue; 
 
-                    // Neighbor Block
-                    uint8_t neighbor = chunk.Get(x + (axis == 0 ? direction : 0), 
-                                                 y + (axis == 1 ? direction : 0), 
-                                                 z + (axis == 2 ? direction : 0));
-
-                    // LOGIC:
-                    // 1. Opaque draws if Neighbor is Air OR Transparent (Under-water dirt visible)
-                    // 2. Transparent draws if Neighbor is Air (Water-against-water is culled)
+                    int nx = x + (axis == 0 ? direction : 0);
+                    int ny = y + (axis == 1 ? direction : 0);
+                    int nz = z + (axis == 2 ? direction : 0);
+                    
+                    uint8_t neighbor = chunk.Get(nx, ny, nz);
 
                     if (IsOpaque(current)) {
                         if (neighbor == 0 || IsTransparent(neighbor)) {
@@ -155,12 +161,7 @@ inline void MeshChunk(const Chunk& chunk,
                 colMasksTrans[row]  = maskTr;
             }
 
-            // 2. Run Greedy Pass for Opaque
-            // UPDATED: Passing 'face' argument
             GreedyPass(colMasksOpaque, allocatorOpaque, face, axis, direction, slice);
-            
-            // 3. Run Greedy Pass for Transparent
-            // UPDATED: Passing 'face' argument
             GreedyPass(colMasksTrans, allocatorTrans, face, axis, direction, slice);
         }
     }
