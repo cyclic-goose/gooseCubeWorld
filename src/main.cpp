@@ -1,5 +1,5 @@
 /* * ======================================================================================
- * GOOSE VOXELS - MAIN ENTRY POINT
+ * GOOSE Cube Engine - MAIN ENTRY POINT
  * ======================================================================================
  * Overview:
  * Initializes GLFW, GLAD, and ImGui. Sets up the main render loop, handles input 
@@ -239,7 +239,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Cube World", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     
