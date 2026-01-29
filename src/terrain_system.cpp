@@ -29,10 +29,10 @@ void StandardGenerator::Init() {
 
 std::vector<std::string> StandardGenerator::GetTexturePaths() const {
     return {
-        "resources/textures/grass.jpg",    
-        "resources/textures/dirt.jpg",     
-        "resources/textures/stone.jpg",    
-        "resources/textures/bedrock.jpg"   
+        "resources/textures/dirt1.jpg",    
+        "resources/textures/dirt1.jpg",     
+        "resources/textures/dirt1.jpg",    
+        "resources/textures/dirt1.jpg"   
     };
 }
 
@@ -125,10 +125,10 @@ void OverhangGenerator::Init() {
 
 std::vector<std::string> OverhangGenerator::GetTexturePaths() const {
     return {
-        "resources/textures/grass.jpg",  // 1
-        "resources/textures/dirt.jpg",   // 2
-        "resources/textures/stone.jpg",  // 3
-        "resources/textures/mossy.jpg"   // 4 (Example: Overhang bottom)
+        "resources/textures/dirt1.jpg",  // 1
+        "resources/textures/dirt1.jpg",   // 2
+        "resources/textures/dirt1.jpg",  // 3
+        "resources/textures/dirt1.jpg"   // 4 (Example: Overhang bottom)
     };
 }
 
@@ -164,9 +164,13 @@ uint8_t OverhangGenerator::GetBlock(float x, float y, float z, int lodScale) con
 
     if (density > m_settings.threshold) {
         // It is solid. Now determine WHAT block.
-        // We check density above to see if it's a surface
         
-        float densityAbove = GetDensity(x, y + (1.0f * lodScale), z);
+        // FIX: The surface check must be LOD-invariant. 
+        // We always check exactly 1 unit (1 block) above in world space, 
+        // regardless of the current LOD scale. 
+        // Old faulty logic: y + (1.0f * lodScale) -> Caused seams between LODs.
+        
+        float densityAbove = GetDensity(x, y + 1.0f, z);
 
         if (densityAbove <= m_settings.threshold) {
             return 1; // Grass (Surface)
@@ -190,7 +194,7 @@ void OverhangGenerator::OnImGui() {
     
     ImGui::Separator();
     ImGui::Text("Noise Shape");
-    if(ImGui::SliderFloat("Scale", &m_settings.noiseScale, 0.001f, 0.1f)) changed = true;
+    if(ImGui::SliderFloat("Scale", &m_settings.noiseScale, 0.008f, 0.2f)) changed = true;
     if(ImGui::SliderFloat("Y Stretch", &m_settings.yStretch, 0.1f, 5.0f)) changed = true;
     if(ImGui::SliderInt("Octaves", &m_settings.octaves, 1, 8)) changed = true;
     if(ImGui::SliderFloat("Gain", &m_settings.gain, 0.0f, 1.0f)) changed = true;

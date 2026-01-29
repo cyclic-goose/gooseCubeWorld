@@ -83,10 +83,10 @@ public:
         int seed = 5678;
         
         // Noise Shape
-        float noiseScale = 0.015f;    // General zoom
+        float noiseScale = 0.094f;    // General zoom
         float yStretch = 1.5f;        // Vertical stretch (higher = taller/thinner features)
-        int octaves = 4;
-        float gain = 0.5f;
+        int octaves = 5;
+        float gain = 0.8f;
         float lacunarity = 2.0f;
 
         // Density Logic

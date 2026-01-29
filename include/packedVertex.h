@@ -17,11 +17,12 @@ struct PackedVertex {
         // [21-22] AO       (2 bits) : Range 0..3
         // [23-31] TexID    (9 bits) : Range 0..511
 
-        // OFFSET: Add 8.0f to support skirts (e.g. -1 becomes 7).
-        // Max range becomes -8 to +55.
-        uint32_t ix = (uint32_t)(x + 8.0f) & 0x3F;
-        uint32_t iy = (uint32_t)(y + 8.0f) & 0x3F;
-        uint32_t iz = (uint32_t)(z + 8.0f) & 0x3F;
+        // FIX: Removed +8.0f offset. The mesher generates coordinates 0..32.
+        // If your shader expects 0-based coordinates, adding 8.0f causes a 
+        // permanent 8-block offset in all directions.
+        uint32_t ix = (uint32_t)(x) & 0x3F;
+        uint32_t iy = (uint32_t)(y) & 0x3F;
+        uint32_t iz = (uint32_t)(z) & 0x3F;
         
         uint32_t iNorm = (uint32_t)face & 0x7;
         uint32_t iAo   = (uint32_t)ao   & 0x3;
