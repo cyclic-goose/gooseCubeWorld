@@ -185,7 +185,7 @@ private:
         }
     }
 
-    // cast a wee ray 
+    // UPDATED: Now supports full 3D collision (caves, overhangs, bridges)
     bool CheckCollision(ITerrainGenerator* terrain) {
         glm::vec3 min = position - glm::vec3(width/2, 0, width/2);
         glm::vec3 max = position + glm::vec3(width/2, height, width/2);
@@ -198,11 +198,13 @@ private:
         int maxZ = static_cast<int>(std::floor(max.z));
 
         for (int x = minX; x <= maxX; x++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                int h = terrain->GetHeight(x, z);
-                for (int y = minY; y <= maxY; y++) {
-                    // Check LOD 1 solidity
-                    if (terrain->GetBlock(x, y, z, h, 1) != 0) return true;
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    // We use LOD 1 for physics (finest detail)
+                    // We no longer need GetHeight(); GetBlock handles 3D checks internally.
+                    if (terrain->GetBlock((float)x, (float)y, (float)z, 1) != 0) {
+                        return true;
+                    }
                 }
             }
         }

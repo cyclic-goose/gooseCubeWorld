@@ -22,7 +22,6 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
-//#include <FastNoise/FastNoise.h>
 
 #include "chunk.h"
 #include "mesher.h"
@@ -47,33 +46,28 @@ enum class ChunkState { MISSING, GENERATING, GENERATED, MESHING, MESHED, ACTIVE 
 
 // the chunk node acts as the meta data, the what, where, when, how to the chunks actual voxel data
 struct ChunkNode {
-    Chunk *chunk = nullptr; // ptr to actual raw chunk voxel data
+    Chunk *chunk = nullptr; 
     glm::vec3 position;
     int cx, cy, cz; 
     int lod;      
     int scale;    
     
-    // these are the magic supercompact meshes (post greedy meshing) that are sent to the gpu
     std::vector<PackedVertex> cachedMeshOpaque; 
     std::vector<PackedVertex> cachedMeshTrans;
-    //std::vector<PackedVertex> cachedMesh; 
     std::atomic<ChunkState> state{ChunkState::MISSING};
     
-    long long gpuOffsetOpaque = -1; // where in gpu to place the data above
+    long long gpuOffsetOpaque = -1; 
     long long gpuOffsetTrans = -1;
-
 
     size_t vertexCountOpaque = 0;
     size_t vertexCountTrans = 0;
     int64_t id; 
 
-    // Bounding Box (Tight fit to geometry)
     glm::vec3 minAABB;
     glm::vec3 maxAABB;
 
-    // we can store flags for if it is an all air or all solid block to skip rendering
-    bool isUniform = false; // True if all blocks are the same ID
-    uint8_t uniformID = 0;  // The ID if uniform
+    bool isUniform = false; 
+    uint8_t uniformID = 0;  
 
     void Reset(int x, int y, int z, int lodLevel) {
         chunk = nullptr;
@@ -86,16 +80,10 @@ struct ChunkNode {
         float size = (float)(CHUNK_SIZE * scale);
         position = glm::vec3(x * size, y * size, z * size);
         
-        // Default to full size, will be tightened in Generate
         minAABB = position;
         maxAABB = position + glm::vec3(size);
-
-        //chunk.worldX = (int)position.x;
-        //chunk.worldY = (int)position.y;
-        //chunk.worldZ = (int)position.z;
         
         state = ChunkState::MISSING;
-        // Reset Vectors and Offsets
         cachedMeshOpaque.clear();
         cachedMeshTrans.clear();
         gpuOffsetOpaque = -1;
@@ -119,22 +107,17 @@ inline int64_t ChunkKey(int x, int y, int z, int lod) {
 
 class World {
 private:
-    // separate basic engine config such as LOD, occlusion, vram, etc from actual terrain stuff
     std::unique_ptr<EngineConfig> m_config; 
     std::unique_ptr<ITerrainGenerator> m_generator;
     
-    // ***** chunk stuff ***** //
     std::unordered_map<int64_t, ChunkNode*> m_chunks;
     std::shared_mutex m_chunksMutex; 
-    // This is the pool of chunk meta data: position, uniformity, id, LOD, etc
     ObjectPool<ChunkNode> m_chunkPool;
-    // This is the pool of strictly voxel data for the chunk, the actual packed vertices for the gpu
     ObjectPool<Chunk> m_voxelPool;
 
     std::queue<ChunkNode*> m_generatedQueue; 
     std::queue<ChunkNode*> m_meshedQueue;    
     
-    // threading prep
     std::mutex m_queueMutex;
     ThreadPool m_pool; 
     struct ChunkRequest { int x, y, z; int lod; int distSq; };
@@ -157,98 +140,53 @@ private:
     std::unique_ptr<GpuCuller> m_culler;
     GLuint m_dummyVAO = 0; 
     GLuint m_textureArrayID = 0;
-    std::atomic<int> m_activeWorkCount{0}; // thread tracker
+    std::atomic<int> m_activeWorkCount{0}; 
 
     friend class ImGuiManager;
 
-
 public:
-
-    // constructor takes ptr to superclass which will create a vtable for us, love cpp
     World(EngineConfig config, std::unique_ptr<ITerrainGenerator> generator) : m_generator(std::move(generator)) {
-        // Move config into heap storage
         m_config = std::make_unique<EngineConfig>(config);
 
         size_t steadyStateNodes = 0;
         for(int i=0; i< m_config->settings.lodCount; i++) {
             int r = m_config->settings.lodRadius[i];
-            // Calculates volume of chunks for this LOD level
             steadyStateNodes += (size_t)(r * 2 + 1) * (r * 2 + 1) * m_config->settings.worldHeightChunks;
         }
-        
-        // Add a 20% buffer for chunks currently unloading or edge cases
         size_t nodeCapacity = steadyStateNodes + (steadyStateNodes / 5); 
-        
         std::cout << "NODE CAPACITY " << nodeCapacity << std::endl;
 
-       // ***** RAM ALLOCATION OPTIMIZATION *****
-        
-        // 1. Chunk Nodes (Metadata)
-        // Light weight (bytes). 
-        // Growth: 512 nodes at a time
-        // Initial: 1024 nodes
-        // Max: nodeCapacity
         m_chunkPool.Init(m_config->NODE_POOL_GROWTH_STRIDE, steadyStateNodes, nodeCapacity); 
-
-        // 2. Voxels (Heavy Data)
-        // Heavy weight (~39KB per chunk).
-        // Growth: 32 chunks at a time (~1.2 MB allocation) - keeps frame times smooth
-        // Initial: 0 (Don't allocate anything until needed!)
-        // Max: maxChunks (Hard limit)
         m_voxelPool.Init(m_config->VOXEL_POOL_GROWTH_STRIDE, m_config->VOXEL_POOL_INITIAL_SIZE, m_config->MAX_TRANSIENT_VOXEL_MESHES); 
 
-        // GPU memory allocation
         m_gpuMemory = std::make_unique<GpuMemoryManager>(static_cast<size_t>(m_config->VRAM_HEAP_ALLOCATION_MB) * 1024 * 1024);
         m_culler = std::make_unique<GpuCuller>(nodeCapacity);
-        
         
         glCreateVertexArrays(1, &m_dummyVAO);
     }
 
-    ~World() { 
-        Dispose();
-    }
+    ~World() { Dispose(); }
     
     void Dispose() {
         m_shutdown = true;
-        // wait for workers to finish before destroying them
         while(m_activeWorkCount > 0) { std::this_thread::yield(); }
         if (m_dummyVAO) { glDeleteVertexArrays(1, &m_dummyVAO); m_dummyVAO = 0; }
         m_culler.reset();
     }
 
-
-    // ==========================================================
-    // RUNTIME SWITCHING LOGIC, will later use this to change dimensions in game
-    // ==========================================================
-
-    // Check if the world is currently stable (no active generation tasks)
     bool IsBusy() {
-        // If threads are active, we are busy.
         if (m_activeWorkCount > 0) return true;
-        
-        // Also check if queues have pending work
         std::lock_guard<std::mutex> lock(m_queueMutex);
         if (!m_generatedQueue.empty()) return true;
         if (!m_meshedQueue.empty()) return true;
-
         return false;
     }
 
-
     void SwitchGenerator(std::unique_ptr<ITerrainGenerator> newGen, GLuint newTextureArrayID) {
         std::cout << "[World] Stopping tasks for generator switch..." << std::endl;
-        
-        // Freeze LODs to stop new calculations
         bool wasFrozen = m_freezeLODs;
         m_freezeLODs = true;
 
-        // Clear pending queue in pool (if supported) or just wait it out
-        // Since we can't easily clear the std::function queue in a basic ThreadPool,
-        // we rely on the atomic counter.
-
-        // WAIT FOR ALL WORKERS TO FINISH
-        // This prevents "Pure Virtual Method Called" by ensuring no one is inside GetHeight()
         int waitCycles = 0;
         while (m_activeWorkCount > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -256,9 +194,6 @@ public:
             if (waitCycles % 100 == 0) std::cout << "[World] Waiting for " << m_activeWorkCount << " threads..." << std::endl;
         }
 
-        std::cout << "[World] Threads idle. Swapping generator." << std::endl;
-
-        // Safe Swap
         m_generator = std::move(newGen);
         m_generator->Init();
         
@@ -267,19 +202,11 @@ public:
         }
         m_textureArrayID = newTextureArrayID;
         
-        // Unfreeze and Reload
         Reload(*m_config);
         m_freezeLODs = wasFrozen;
     }
 
-    // ==========================================================
-    // END OF RUNTIME SWITCHING LOGIC, will later use this to change dimensions in game
-    // ==========================================================
-
-
-    // accessor for ImGuiManager to use in an "abstracted" way
     ITerrainGenerator* GetGenerator() { return m_generator.get(); }
-
     void SetTextureArray(GLuint textureID) { m_textureArrayID = textureID; }
     void setCubeDebugMode(int mode) { m_config->settings.cubeDebugMode = mode; }
     void setOcclusionCulling (bool mode){ m_config->settings.occlusionCulling = mode; }
@@ -301,9 +228,7 @@ public:
 
         if (m_freezeLODs) return; 
         UpdateLODs_Async(cameraPos);
-
-
-        UpdateProfilerPressure(); // this function is defined at the VERRRY bottom of this file
+        UpdateProfilerPressure();
         m_frameCounter++;
     }
 
@@ -314,16 +239,14 @@ public:
         std::vector<ChunkNode*> nodesToMesh;
         std::vector<ChunkNode*> nodesToUpload;
         
-        { // Pop from thread safe queues only
+        { 
             std::lock_guard<std::mutex> lock(m_queueMutex);
-            
             int limitGen = m_config->NODE_GENERATION_LIMIT; 
             while (!m_generatedQueue.empty() && limitGen > 0) {
                 nodesToMesh.push_back(m_generatedQueue.front());
                 m_generatedQueue.pop();
                 limitGen--;
             }
-            
             int limitUpload = m_config->NODE_UPLOAD_LIMIT; 
             while (!m_meshedQueue.empty() && limitUpload > 0) {
                 nodesToUpload.push_back(m_meshedQueue.front());
@@ -332,25 +255,17 @@ public:
             }
         }
 
-        // dispatch to mesher when a node is ready
         for (ChunkNode* node : nodesToMesh) {
             if(m_shutdown) return; 
-
             if (node->state == ChunkState::GENERATING) {
-
                 if (node->isUniform) {
-                    // mark it as active (skips meshing)
                     node->state = ChunkState::ACTIVE;
-
                 } else {
-                    // must be actual terrain, queue threadpool for meshing
                     node->state = ChunkState::MESHING;
-
-                    // track active worker count
                     m_activeWorkCount++;
                     m_pool.enqueue([this, node]() { 
                         this->Task_Mesh(node); 
-                        m_activeWorkCount--; // Decrement when done
+                        m_activeWorkCount--; 
                     });
                 }
             }
@@ -358,15 +273,11 @@ public:
 
         for (ChunkNode* node : nodesToUpload) {
             if(m_shutdown) return; 
-
             if (node->state == ChunkState::MESHING) {
-                // only upload if we actually generated vertices (in normal ram right now)
                 
-                // --- 1. Upload Opaque Mesh ---
                 if (!node->cachedMeshOpaque.empty()) {
                     size_t bytes = node->cachedMeshOpaque.size() * sizeof(PackedVertex);
                     long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
-                    
                     if (offset != -1) {
                         m_gpuMemory->Upload(offset, node->cachedMeshOpaque.data(), bytes);
                         node->gpuOffsetOpaque = offset;
@@ -374,11 +285,9 @@ public:
                     }
                 }
 
-                // --- 2. Upload Transparent Mesh ---
                 if (!node->cachedMeshTrans.empty()) {
                     size_t bytes = node->cachedMeshTrans.size() * sizeof(PackedVertex);
                     long long offset = m_gpuMemory->Allocate(bytes, sizeof(PackedVertex));
-                    
                     if (offset != -1) {
                         m_gpuMemory->Upload(offset, node->cachedMeshTrans.data(), bytes);
                         node->gpuOffsetTrans = offset;
@@ -386,48 +295,33 @@ public:
                     }
                 }
 
-                // --- 3. Pass BOTH Offsets to Culler ---
-                // Even if count is 0, we update the culler.
-                // Note: Divide offset by sizeof(PackedVertex) to get vertex index
-                
                 size_t opaqueIdx = (node->gpuOffsetOpaque != -1) ? (size_t)(node->gpuOffsetOpaque / sizeof(PackedVertex)) : 0;
                 size_t transIdx = (node->gpuOffsetTrans != -1) ? (size_t)(node->gpuOffsetTrans / sizeof(PackedVertex)) : 0;
 
-                m_culler->AddOrUpdateChunk(
-                    node->id, 
-                    node->minAABB,
-                    node->maxAABB,
-                    (float)node->scale, 
-                    opaqueIdx, 
-                    node->vertexCountOpaque,
-                    transIdx, 
-                    node->vertexCountTrans
-                );
+                m_culler->AddOrUpdateChunk(node->id, node->minAABB, node->maxAABB, (float)node->scale, opaqueIdx, node->vertexCountOpaque, transIdx, node->vertexCountTrans);
 
-                // --- 4. Cleanup RAM ---
                 node->cachedMeshOpaque.clear(); 
                 node->cachedMeshOpaque.shrink_to_fit();
                 node->cachedMeshTrans.clear(); 
                 node->cachedMeshTrans.shrink_to_fit();
 
-                // Release Chunk Voxel Data
                 if (node->chunk) {
                     m_voxelPool.Release(node->chunk);
                     node->chunk = nullptr;
                 } 
-
                 node->state = ChunkState::ACTIVE;
             }
         }
     }
 
- void Task_CalculateLODs(glm::vec3 cameraPos) {
+    void Task_CalculateLODs(glm::vec3 cameraPos) {
         if(m_shutdown) return;
         Engine::Profiler::ScopedTimer timer("[ASYNC] World::LOD Calc");
         auto result = std::make_unique<LODUpdateResult>();
 
         std::shared_lock<std::shared_mutex> readLock(m_chunksMutex);
 
+        // UNLOAD LOGIC
         for (const auto& pair : m_chunks) {
             ChunkNode* node = pair.second;
             int lod = node->lod;
@@ -445,8 +339,6 @@ public:
                  if (IsParentReady(node->cx, node->cy, node->cz, lod)) {
                      shouldUnload = true;
                  }
-                 // *** ORPHAN FIX: If parent is also out of range, force unload ***
-                 // Otherwise the child waits for a parent that will never be generated.
                  else if (lod < m_config->settings.lodCount - 1) {
                      int pLod = lod + 1;
                      int pRadius = m_config->settings.lodRadius[pLod];
@@ -465,7 +357,6 @@ public:
             else if (lod > 0) {
                 int prevRadius = m_config->settings.lodRadius[lod - 1];
                 int innerBoundary = ((prevRadius + 1) / 2);
-                
                 if (dx < innerBoundary && dz < innerBoundary) {
                     if (AreChildrenReady(node->cx, node->cy, node->cz, lod)) {
                         shouldUnload = true;
@@ -481,6 +372,7 @@ public:
             }
         }
 
+        // LOAD LOGIC
         static std::vector<std::pair<int, int>> spiralOffsets;
         static std::once_flag flag;
         std::call_once(flag, [](){
@@ -514,16 +406,15 @@ public:
                 if (distSq > (rSq * 2 + 100)) break; 
                 
                 if (std::abs(offset.first) > r || std::abs(offset.second) > r) continue;
-
-                if (lod > 0) {
-                     if (std::abs(offset.first) < minR && std::abs(offset.second) < minR) continue;
-                }
+                if (lod > 0 && std::abs(offset.first) < minR && std::abs(offset.second) < minR) continue;
 
                 int x = px + offset.first;
                 int z = pz + offset.second;
                 
                 int minH, maxH;
+                // NOTE: For 3D gen, this returns approximate bounds of "interesting" terrain
                 m_generator->GetHeightBounds(x, z, scale, minH, maxH);
+                
                 int chunkYStart = std::max(0, (minH / (CHUNK_SIZE * scale)) - 1); 
                 int chunkYEnd = std::min(m_config->settings.worldHeightChunks - 1, (maxH / (CHUNK_SIZE * scale)) + 1);
 
@@ -536,7 +427,6 @@ public:
                         int chunkWorldY = y * CHUNK_SIZE * scale;
                         int dy = (chunkWorldY - (int)cameraPos.y) / (CHUNK_SIZE * scale); 
                         int distMetric = dx*dx + dz*dz + (dy*dy); 
-                        
                         result->chunksToLoad.push_back({x, y, z, lod, distMetric});
                     }
                 }
@@ -544,7 +434,6 @@ public:
         }
         
         readLock.unlock(); 
-
         std::sort(result->chunksToLoad.begin(), result->chunksToLoad.end(), 
             [](const ChunkRequest& a, const ChunkRequest& b){ return a.distSq < b.distSq; });
 
@@ -553,12 +442,7 @@ public:
         m_isLODWorkerRunning = false;
     }
 
-
-
- void UpdateLODs_Async(glm::vec3 cameraPos) {
-        
-        // Helper: Process unloads immediately.
-        // We define this here to reuse it in both the movement check and the normal update loop.
+    void UpdateLODs_Async(glm::vec3 cameraPos) {
         auto ProcessUnloads = [this]() {
             std::lock_guard<std::mutex> lock(m_lodResultMutex);
             if (m_pendingLODResult && !m_pendingLODResult->chunksToUnload.empty()) {
@@ -567,9 +451,6 @@ public:
                     auto it = m_chunks.find(key);
                     if (it != m_chunks.end()) {
                         ChunkNode* node = it->second;
-                        // Always free GPU memory before returning node to pool
-                        
-                        // --- UPDATED: Free Both Opaque and Trans Memory ---
                         m_culler->RemoveChunk(node->id);
                         if (node->gpuOffsetOpaque != -1) {
                             m_gpuMemory->Free(node->gpuOffsetOpaque, node->vertexCountOpaque * sizeof(PackedVertex));
@@ -579,33 +460,22 @@ public:
                             m_gpuMemory->Free(node->gpuOffsetTrans, node->vertexCountTrans * sizeof(PackedVertex));
                             node->gpuOffsetTrans = -1;
                         }
-
                         m_chunkPool.Release(node);
                         m_chunks.erase(it);
                     }
                 }
-                // Clear unloads so we don't process them twice
                 m_pendingLODResult->chunksToUnload.clear();
             }
         };
 
-        // Check for Movement & Stale Queues
-        // If we have moved significantly, we must CANCEL the old stalled queue.
-        // Otherwise, backpressure prevents us from ever calculating unloads for the new position.
         if (!m_isLODWorkerRunning) {
              float distSq = glm::dot(cameraPos - m_lastLODCalculationPos, cameraPos - m_lastLODCalculationPos);
              if (distSq > 64.0f) { 
-                 
-                 // THRASHING FIX:
-                 // Only clear the queue if we moved a MASSIVE amount (teleport).
-                 // If we are just running/flying fast, we KEEP the old queue. 
-                 // Processing slightly stale chunks (from 10 meters ago) is better than processing nothing (thrashing).
                  if (distSq > 10000.0f) { 
-                     ProcessUnloads(); // Ensure we unload before clearing
+                     ProcessUnloads(); 
                      std::lock_guard<std::mutex> lock(m_lodResultMutex);
                      m_pendingLODResult = nullptr; 
                  }
-                 
                  m_lastLODCalculationPos = cameraPos;
                  m_isLODWorkerRunning = true;
                  m_activeWorkCount++;
@@ -613,51 +483,30 @@ public:
                      this->Task_CalculateLODs(cameraPos); 
                      m_activeWorkCount--; 
                  });
-                 
-                 // REMOVED RETURN:
-                 // We allow the function to fall through to "Normal Frame Processing".
-                 // This ensures we continue consuming the current queue (if it exists) while the worker prepares the next one.
              }
         }
 
         {
             Engine::Profiler::ScopedTimer timer("World::ApplyLODs");
-            
-            // 2. Normal Frame Processing
-            // First, process any pending unloads (this is fast and frees up memory)
             ProcessUnloads();
 
             std::lock_guard<std::mutex> lock(m_lodResultMutex);
             if (m_pendingLODResult) {
-                
                 std::unique_lock<std::shared_mutex> writeLock(m_chunksMutex);
-
-                // No need to check chunksToUnload here, ProcessUnloads() handled it.
-
                 int queued = 0;
                 int MAX_PER_FRAME = 500; 
                 
                 size_t& idx = m_pendingLODResult->loadIndex;
                 const auto& loadList = m_pendingLODResult->chunksToLoad;
 
-                // BACKPRESSURE THRESHOLD
-                // We keep a 10% safety buffer from the hard limit
                 size_t limit = (size_t)m_config->MAX_TRANSIENT_VOXEL_MESHES;
                 if (limit > 100) limit -= 100;
 
                 while (idx < loadList.size() && queued < MAX_PER_FRAME) {
-                    
-                    // CRITICAL BACKPRESSURE CHECK
-                    // Check if the "Kitchen" (Queues + Workers) is full before taking more "Orders" (Chunks)
-                    // If full, we break the loop and resume next frame.
-                    // This prevents queueing 30,000 tasks that exhaust the voxel pool.
                     {
                         std::lock_guard<std::mutex> qLock(m_queueMutex);
                         size_t totalInFlight = m_generatedQueue.size() + m_meshedQueue.size() + m_activeWorkCount;
-                        if (totalInFlight >= limit) {
-                            // Pipeline full. Stop loading for this frame.
-                            break; 
-                        }
+                        if (totalInFlight >= limit) break; 
                     }
 
                     const auto& req = loadList[idx];
@@ -670,14 +519,11 @@ public:
                             newNode->Reset(req.x, req.y, req.z, req.lod);
                             newNode->id = key; 
                             m_chunks[key] = newNode;
-                            
                             newNode->state = ChunkState::GENERATING;
-                            
-                            // FIX: Increment worker count BEFORE enqueueing
                             m_activeWorkCount++; 
                             m_pool.enqueue([this, newNode]() { 
                                 this->Task_Generate(newNode); 
-                                m_activeWorkCount--; // Decrement when done
+                                m_activeWorkCount--; 
                             });
                             queued++;
                         }
@@ -691,20 +537,13 @@ public:
         }
     }
 
-
-    // ***************************** DRAW CALL 
-
     void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix,const glm::mat4& previousViewMatrix, const glm::mat4& proj, const int CUR_SCR_WIDTH, const int CUR_SCR_HEIGHT, Shader* depthDebugShader, bool depthDebug, bool frustumLock) {
         if(m_shutdown) return;
-
-        // ************************** FRUSTUM AND OCCLUSION CULL *********************** //
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
             m_culler->Cull(cullViewMatrix, previousViewMatrix, proj, g_fbo.hiZTex);
             Engine::Profiler::Get().EndGPU();
         }
-
-        // ************************** DRAW CALLS *********************** //
         {   
             Engine::Profiler::Get().BeginGPU("GPU: MDI DRAW"); 
 
@@ -712,10 +551,7 @@ public:
             glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
             glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config->settings.cubeDebugMode);
             
-            // Layout 0: Vertex Data (Shared)
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());
-
-            // Layout 1: Chunk Transforms (Shared)
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_culler->GetVisibleChunkBuffer());
 
             if (m_textureArrayID != 0) {
@@ -724,42 +560,29 @@ public:
                  shader.setInt("u_Textures", 0);
             }
 
-            // --- PASS 1: OPAQUE & FOLIAGE ---
-            glBindVertexArray(m_dummyVAO); // bind the ghad damn dummy buffer wow it took me hours to debug this
+            glBindVertexArray(m_dummyVAO); 
 
             glEnable(GL_POLYGON_OFFSET_FILL);
             glPolygonOffset(1.0f, 1.0f);
-            
-            //glDisable(GL_BLEND);
             glEnable(GL_DEPTH_TEST);
-            glDepthMask(GL_TRUE); // Write Depth
+            glDepthMask(GL_TRUE); 
 
-            // Bind Indirect Buffer 1 (Opaque)
             glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_culler->GetIndirectOpaque());
             glBindBuffer(GL_PARAMETER_BUFFER, m_culler->GetAtomicCounter());
-            
             glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_culler->GetMaxChunks(), 0);
 
-            // --- PASS 2: TRANSPARENT (Water/Glass) ---
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glDepthMask(GL_FALSE); // Read-Only Depth for Transparency
-
-            // Bind Indirect Buffer 2 (Transparent)
+            glDepthMask(GL_FALSE); 
             glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_culler->GetIndirectTrans());
-            // Parameter buffer is the same (shared count)
-            // VisibleChunkBuffer is the same (shared transforms)
-            
             glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_culler->GetMaxChunks(), 0);
 
-            // Restore State
             glDepthMask(GL_TRUE);
             glDisable(GL_BLEND);
             glDisable(GL_POLYGON_OFFSET_FILL);
 
             Engine::Profiler::Get().EndGPU();
             
-            // ************************** Hiearchical Z Buffer (OCCLUSION CULL) *********************** //
              Engine::Profiler::Get().BeginGPU("GPU: Occlusion Cull COMPUTE"); 
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -809,26 +632,14 @@ public:
         glEnable(GL_CULL_FACE);
     }
 
-    // Should hopefully handle reloading EVERYTHING
-    // Clears VRAM
-    // Clears caches
-    // Clears chunk nodes and chunks
-    // resets terrain gen and inits
-
     void Reload(EngineConfig newConfig) {
-        
-
         m_config = std::make_unique<EngineConfig>(newConfig);
-        
         m_generator->Init();
-        
         {
             std::unique_lock<std::shared_mutex> lock(m_chunksMutex);
             for (auto& pair : m_chunks) {
                 ChunkNode* node = pair.second;
                 m_culler->RemoveChunk(node->id); 
-                
-                // --- UPDATED: Free both buffers ---
                 if (node->gpuOffsetOpaque != -1) {
                     m_gpuMemory->Free(node->gpuOffsetOpaque, node->vertexCountOpaque * sizeof(PackedVertex));
                     node->gpuOffsetOpaque = -1;
@@ -837,7 +648,6 @@ public:
                     m_gpuMemory->Free(node->gpuOffsetTrans, node->vertexCountTrans * sizeof(PackedVertex));
                     node->gpuOffsetTrans = -1;
                 }
-
                 m_chunkPool.Release(node);
             }
             m_chunks.clear();
@@ -846,54 +656,24 @@ public:
         m_pendingLODResult = nullptr;
     }
 
-
-// These are all mostly helper generation and cashing functions, very smartly optimized by GEMINI 3
 private:
+    // ============================================================================================
+    // UPDATED FILL CHUNK - NOW SUPPORTS 3D VOLUMETRIC GENERATION
+    // ============================================================================================
     void Task_Generate(ChunkNode* node) {
         if (m_shutdown) return;
         Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Generate");
+
+        float outMinY, outMaxY;
+        FillChunk(node, outMinY, outMaxY);
         
-        
-        float minY, maxY;
-        FillChunk(node, minY, maxY);
-        
-        // Update AABB with tight bounds
-        // X and Z remain full size, but Y is clamped to geometry
-        node->minAABB.y = minY;
-        node->maxAABB.y = maxY;
+        node->minAABB.y = outMinY;
+        node->maxAABB.y = outMaxY;
         
         std::lock_guard<std::mutex> lock(m_queueMutex);
         if (m_shutdown) return;
         m_generatedQueue.push(node);
     }
-
-    void Task_Mesh(ChunkNode* node) {
-        if (m_shutdown) return;
-        Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Mesh"); 
-        
-        // --- UPDATED: Use Two Allocators ---
-        LinearAllocator<PackedVertex> opaqueAllocator(100000); 
-        LinearAllocator<PackedVertex> transAllocator(50000); 
-
-        // Assumption: You must update `MeshChunk` to accept two allocators!
-        MeshChunk(*node->chunk, opaqueAllocator, transAllocator, false);
-        
-        // --- UPDATED: Store data in split vectors ---
-        node->cachedMeshOpaque.assign(opaqueAllocator.Data(), opaqueAllocator.Data() + opaqueAllocator.Count());
-        node->cachedMeshTrans.assign(transAllocator.Data(), transAllocator.Data() + transAllocator.Count());
-        
-        std::lock_guard<std::mutex> lock(m_queueMutex);
-        if (m_shutdown) return;
-        m_meshedQueue.push(node);
-    }
-
-
-    // --------------------------------------------------------------------------------------------
-    // FILL CHUNK 
-    // 1. Analyzes terrain height.
-    // 2. Decides if memory is needed (Optimization A).
-    // 3. Allocates ONLY if necessary.
-    // --------------------------------------------------------------------------------------------
 
     void FillChunk(ChunkNode* node, float& outMinY, float& outMaxY) {
         int cx = node->cx;
@@ -901,101 +681,77 @@ private:
         int cz = node->cz;
         int scale = node->scale;
 
-        // position for voxels 
         int worldX = cx * CHUNK_SIZE * scale;
         int worldY = cy * CHUNK_SIZE * scale;
         int worldZ = cz * CHUNK_SIZE * scale;
 
-        
         int chunkBottomY = worldY;
         int chunkTopY = worldY + (CHUNK_SIZE * scale);
 
-        // Initialize bounds inverted (or clamped)
-        // If no blocks are placed, these will be set to bottom Y
-        float actualMinY = (float)chunkTopY;
-        float actualMaxY = (float)chunkBottomY;
-        bool hasBlocks = false;
+        // 1. Broad Phase Check
+        // The generator tells us roughly if anything interesting is here.
+        // For 3D noise, this is usually 0 to MaxTerrainHeight.
+        int minGenH, maxGenH;
+        m_generator->GetHeightBounds(cx, cz, scale, minGenH, maxGenH);
 
-        int heights[CHUNK_SIZE_PADDED][CHUNK_SIZE_PADDED];
-        int minHeight = 99999;
-        int maxHeight = -99999;
-
-        for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
-            for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
-                float wx = (float)(worldX + (x - 1) * scale);
-                float wz = (float)(worldZ + (z - 1) * scale);
-                
-                int h = m_generator->GetHeight(wx, wz);
-                if (scale > 1) { h = (h / scale) * scale; } 
-                
-                heights[x][z] = h;
-                if (h < minHeight) minHeight = h;
-                if (h > maxHeight) maxHeight = h;
-            }
+        // If chunk is totally above the highest possible terrain
+        if (chunkBottomY > maxGenH) {
+            node->isUniform = true;
+            node->uniformID = 0; // Air
+            node->chunk = nullptr; 
+            outMinY = (float)chunkBottomY;
+            outMaxY = (float)chunkBottomY;
+            return;
         }
 
-        // case A: chunk is completely above terrain and empty
-        if (maxHeight < chunkBottomY) { 
-            node->isUniform = true;
-            node->uniformID = 0; // mark as air block
-            node->chunk = nullptr; // do not allocate voxels its not neccessary
-            outMinY = (float)chunkBottomY; 
-            outMaxY = (float)chunkBottomY; // Empty
-            return; 
-        } 
-        // case B: completely below ground and full
-        if (minHeight > chunkTopY && !m_config->settings.enableCaves) { 
-            node->isUniform = true;
-            node->uniformID = 0; 
-            node->chunk = nullptr; // do not allocate voxels its not neccessary
-            outMinY = (float)chunkBottomY;
-            outMaxY = (float)chunkTopY; // Full
-            return; 
-        } 
+        // If chunk is totally below the lowest possible terrain (and no caves?)
+        // (If your 3D noise makes caves everywhere, remove this check or set minGenH to very low)
+        if (chunkTopY < minGenH) {
+             node->isUniform = true;
+             node->uniformID = 3; // Solid Stone
+             node->chunk = nullptr;
+             outMinY = (float)chunkBottomY;
+             outMaxY = (float)chunkTopY;
+             return;
+        }
 
-        // case C: chunk has voxels
+        // 2. Allocation
         node->isUniform = false;
-        node->chunk = m_voxelPool.Acquire(); // allocate memory from pool
+        node->chunk = m_voxelPool.Acquire(); 
 
-        // we need to check if the voxel pool is nearing the allocated total limit
         if (!node->chunk) {
-            // pools CLOSED
-            std::cerr << "[World] CRITICAL: Voxel Pool Exhausted. Allocate More m_voxelPool Memory" << std::endl;
+            std::cerr << "[World] CRITICAL: Voxel Pool Exhausted." << std::endl;
             node->isUniform = true;
             node->uniformID = 0;
             return;
         }
 
         std::memset(node->chunk->voxels, 0, sizeof(node->chunk->voxels));
+        
+        bool hasBlocks = false;
+        float actualMinY = (float)chunkTopY;
+        float actualMaxY = (float)chunkBottomY;
 
+        // 3. Volumetric Loop
+        // We must iterate 3D space. No more "Heightmap then Y-loop".
         for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
+            float wx = (float)(worldX + (x - 1) * scale);
+            
             for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
-                int height = heights[x][z]; 
+                float wz = (float)(worldZ + (z - 1) * scale);
                 
-                // Optimization: Only loop Y where the surface intersects the chunk
-                int localMaxY = (height - chunkBottomY) / scale;
-                localMaxY = std::min(localMaxY + 2, CHUNK_SIZE_PADDED - 1);
-                
-                // If checking for caves, we might need to scan the whole height
-                int startY = 0;
-                if (!m_config->settings.enableCaves) {
-                    if (localMaxY < 0) continue; 
-                } else {
-                    localMaxY = CHUNK_SIZE_PADDED - 1; // Check full chunk for caves
-                }
-
-                for (int y = startY; y <= localMaxY; y++) {
+                for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
                     int wy = worldY + (y - 1) * scale; 
-                    float wx = (float)(worldX + (x - 1) * scale);
-                    float wz = (float)(worldZ + (z - 1) * scale);
-
-                    // Use 'node->chunk->Set' since we are now using a pointer
-                    uint8_t blockID = m_generator->GetBlock(wx, (float)wy, wz, height, scale);
+                    
+                    // Call the new 3D GetBlock
+                    // NOTE: GetBlock now takes (x,y,z, lod)
+                    uint8_t blockID = m_generator->GetBlock(wx, (float)wy, wz, scale);
                     
                     if (blockID != 0) {
                         node->chunk->Set(x, y, z, blockID);
-                        
                         hasBlocks = true;
+                        
+                        // Update Tight AABB
                         float blockBase = (float)wy;
                         float blockTop = blockBase + scale;
                         if (blockBase < actualMinY) actualMinY = blockBase;
@@ -1005,12 +761,12 @@ private:
             }
         }
 
+        // 4. Cleanup/Compaction
         if (hasBlocks) {
             outMinY = actualMinY;
             outMaxY = actualMaxY;
         } else {
-            // We allocated memory, but turns out it was empty (e.g. caves cleared everything)
-            // Optimization: Give the memory back immediately
+            // It was empty after all (e.g., inside a giant air bubble)
             m_voxelPool.Release(node->chunk);
             node->chunk = nullptr;
             node->isUniform = true;
@@ -1021,16 +777,29 @@ private:
         }
     }
 
+    void Task_Mesh(ChunkNode* node) {
+        if (m_shutdown) return;
+        Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Mesh"); 
+        
+        LinearAllocator<PackedVertex> opaqueAllocator(100000); 
+        LinearAllocator<PackedVertex> transAllocator(50000); 
 
-     bool AreChildrenReady(int cx, int cy, int cz, int lod) {
+        MeshChunk(*node->chunk, opaqueAllocator, transAllocator, false);
+        
+        node->cachedMeshOpaque.assign(opaqueAllocator.Data(), opaqueAllocator.Data() + opaqueAllocator.Count());
+        node->cachedMeshTrans.assign(transAllocator.Data(), transAllocator.Data() + transAllocator.Count());
+        
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        if (m_shutdown) return;
+        m_meshedQueue.push(node);
+    }
+
+    bool AreChildrenReady(int cx, int cy, int cz, int lod) {
         if (lod == 0) return true; 
         
         int childLod = lod - 1;
         int scale = 1 << childLod; 
-        
-        int startX = cx * 2;
-        int startY = cy * 2;
-        int startZ = cz * 2;
+        int startX = cx * 2; int startY = cy * 2; int startZ = cz * 2;
 
         for (int x = 0; x < 2; x++) {
             for (int z = 0; z < 2; z++) {
@@ -1061,9 +830,7 @@ private:
         if (lod >= m_config->settings.lodCount - 1) return true; 
         
         int parentLod = lod + 1;
-        int px = cx >> 1;
-        int py = cy >> 1;
-        int pz = cz >> 1;
+        int px = cx >> 1; int py = cy >> 1; int pz = cz >> 1;
 
         int64_t key = ChunkKey(px, py, pz, parentLod);
         auto it = m_chunks.find(key);
@@ -1076,45 +843,23 @@ private:
 
     void UpdateProfilerPressure() {
         if (!Engine::Profiler::Get().m_Enabled) return;
-
-        // 1. Pending LODs (Waiting to be generated)
         size_t pendingGen = 0;
         {
-            // Try to get count, but don't stall if LOD worker is busy writing
             std::unique_lock<std::mutex> lock(m_lodResultMutex, std::try_to_lock);
             if (lock.owns_lock() && m_pendingLODResult) {
                 pendingGen = m_pendingLODResult->chunksToLoad.size() - m_pendingLODResult->loadIndex;
             }
         }
-
-        // 2. Queue Pressure (Dirty read for performance - approximates are fine for UI)
         size_t waitingMesh = m_generatedQueue.size();
         size_t waitingUpload = m_meshedQueue.size();
-        
-        // 3. Active Threads (Atomic read)
         size_t activeThreads = m_activeWorkCount.load();
-
-        // 4. Total Chunks in VRAM (Approximation via map size)
-        // Note: m_chunks includes nodes that are GENERATING/MESHING, not just those in VRAM.
-        // If you want strict VRAM count, ask m_culler or count nodes with gpuOffset != -1.
         size_t totalActive = m_chunks.size(); 
 
-        
-
-        // Send to Profiler
         Engine::Profiler::Get().SetPipelineStats(
-            pendingGen, 
-            waitingMesh, 
-            waitingUpload, 
-            activeThreads, 
-            totalActive,
+            pendingGen, waitingMesh, waitingUpload, activeThreads, totalActive,
             (size_t)m_config->MAX_TRANSIENT_VOXEL_MESHES,
-            m_voxelPool.GetAllocatedMB(),
-            m_voxelPool.GetUsedMB(),
-            m_chunkPool.GetAllocatedMB(),
-            m_chunkPool.GetUsedMB()
+            m_voxelPool.GetAllocatedMB(), m_voxelPool.GetUsedMB(),
+            m_chunkPool.GetAllocatedMB(), m_chunkPool.GetUsedMB()
         );
     }
-
-
 };

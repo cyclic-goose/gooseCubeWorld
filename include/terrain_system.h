@@ -7,8 +7,6 @@
 #include <cstdint>
 #include <FastNoise/FastNoise.h>
 
-
-
 // ================================================================================================
 // 2. TERRAIN GENERATOR INTERFACE
 // ================================================================================================
@@ -18,11 +16,16 @@ public:
 
     // Core Generation
     virtual void Init() = 0; 
-    virtual int GetHeight(float x, float z) const = 0;
-    virtual uint8_t GetBlock(float x, float y, float z, int heightAtXZ, int lodScale) const = 0;
+    
+    // Used for Culling only (Is this chunk totally empty or totally full?)
+    // In 3D mode, this returns the max potential height of the terrain surface.
     virtual void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) = 0;
 
-    // Returns the list of textures this generator expects, in order of Block ID - 1
+    // THE BIG CHANGE: 
+    // We removed 'heightAtXZ'. The generator must calculate density internally at (x,y,z).
+    virtual uint8_t GetBlock(float x, float y, float z, int lodScale) const = 0;
+
+    // Returns the list of textures this generator expects
     virtual std::vector<std::string> GetTexturePaths() const = 0;
 
     // UI & Hot Reloading
@@ -35,7 +38,7 @@ protected:
 };
 
 // ================================================================================================
-// 3. STANDARD GENERATOR
+// 3. STANDARD GENERATOR (Heightmap Backward Compatibility)
 // ================================================================================================
 class StandardGenerator : public ITerrainGenerator {
 public:
@@ -50,19 +53,18 @@ public:
         float caveThreshold = 0.5f; 
     };
 
-    // constructors
     StandardGenerator(); 
     StandardGenerator(int seed);
     StandardGenerator(TerrainSettings settings);
     
     void Init() override;
-    int GetHeight(float x, float z) const override;
-    uint8_t GetBlock(float x, float y, float z, int heightAtXZ, int lodScale) const override;
+    // Helper for internal use, though not strictly required by interface anymore
+    int GetHeight(float x, float z) const; 
+    
+    uint8_t GetBlock(float x, float y, float z, int lodScale) const override;
     void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) override;
 
-    // override superclass to define texturess for this specific biome YO
     std::vector<std::string> GetTexturePaths() const override;
-    
     void OnImGui() override;
 
 private:
@@ -70,4 +72,46 @@ private:
     FastNoise::SmartNode<> m_baseNoise;
     FastNoise::SmartNode<> m_mountainNoise;
     FastNoise::SmartNode<> m_caveNoise;
+};
+
+// ================================================================================================
+// 4. OVERHANG GENERATOR (True 3D)
+// ================================================================================================
+class OverhangGenerator : public ITerrainGenerator {
+public:
+    struct OverhangSettings {
+        int seed = 5678;
+        
+        // Noise Shape
+        float noiseScale = 0.015f;    // General zoom
+        float yStretch = 1.5f;        // Vertical stretch (higher = taller/thinner features)
+        int octaves = 4;
+        float gain = 0.5f;
+        float lacunarity = 2.0f;
+
+        // Density Logic
+        float threshold = 0.0f;       // Surface cut-off (Density > this is solid)
+        float gradientCenter = 64.0f; // Height where density is purely noise (0 bias)
+        float gradientFalloff = 64.0f;// Range over which density fades to air
+        
+        // Limits
+        int hardFloor = 10;           // Bedrock level
+        int maxTerrainHeight = 256;   // Optimisation cap
+    };
+
+    OverhangGenerator();
+    void Init() override;
+    
+    // In 3D, this is a density check. > 0 is solid, < 0 is air.
+    float GetDensity(float x, float y, float z) const;
+    
+    uint8_t GetBlock(float x, float y, float z, int lodScale) const override;
+    void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) override;
+    
+    std::vector<std::string> GetTexturePaths() const override;
+    void OnImGui() override;
+
+private:
+    OverhangSettings m_settings;
+    FastNoise::SmartNode<> m_noise3D;
 };
