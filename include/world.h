@@ -686,6 +686,7 @@ private:
     }
 
     void FillChunk(ChunkNode* node, float& outMinY, float& outMaxY) {
+        Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Fill Chunk");
         int cx = node->cx;
         int cy = node->cy;
         int cz = node->cz;
@@ -744,28 +745,32 @@ private:
 
         // 3. Volumetric Loop
         // We must iterate 3D space. No more "Heightmap then Y-loop".
-        for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
-            float wx = (float)(worldX + (x - 1) * scale);
-            
-            for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
-                float wz = (float)(worldZ + (z - 1) * scale);
+        
+        {
+            Engine::Profiler::ScopedTimer timer("[ASYNC] Fill Chunk Volume Loop");
+            for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
+                float wx = (float)(worldX + (x - 1) * scale);
                 
-                for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
-                    int wy = worldY + (y - 1) * scale; 
+                for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
+                    float wz = (float)(worldZ + (z - 1) * scale);
                     
-                    // Call the new 3D GetBlock
-                    // NOTE: GetBlock now takes (x,y,z, lod)
-                    uint8_t blockID = m_generator->GetBlock(wx, (float)wy, wz, scale);
-                    
-                    if (blockID != 0) {
-                        node->chunk->Set(x, y, z, blockID);
-                        hasBlocks = true;
+                    for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
+                        int wy = worldY + (y - 1) * scale; 
                         
-                        // Update Tight AABB
-                        float blockBase = (float)wy;
-                        float blockTop = blockBase + scale;
-                        if (blockBase < actualMinY) actualMinY = blockBase;
-                        if (blockTop > actualMaxY) actualMaxY = blockTop;
+                        // Call the new 3D GetBlock
+                        // NOTE: GetBlock now takes (x,y,z, lod)
+                        uint8_t blockID = m_generator->GetBlock(wx, (float)wy, wz, scale);
+                        
+                        if (blockID != 0) {
+                            node->chunk->Set(x, y, z, blockID);
+                            hasBlocks = true;
+                            
+                            // Update Tight AABB
+                            float blockBase = (float)wy;
+                            float blockTop = blockBase + scale;
+                            if (blockBase < actualMinY) actualMinY = blockBase;
+                            if (blockTop > actualMaxY) actualMaxY = blockTop;
+                        }
                     }
                 }
             }
