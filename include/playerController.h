@@ -26,8 +26,8 @@ public:
     // Movement Speeds
     float walkSpeed = 5.0f;
     float runSpeed = 40.0f;     // Fast sprint
-    float flySpeed = 100.0f;      // Creative flight speed
-    float flySprintSpeed = 150.0f; // Shift + Fly
+    float flySpeed = 70.0f;      // Creative flight speed
+    float flySprintSpeed = 100.0f; // Shift + Fly
 
     // Physics Constants
     float jumpForce = 15.5f;

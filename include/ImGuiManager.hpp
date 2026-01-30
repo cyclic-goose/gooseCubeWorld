@@ -11,6 +11,7 @@
 #include "camera.h"
 #include "profiler.h"
 #include "terrain/terrain_system.h"
+#include "terrain/terrain_selector_ImGuiExpose.h"
 #include "playerController.h"
 
 // ================================================================================================
@@ -24,6 +25,7 @@ struct UIConfig {
     bool showWorldSettings = false; // M: World Generation
     bool showOverlay = true;        // HUD
     bool showWireframe = false;
+    bool showTerrainGui = true;
     
     // --- Sub-window Toggles (Managed by F2 master switch usually) ---
     bool showCameraControls = true;
@@ -135,6 +137,8 @@ public:
         if (config.showOverlay) RenderSimpleOverlay(config, player.camera);
 
         if (config.showGameControls) RenderGameControls(world, config, player);
+
+        if (config.showTerrainGui) {RenderTerrainControls(world, config);}
 
         // Debug Suite (F2)
         if (config.showDebugPanel) {
@@ -534,6 +538,29 @@ private:
     // *********** TODO: Just make these another tab in the menu
 
 
+    void RenderTerrainControls(World& world, UIConfig& config) {
+        ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
+        if (config.isGameMode) ImGui::SetNextWindowBgAlpha(0.6f);
+
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 330, vp->WorkPos.y + 16), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(310, 300), ImGuiCond_FirstUseEver);
+        
+        if (ImGui::Begin("Terrain Generation (T)", &config.showTerrainGui, flags)) {
+            ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
+            GeneratorSelector::Render(world);
+
+            if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
+                world.Reload(*config.editConfig);
+            }
+
+            ImGui::End();
+        }
+
+
+    }
+
+
 
     void RenderCullerControls(World& world, UIConfig& config) {
         ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
@@ -585,7 +612,7 @@ private:
         if (ImGui::Begin("StatsOverlay", nullptr, flags)) {
             ImGui::SetWindowFontScale(config.FPS_OVERLAY_FONT_SCALE);
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "FPS: %.1f", ImGui::GetIO().Framerate);
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[ESC] Menu | [T] Random Seed | [SPCBAR x 2] Toggle Creative \n Mouse Lock/Unlock [TAB] Mouse Lock/Unlock | [F2] Debug Menus\n");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[ESC] Menu | [T] Terrain Gen | [SPCBAR x 2] Toggle Creative \n Mouse Lock/Unlock [TAB] Mouse Lock/Unlock | [F2] Debug Menus\n");
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", config.isGameMode ? "[MOUSE LOCKED]" : "[MOUSE UNLOCKED]");
             ImGui::Separator();
             ImGui::Text("XYZ: %.1f, %.1f, %.1f", camera.Position.x, camera.Position.y, camera.Position.z);
@@ -678,7 +705,7 @@ private:
             ImGui::Text("Pool Tasks: %zu", world.m_pool.GetQueueSize());
             
             // grab all of the ImGui controls its that easy
-            world.GetGenerator()->OnImGui();
+            //world.GetGenerator()->OnImGui();
             if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
                 world.Reload(*config.editConfig);
             }

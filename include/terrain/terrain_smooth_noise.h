@@ -1,7 +1,8 @@
 #pragma once
 #include "terrain_system.h"
 #include <algorithm>
-//#include "profiler.h"
+#include <vector>
+#include <cmath>
 
 #ifndef IMGUI_VERSION
 // forward declaration or include your imgui header here if needed
@@ -40,6 +41,9 @@ public:
     // In 3D, this is a density check. > 0 is solid, < 0 is air.
     float GetDensity(float x, float y, float z) const;
     
+    // Batched Generation (Matches AdvancedGenerator pattern)
+    void GenerateChunk(Chunk* chunk, int cx, int cy, int cz, int lodScale) override;
+
     uint8_t GetBlock(float x, float y, float z, int lodScale) const override;
     void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) override;
     
@@ -73,9 +77,9 @@ void OverhangGenerator::Init() {
 std::vector<std::string> OverhangGenerator::GetTexturePaths() const {
     return {
         "resources/textures/dirt1.jpg",  // 1
-        "resources/textures/dirt1.jpg",   // 2
+        "resources/textures/dirt1.jpg",  // 2
         "resources/textures/dirt1.jpg",  // 3
-        "resources/textures/dirt1.jpg"   // 4 (Example: Overhang bottom)
+        "resources/textures/dirt1.jpg"   // 4
     };
 }
 
@@ -103,6 +107,112 @@ void OverhangGenerator::GetHeightBounds(int cx, int cz, int scale, int& minH, in
     maxH = m_settings.maxTerrainHeight;
 }
 
+void OverhangGenerator::GenerateChunk(Chunk* chunk, int cx, int cy, int cz, int lodScale) {
+    static thread_local std::vector<float> bufNoise;
+
+    int P = CHUNK_SIZE_PADDED;
+    // We generate P+1 on the Y axis so we can peek "densityAbove" for the top-most voxel in the loop
+    // without doing a separate slow lookup.
+    int sizeX = P;
+    int sizeY = P + 1;
+    int sizeZ = P;
+    int totalSize = sizeX * sizeY * sizeZ;
+
+    if (bufNoise.size() != totalSize) {
+        bufNoise.resize(totalSize);
+    }
+
+    // 1. Coordinates setup
+    float scale = m_settings.noiseScale;
+    float yStretch = m_settings.yStretch;
+    
+    // World space start positions
+    // Note: chunk indices are 1-based padded in current architecture (index 1 is world 0 local)
+    // Formula: (ChunkCoord * Size - PaddingOffset) * LOD
+    float startX = (cx * CHUNK_SIZE - 1) * lodScale * scale;
+    float startY = ((cy * CHUNK_SIZE * lodScale) - (1 * lodScale)) * scale * yStretch;
+    float startZ = (cz * CHUNK_SIZE - 1) * lodScale * scale;
+
+    float stepX = lodScale * scale;
+    float stepY = lodScale * scale * yStretch;
+    float stepZ = lodScale * scale;
+
+    // 2. Generate 3D Noise Grid
+    // FastNoise Output order: X then Y then Z
+    m_noise3D->GenUniformGrid3D(bufNoise.data(), 
+                                startX, startY, startZ, 
+                                sizeX, sizeY, sizeZ, 
+                                stepX, stepY, stepZ, 
+                                m_settings.seed);
+
+    // 3. Iterate and fill voxels
+    uint8_t* voxels = chunk->voxels;
+    int worldYBase = (cy * CHUNK_SIZE * lodScale) - (1 * lodScale);
+    float gradientCenter = m_settings.gradientCenter;
+    float gradientFalloff = m_settings.gradientFalloff;
+    float threshold = m_settings.threshold;
+    int hardFloor = m_settings.hardFloor;
+    int maxH = m_settings.maxTerrainHeight;
+
+    for (int z = 0; z < P; z++) {
+        for (int x = 0; x < P; x++) {
+            
+            int colBaseIdx = x + (z * P); 
+            int strideY = P * P; // Voxel array stride
+
+            // Buffer Indexing: FastNoise X, Y, Z order
+            // Base offset for this X,Z column in the noise buffer
+            // noiseIdx = x + (y * sizeX) + (z * sizeX * sizeY)
+            int noiseColBase = x + (z * sizeX * sizeY);
+
+            for (int y = 0; y < P; y++) {
+                int wy = worldYBase + (y * lodScale);
+                int idxVoxel = colBaseIdx + (y * strideY);
+                
+                // Hard Limits
+                if (wy < hardFloor) {
+                    voxels[idxVoxel] = 3; // Bedrock/Stone
+                    continue;
+                }
+                if (wy > maxH) {
+                    voxels[idxVoxel] = 0; // Air
+                    continue;
+                }
+
+                // Calculate Density (Noise + Gradient)
+                int bufIdx = noiseColBase + (y * sizeX);
+                float n = bufNoise[bufIdx];
+                float heightGradient = -((wy - gradientCenter) / gradientFalloff);
+                float density = n + heightGradient;
+
+                if (density > threshold) {
+                    // Check "Density Above" to determine surface type
+                    // We peek at y+1 in the noise buffer
+                    int bufIdxAbove = noiseColBase + ((y + 1) * sizeX);
+                    float nAbove = bufNoise[bufIdxAbove];
+                    
+                    // Note: This gradient check technically assumes 'wy + lodScale'. 
+                    // Ideally for exact grass at LOD1 we check 'wy + 1', but for optimization
+                    // at LOD > 1, checking the next grid point is standard.
+                    float wyAbove = wy + lodScale; 
+                    float gradAbove = -((wyAbove - gradientCenter) / gradientFalloff);
+                    float densityAbove = nAbove + gradAbove;
+
+                    if (densityAbove <= threshold) {
+                        voxels[idxVoxel] = 1; // Grass
+                    } else if (densityAbove < threshold + 0.2f) {
+                        voxels[idxVoxel] = 2; // Dirt
+                    } else {
+                        voxels[idxVoxel] = 3; // Stone
+                    }
+                } else {
+                    voxels[idxVoxel] = 0; // Air
+                }
+            }
+        }
+    }
+}
+
 uint8_t OverhangGenerator::GetBlock(float x, float y, float z, int lodScale) const {
     //Engine::Profiler::ScopedTimer timer("3D Noise World:: Get BLOCK");
     if (y < m_settings.hardFloor) return 3; // Bedrock/Stone floor
@@ -113,11 +223,7 @@ uint8_t OverhangGenerator::GetBlock(float x, float y, float z, int lodScale) con
     if (density > m_settings.threshold) {
         // It is solid. Now determine WHAT block.
         
-        // FIX: The surface check must be LOD-invariant. 
-        // We always check exactly 1 unit (1 block) above in world space, 
-        // regardless of the current LOD scale. 
-        // Old faulty logic: y + (1.0f * lodScale) -> Caused seams between LODs.
-        
+        // FIX: The surface check must be LOD-invariant for physics queries.
         float densityAbove = GetDensity(x, y + 1.0f, z);
 
         if (densityAbove <= m_settings.threshold) {

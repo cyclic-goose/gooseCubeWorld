@@ -35,6 +35,7 @@
 #include "terrain/terrain_smooth_noise.h"
 #include "terrain/terrain_standard_gen_fast.h"
 #include "terrain/advancedGenerator.h"
+#include "terrain/terrain_bizzaro_world.h"
 
 
 // ======================================================================================
@@ -181,34 +182,35 @@ void processInput(GLFWwindow *window, World& world) {
     // ==========================================================
     
     if (Input::IsJustPressed(window, GLFW_KEY_T)) { // 'T' for Terraforming
-        if (world.IsBusy())
-        {
-            std::cout << "World is still generating. Please Wait..." << std::endl;
-        }else if (switchCooldown > 0.0f) 
-        {
-            std::cout << "Generation on cooldown..." << std::endl;
+        appState.showTerrainGui = !appState.showTerrainGui;
+        // if (world.IsBusy())
+        // {
+        //     std::cout << "World is still generating. Please Wait..." << std::endl;
+        // }else if (switchCooldown > 0.0f) 
+        // {
+        //     std::cout << "Generation on cooldown..." << std::endl;
         
-        } else {
-            std::cout << "[Main] Switching Generator..." << std::endl;
+        // } else {
+        //     std::cout << "[Main] Switching Generator..." << std::endl;
 
-            // Create the NEW Generator (e.g. Mars Generator)
-            // auto newGen = std::make_unique<MarsGenerator>(12345); 
-            // For now, let's just re-create Standard with a different seed to simulate a switch
-            auto newGen = std::make_unique<AdvancedGenerator>(rand());
+        //     // Create the NEW Generator (e.g. Mars Generator)
+        //     // auto newGen = std::make_unique<MarsGenerator>(12345); 
+        //     // For now, let's just re-create Standard with a different seed to simulate a switch
+        //     // auto newGen = std::make_unique<AdvancedGenerator>(rand());
 
-            // Load Textures for the NEW Generator
-            // Important: We must unload the old array if we are strictly managing VRAM, 
-            // but typically we just overwrite the ID reference in World.
-            // Ideally, TextureManager should have a 'DeleteTexture(id)' method.
-            std::vector<std::string> newPaths = newGen->GetTexturePaths();
-            GLuint newTexArray = TextureManager::LoadTextureArray(newPaths);
+        //     // // Load Textures for the NEW Generator
+        //     // // Important: We must unload the old array if we are strictly managing VRAM, 
+        //     // // but typically we just overwrite the ID reference in World.
+        //     // // Ideally, TextureManager should have a 'DeleteTexture(id)' method.
+        //     // std::vector<std::string> newPaths = newGen->GetTexturePaths();
+        //     // GLuint newTexArray = TextureManager::LoadTextureArray(newPaths);
 
-            // Inject into World
+        //     // // Inject into World
             
-            // Call the helper (assuming you added it to World class)
-            world.SwitchGenerator(std::move(newGen), newTexArray);
-            switchCooldown = 2.0f;
-        }
+        //     // // Call the helper (assuming you added it to World class)
+        //     // world.SwitchGenerator(std::move(newGen), newTexArray);
+        //     // switchCooldown = 2.0f;
+        // }
         
     }
 
@@ -307,7 +309,7 @@ int main() {
 
 
 
-        // create our terrain generation by choosing which class we send in
+        // create our start terrain generator by choosing which class we send in
         auto defaultTerrainGenerator = std::make_unique<AdvancedGenerator>(); // seed input
         // Ask the generator what textures it needs
         std::vector<std::string> texturePaths = defaultTerrainGenerator->GetTexturePaths();
