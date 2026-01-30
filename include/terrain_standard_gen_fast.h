@@ -106,6 +106,9 @@ public:
     // --------------------------------------------------------------------------------------------
     // OPTIMIZED BATCHED GENERATION
     // --------------------------------------------------------------------------------------------
+    // --------------------------------------------------------------------------------------------
+    // OPTIMIZED BATCHED GENERATION
+    // --------------------------------------------------------------------------------------------
     void GenerateChunk(Chunk* chunk, int cx, int cy, int cz, int lodScale) override {
         static thread_local std::vector<float> bufBase;
         static thread_local std::vector<float> bufMount;
@@ -122,89 +125,55 @@ public:
             bufCaves.resize(size3D);
         }
 
-        // -----------------------------------------------------------------------
-        // COORDINATE MATH FIX
-        // -----------------------------------------------------------------------
-        // startX is in "Chunk Grid Units" (indices). 
-        // 1 Index Unit = 1 * lodScale in World Space.
+        // World Coordinates
         int32_t startX = (cx * CHUNK_SIZE) - 1;
         int32_t startY = (cy * CHUNK_SIZE) - 1;
         int32_t startZ = (cz * CHUNK_SIZE) - 1;
 
         // -----------------------------------------------------------------------
-        // STEP 1: GENERATE HEIGHTMAP (2D Batch)
+        // STEP 1: GENERATE HEIGHTMAP
         // -----------------------------------------------------------------------
-        
         float hillFreq = m_settings.hillFrequency * m_settings.scale;
         float hillStep = hillFreq * (float)lodScale;
-        
-        // FIX: Use hillStep for offset, not hillFreq. 
-        // Logic: WorldPos = startX * lodScale. 
-        // NoisePos = WorldPos * hillFreq = startX * lodScale * hillFreq = startX * hillStep.
-        float hillOffX = (float)startX * hillStep; 
+        float hillOffX = (float)startX * hillStep;
         float hillOffZ = (float)startZ * hillStep;
 
-        m_baseNoise->GenUniformGrid2D(
-            bufBase.data(),
-            hillOffX, hillOffZ,
-            CHUNK_SIZE_PADDED, CHUNK_SIZE_PADDED,
-            hillStep, hillStep, 
-            m_settings.seed
-        );
+        // Note: FastNoise UniformGrid2D output is X-Major (Index = x + y * width)
+        // Since we pass (width, width), our buffer is buf[x + z * P]
+        m_baseNoise->GenUniformGrid2D(bufBase.data(), hillOffX, hillOffZ, CHUNK_SIZE_PADDED, CHUNK_SIZE_PADDED, hillStep, hillStep, m_settings.seed);
 
         float mountFreq = m_settings.mountainFrequency * m_settings.scale;
         float mountStep = mountFreq * (float)lodScale;
         float mountOffX = (float)startX * mountStep;
         float mountOffZ = (float)startZ * mountStep;
 
-        m_mountainNoise->GenUniformGrid2D(
-            bufMount.data(),
-            mountOffX, mountOffZ,
-            CHUNK_SIZE_PADDED, CHUNK_SIZE_PADDED,
-            mountStep, mountStep, 
-            m_settings.seed + 1
-        );
+        m_mountainNoise->GenUniformGrid2D(bufMount.data(), mountOffX, mountOffZ, CHUNK_SIZE_PADDED, CHUNK_SIZE_PADDED, mountStep, mountStep, m_settings.seed + 1);
 
         int seaLevel = m_settings.seaLevel;
         float hillAmp = m_settings.hillAmplitude;
         float mountAmp = m_settings.mountainAmplitude;
-        
+
         for(size_t i = 0; i < heightMap.size(); i++) {
             float baseVal = bufBase[i];
-            float mountVal = bufMount[i];
-            
-            mountVal = std::abs(mountVal);
-            mountVal = mountVal * mountVal;
-
-            float totalH = (baseVal * hillAmp) + (mountVal * mountAmp);
-            heightMap[i] = seaLevel + (int)std::floor(totalH);
+            float mountVal = std::abs(bufMount[i]);
+            mountVal *= mountVal;
+            heightMap[i] = seaLevel + (int)std::floor((baseVal * hillAmp) + (mountVal * mountAmp));
         }
 
         // -----------------------------------------------------------------------
-        // STEP 2: GENERATE CAVES (3D Batch)
+        // STEP 2: GENERATE CAVES
         // -----------------------------------------------------------------------
         bool doCaves = (lodScale == 1); 
         if (doCaves) {
-            float caveScaleX = 0.02f;
-            float caveScaleY = 0.04f; // Y is stretched 2x (0.04 vs 0.02)
-            float caveScaleZ = 0.02f;
+            float cX = 0.02f, cY = 0.04f, cZ = 0.02f;
+            float sX = cX * lodScale, sY = cY * lodScale, sZ = cZ * lodScale;
+            float oX = startX * sX, oY = startY * sY, oZ = startZ * sZ;
 
-            float stepX = caveScaleX * (float)lodScale;
-            float stepY = caveScaleY * (float)lodScale;
-            float stepZ = caveScaleZ * (float)lodScale;
-
-            // FIX: Offset must also scale by step/lod relation
-            float offX = (float)startX * stepX;
-            float offY = (float)startY * stepY;
-            float offZ = (float)startZ * stepZ;
-
-            m_caveNoise->GenUniformGrid3D(
-                bufCaves.data(),
-                offX, offY, offZ,
-                CHUNK_SIZE_PADDED, CHUNK_SIZE_PADDED, CHUNK_SIZE_PADDED,
-                stepX, stepY, stepZ, 
-                m_settings.seed
-            );
+            // FastNoise UniformGrid3D is X-Fastest: Index = x + (y * sizeX) + (z * sizeX * sizeY)
+            // Wait, Standard FastNoise 3D order is usually X, Y, Z.
+            // Check signature: (out, xOff, yOff, zOff, xSize, ySize, zSize...)
+            // Output index: x + xSize * y + xSize * ySize * z
+            m_caveNoise->GenUniformGrid3D(bufCaves.data(), oX, oY, oZ, CHUNK_SIZE_PADDED, CHUNK_SIZE_PADDED, CHUNK_SIZE_PADDED, sX, sY, sZ, m_settings.seed);
         }
 
         // -----------------------------------------------------------------------
@@ -212,49 +181,44 @@ public:
         // -----------------------------------------------------------------------
         uint8_t* voxels = chunk->voxels;
         float caveThresh = m_settings.caveThreshold;
-        
         int worldYBase = (cy * CHUNK_SIZE * lodScale) - (1 * lodScale);
+        
+        // Pointers for stride optimization
+        int strideY = CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED; // New Chunk Layout Y-stride
+        int strideZ = CHUNK_SIZE_PADDED;                     // New Chunk Layout Z-stride
 
-        for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
-            for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
+        for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
+            for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
                 
-                // FastNoise GenUniformGrid2D is X-Major (x + width*y)
-                // Our inputs were (OffX, OffZ). So X is inner, Z is outer.
-                // Index = x + (CHUNK_SIZE_PADDED * z)
-                int idxHeight = x + (CHUNK_SIZE_PADDED * z);
+                // Heightmap Index: X is fast, Z is slow (matches FastNoise 2D)
+                int idxHeight = x + (z * CHUNK_SIZE_PADDED);
                 int height = heightMap[idxHeight];
 
+                // Chunk Index Base for this Column (x, z)
+                // New Chunk Layout: x + z*P + y*P*P
+                int colBaseIdx = x + (z * strideZ);
+
                 for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
-                    
-                    // Chunk storage is (x*P*P) + (z*P) + y (matches Chunk.h)
-                    int idxVoxel = (x * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED) + (z * CHUNK_SIZE_PADDED) + y;
                     int wy = worldYBase + (y * lodScale);
+                    int idxVoxel = colBaseIdx + (y * strideY);
+                    
                     uint8_t blockID = 0;
 
-                    if (wy > height) {
-                        blockID = 0; // Air
-                    } else {
-                        blockID = 3; // Stone default
-
-                        if (wy == height) {
-                            blockID = (wy > 180) ? 4 : 1; 
-                        } else if (wy > height - (4 * lodScale)) {
-                            blockID = 2; // Dirt
-                        } else if (wy == 0) {
-                            blockID = 4; // Bedrock
-                        }
+                    if (wy <= height) {
+                        blockID = 3; // Stone
+                        if (wy == height) blockID = (wy > 180) ? 4 : 1; // Grass/Snow
+                        else if (wy > height - (4 * lodScale)) blockID = 2; // Dirt
+                        else if (wy == 0) blockID = 4; // Bedrock
 
                         if (doCaves) {
-                            // FastNoise 3D is X (fast), Y (med), Z (slow)
-                            // Index = x + (y * SizeX) + (z * SizeX * SizeY)
+                            // Cave Index: x + (y * P) + (z * P * P) ??
+                            // NO. FastNoise GenUniformGrid3D produces: x + (y * P) + (z * P * P)
+                            // We must match that exactly.
                             int idxCave = x + (y * CHUNK_SIZE_PADDED) + (z * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED);
-                            
-                            if (bufCaves[idxCave] > caveThresh) {
-                                blockID = 0; 
-                            }
+                            if (bufCaves[idxCave] > caveThresh) blockID = 0;
                         }
                     }
-                    // Write directly to linear array
+                    
                     voxels[idxVoxel] = blockID;
                 }
             }
