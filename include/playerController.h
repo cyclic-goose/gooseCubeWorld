@@ -25,12 +25,12 @@ public:
     
     // Movement Speeds
     float walkSpeed = 5.0f;
-    float runSpeed = 40.0f;     // Fast sprint
-    float flySpeed = 70.0f;      // Creative flight speed
-    float flySprintSpeed = 100.0f; // Shift + Fly
+    float runSpeed = 25.0f;     // Fast sprint
+    float flySpeed = 100.0f;      // Creative flight speed
+    float flySprintSpeed = 140.0f; // Shift + Fly
 
     // Physics Constants
-    float jumpForce = 15.5f;
+    float jumpForce = 10.5f;
     float gravity = 22.0f;       // Snappy gravity
     float groundDrag = 8.0f;     // High friction for tight controls
     float airDrag = 1.0f;        // Lower friction in air

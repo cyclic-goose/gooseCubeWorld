@@ -15,25 +15,46 @@
 // ================================================================================================
 class OverhangGenerator : public ITerrainGenerator {
 public:
+    // struct OverhangSettings {
+    //     int seed = 5678;
+        
+    //     // Noise Shape
+    //     float noiseScale = 0.128f;    // General zoom
+    //     float yStretch = 2.6f;        // Vertical stretch (higher = taller/thinner features)
+    //     int octaves = 5;
+    //     float gain = 0.038f;
+    //     float lacunarity = 1.0f;
+
+    //     // Density Logic
+    //     float threshold = -0.6f;       // Surface cut-off (Density > this is solid)
+    //     float gradientCenter = 91.0f; // Height where density is purely noise (0 bias)
+    //     float gradientFalloff = 200.0f;// Range over which density fades to air
+        
+    //     // Limits
+    //     int hardFloor = 0;           // Bedrock level
+    //     int maxTerrainHeight = 512;   // Optimisation cap
+    // };
+
     struct OverhangSettings {
         int seed = 5678;
         
         // Noise Shape
-        float noiseScale = 0.094f;    // General zoom
-        float yStretch = 1.5f;        // Vertical stretch (higher = taller/thinner features)
-        int octaves = 5;
-        float gain = 0.8f;
-        float lacunarity = 2.0f;
+        float noiseScale = 0.200f;    // General zoom
+        float yStretch = 5.0f;        // Vertical stretch (higher = taller/thinner features)
+        int octaves = 8;
+        float gain = 0.838f;
+        float lacunarity = 1.0f;
 
         // Density Logic
-        float threshold = 0.0f;       // Surface cut-off (Density > this is solid)
-        float gradientCenter = 64.0f; // Height where density is purely noise (0 bias)
-        float gradientFalloff = 64.0f;// Range over which density fades to air
+        float threshold = -0.6f;       // Surface cut-off (Density > this is solid)
+        float gradientCenter = 256.0f; // Height where density is purely noise (0 bias)
+        float gradientFalloff = 90.0f;// Range over which density fades to air
         
         // Limits
-        int hardFloor = 10;           // Bedrock level
-        int maxTerrainHeight = 256;   // Optimisation cap
+        int hardFloor = 0;           // Bedrock level
+        int maxTerrainHeight = 512;   // Optimisation cap
     };
+
 
     OverhangGenerator();
     void Init() override;
@@ -254,7 +275,7 @@ void OverhangGenerator::OnImGui() {
     if(ImGui::SliderFloat("Scale", &m_settings.noiseScale, 0.008f, 0.2f)) changed = true;
     if(ImGui::SliderFloat("Y Stretch", &m_settings.yStretch, 0.1f, 5.0f)) changed = true;
     if(ImGui::SliderInt("Octaves", &m_settings.octaves, 1, 8)) changed = true;
-    if(ImGui::SliderFloat("Gain", &m_settings.gain, 0.0f, 1.0f)) changed = true;
+    if(ImGui::SliderFloat("Gain", &m_settings.gain, 0.0f, 2.0f)) changed = true;
     if(ImGui::SliderFloat("Lacunarity", &m_settings.lacunarity, 1.0f, 4.0f)) changed = true;
 
     ImGui::Separator();
@@ -265,7 +286,7 @@ void OverhangGenerator::OnImGui() {
     
     ImGui::Separator();
     if(ImGui::DragInt("Hard Floor", &m_settings.hardFloor, 1, 0, 64)) changed = true;
-    if(ImGui::DragInt("Max Height", &m_settings.maxTerrainHeight, 1, 128, 512)) changed = true;
+    if(ImGui::DragInt("Max Height", &m_settings.maxTerrainHeight, 1, 128, 1024)) changed = true;
 
     if (changed) {
         m_dirty = true; 

@@ -53,6 +53,7 @@ const bool START_FULLSCREEN = true;
 // Camera 
 //Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
 Player player(glm::vec3(-529.0f, 76.0f, 61.0f));
+//Player player(glm::vec3(4855.0f, 100.0f, -4005.0f)); // debug spot back when I needed to find this spot, turned out i was sampling the noise generator wrong resulting in bad terrain at LOD 0
 
 // Mouse State
 float lastX = SCR_WIDTH / 2.0f;

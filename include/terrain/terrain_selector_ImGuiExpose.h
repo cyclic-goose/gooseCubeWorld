@@ -6,6 +6,8 @@
 #include "advancedGenerator.h"
 #include "terrain_smooth_noise.h"
 #include "terrain_bizzaro_world.h"
+#include "terrain_beach_world.h"
+#include "terrain_beach_world_2.h"
 
 // Direct import of your World class
 #include "world.h"
@@ -28,7 +30,9 @@ namespace GeneratorSelector {
     static const char* genNames[] = { 
         "Advanced (Standard)", 
         "Overhang (3D Noise)", 
-        "Bizzaro (Crater World)" 
+        "Bizzaro (Crater World)",
+        "Beach World (3D)",
+        "Experimental"
     };
 
     // Factory function to create generators based on index
@@ -37,6 +41,8 @@ namespace GeneratorSelector {
             case 0: return std::make_unique<AdvancedGenerator>(seed);
             case 1: return std::make_unique<OverhangGenerator>(); 
             case 2: return std::make_unique<BizzaroGenerator>();
+            case 3: return std::make_unique<BeachGenerator>();
+            case 4: return std::make_unique<ComplexBiomeGenerator>();
             default: return std::make_unique<AdvancedGenerator>(seed);
         }
     }

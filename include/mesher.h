@@ -21,7 +21,9 @@ inline uint32_t ctz(uint32_t x) {
 }
 
 inline bool IsTransparent(uint8_t id) {
-    return id == 6 || id == 7; // Water/Glass
+    // SHOULD add leaves (14=Oak, 16=Pine) to transparent list.
+    // but i need to work on how its handled for occlusion, i really need to fix AABB tighening system because right now system sees entire tree as a 32x32x32 occluder which creates many false positive
+    return id == 6 || id == 7;
 }
 
 inline bool IsOpaque(uint8_t id) {
