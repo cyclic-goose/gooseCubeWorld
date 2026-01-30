@@ -189,7 +189,7 @@ void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, c
         m_cullShader->setBool("u_OcclusionEnabled", false);
     }
 
-    // FIX: Binding 4 matches CULL_COMPUTE.glsl
+    // MATCH THESE NUMBERS TO SHADER FILE BUFFERS
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, m_globalChunkBuffer); 
     
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_indirectBufferOpaque);      

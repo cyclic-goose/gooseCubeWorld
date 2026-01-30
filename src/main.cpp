@@ -396,7 +396,7 @@ int main() {
             // World Draw
             // Triggers: Cull(PrevDepth) -> MultiDrawIndirect, then HI-Z occlusion calc for next frame
             // see GPU_CULLING_RENDER_SYSTEM.md for render pipeline info
-            world.Draw(worldShader, viewProj, lockedCullMatrix, prevViewProj, projection, 
+            world.Draw(worldShader, viewProj, prevViewProj, projection, 
                        curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum);
 
 
@@ -409,9 +409,9 @@ int main() {
             glfwPollEvents();
 
             // Reprojection History
-            if (!appState.lockFrustum) {
-                prevViewProj = viewProj;
-            }
+            
+            prevViewProj = viewProj;
+            
         }
     }
     

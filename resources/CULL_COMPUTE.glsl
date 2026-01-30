@@ -156,7 +156,7 @@ bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
     float furthestOccluder = min(d5, min(min(d1, d2), min(d3, d4)));
     
     // 5. Compare
-    return maxZ < (furthestOccluder - 0.0001);
+    return maxZ < (furthestOccluder - 0.002);
 }
 
 void main() {

@@ -540,11 +540,11 @@ public:
         }
     }
 
-    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& cullViewMatrix,const glm::mat4& previousViewMatrix, const glm::mat4& proj, const int CUR_SCR_WIDTH, const int CUR_SCR_HEIGHT, Shader* depthDebugShader, bool depthDebug, bool frustumLock) {
+    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& previousViewProjMatrix, const glm::mat4& proj, const int CUR_SCR_WIDTH, const int CUR_SCR_HEIGHT, Shader* depthDebugShader, bool depthDebug, bool frustumLock) {
         if(m_shutdown) return;
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
-            m_culler->Cull(cullViewMatrix, previousViewMatrix, proj, g_fbo.hiZTex);
+            m_culler->Cull(viewProj, previousViewProjMatrix, proj, g_fbo.hiZTex);
             Engine::Profiler::Get().EndGPU();
         }
         {   
