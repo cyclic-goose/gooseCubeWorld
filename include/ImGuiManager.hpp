@@ -25,7 +25,7 @@ struct UIConfig {
     bool showWorldSettings = false; // M: World Generation
     bool showOverlay = true;        // HUD
     bool showWireframe = false;
-    bool showTerrainGui = true;
+    bool showTerrainGui = false;
     
     // --- Sub-window Toggles (Managed by F2 master switch usually) ---
     bool showCameraControls = true;
@@ -287,7 +287,7 @@ private:
                                         if(i < (int)selected.radii.size()) 
                                         config.editConfig->settings.lodRadius[i] = selected.radii[i];
                                     }
-                                    world.Reload(*config.editConfig);
+                                    world.ReloadWorld(*config.editConfig);
                                 }
                         }
                         
@@ -317,7 +317,7 @@ private:
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Level 1-6: Standard Playable Area\nLevel 7-9: Far Horizon\nLevel 10+: Extreme Distance");
                             
                             if (ImGui::IsItemDeactivatedAfterEdit()) {
-                                world.Reload(*config.editConfig);
+                                world.ReloadWorld(*config.editConfig);
                             }
                         }
                         
@@ -341,7 +341,7 @@ private:
                                     ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig->settings.lodRadius[i], 2, (int)(64.0));
                                     
                                     if (ImGui::IsItemDeactivatedAfterEdit()) {
-                                        world.Reload(*config.editConfig);
+                                        world.ReloadWorld(*config.editConfig);
                                     }
                                 }
                             }
@@ -351,7 +351,7 @@ private:
                         ImGui::Spacing();
                         ImGui::Separator();
                         if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
-                            world.Reload(*config.editConfig);
+                            world.ReloadWorld(*config.editConfig);
                         }
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("SPAMMING THIS CAN CAUSE VRAM CRASH. ALLOW WORLD TO GENERATE");
                         ImGui::EndTabItem();
@@ -526,7 +526,7 @@ private:
             GeneratorSelector::Render(world);
 
             if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
-                world.Reload(*config.editConfig);
+                world.ReloadWorld(*config.editConfig);
             }
 
             ImGui::End();
@@ -625,15 +625,15 @@ private:
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "GPU MEMORY");
             ImGui::Separator();
-            size_t used = world.m_gpuMemory->GetUsedMemory();
-            size_t total = world.m_gpuMemory->GetTotalMemory();
+            size_t used = world.getVRAMUsed();
+            size_t total = world.getVRAMAllocated();
             float usedMB = (used / 1024.0f / 1024.0f);
             float totalMB = VRAM_HEAP_SIZE_MB;
             float ratio = (float)used / (float)total;
             
             ImGui::Text("VRAM: %.1f / %.1f MB", usedMB, totalMB);
             ImGui::ProgressBar(ratio, ImVec2(-1.0f, 15.0f));
-            ImGui::Text("Fragmentation: %zu free blocks", world.m_gpuMemory->GetFreeBlockCount());
+            ImGui::Text("Fragmentation: %zu free blocks", world.getVRAMFreeBlocks());
 
             // --- Geometry ---
             ImGui::Spacing();
@@ -642,12 +642,13 @@ private:
             
             size_t activeChunks = 0;
             size_t totalVertices = 0;
-            for (const auto& pair : world.m_chunks) {
-                if (pair.second->state == ChunkState::ACTIVE) {
-                    activeChunks++;
-                    totalVertices += pair.second->vertexCountOpaque;
-                }
-            }
+            world.calculateTotalVertices(activeChunks, totalVertices);
+            // for (const auto& pair : world.m_chunks) {
+            //     if (pair.second->state == ChunkState::ACTIVE) {
+            //         activeChunks++;
+            //         totalVertices += pair.second->vertexCountOpaque;
+            //     }
+            // }
             
             ImGui::Text("Active Chunks: %zu", activeChunks);
             ImGui::Text("Resident Vertices: %s", FormatNumber(totalVertices).c_str());
@@ -677,12 +678,12 @@ private:
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "THREADING");
             ImGui::Separator();
-            ImGui::Text("Pool Tasks: %zu", world.m_pool.GetQueueSize());
+            //ImGui::Text("Pool Tasks: %zu", world.m_pool.GetQueueSize());
             
             // grab all of the ImGui controls its that easy
             //world.GetGenerator()->OnImGui();
             if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
-                world.Reload(*config.editConfig);
+                world.ReloadWorld(*config.editConfig);
             }
 
 

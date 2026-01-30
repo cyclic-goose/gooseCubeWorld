@@ -100,6 +100,13 @@ public:
             config.SpeedWalk = 2.0f; config.SpeedSprint = 3.5f; 
             config.SpeedFly = 5.0f;
             config.BobAmplitude = 0.02f; // Almost no bob
+        }else if (name == "FAST") {
+            config.SpeedWalk = 6.0f; config.SpeedSprint = 25.5f; 
+            config.SpeedFly = 50.0f;
+            config.BobAmplitude = 0.00f; // Almost no bob
+            config.JumpForce = 40.0f;
+            config.SpeedFlySprint = 120.0f;
+            
         }
     }
 
@@ -119,6 +126,7 @@ public:
             if (ImGui::Selectable("Minecraft (Default)")) ApplyPreset("Minecraft (Default)");
             if (ImGui::Selectable("Quake (Fast)"))        ApplyPreset("Quake (Fast)");
             if (ImGui::Selectable("Cinematic (Slow)"))    ApplyPreset("Cinematic (Slow)");
+            if (ImGui::Selectable("FAST"))    ApplyPreset("FAST");
             ImGui::EndCombo();
         }
 
