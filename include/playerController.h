@@ -5,59 +5,219 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <iomanip>
+#include <string>
+
+#ifdef IMGUI_VERSION
+#include "imgui.h"
+#endif
+
+// =============================================================
+// CONFIGURATION STRUCT
+// =============================================================
+struct PlayerConfig {
+    // --- Dimensions (Units: Blocks/Meters) ---
+    float PlayerWidth       = 0.6f;
+    float PlayerHeight      = 1.8f;
+    float EyeLevelNormal    = 1.62f;
+    float EyeLevelSneak     = 1.27f;
+
+    // --- Movement Speeds (Units: Blocks/Second) ---
+    float SpeedWalk         = 4.317f;
+    float SpeedSprint       = 5.612f;
+    float SpeedSneak        = 1.295f;
+    float SpeedFly          = 10.92f;
+    float SpeedFlySprint    = 21.6f;
+
+    // --- Physics Constants ---
+    float Gravity           = 32.0f;        // Downward acceleration (m/s^2)
+    float JumpForce         = 9.0f;         // Initial upward velocity
+    float TerminalVelocity  = -78.4f;       // Max falling speed
+
+    // --- Inertia & Friction (Higher = Snappier stops) ---
+    float DragGround        = 10.0f;        // Friction on ground
+    float DragAir           = 1.5f;         // Air control friction
+    float DragFly           = 5.0f;         // Flying friction
+
+    // --- View Bobbing Settings ---
+    float BobFrequency      = 10.0f;
+    float BobAmplitude      = 0.07f;
+    float BobSprintMult     = 1.25f;         // Multiplier for freq/amp when sprinting
+};
 
 class Player {
 public:
     Camera camera;
     glm::vec3 position;
     glm::vec3 velocity;
-    
-    // --- State ---
-    bool isCreativeMode = false; // Flying, No Gravity
-    bool isSprinting = false;
-    bool onGround = false;
 
-    // --- Settings ---
-    // Physical dimensions
-    float width = 0.6f;
-    float height = 1.8f;
-    float eyeLevel = 1.6f; 
-    
-    // Movement Speeds
-    float walkSpeed = 5.0f;
-    float runSpeed = 25.0f;     // Fast sprint
-    float flySpeed = 100.0f;      // Creative flight speed
-    float flySprintSpeed = 140.0f; // Shift + Fly
+    // Active Configuration
+    PlayerConfig config;
 
-    // Physics Constants
-    float jumpForce = 10.5f;
-    float gravity = 22.0f;       // Snappy gravity
-    float groundDrag = 8.0f;     // High friction for tight controls
-    float airDrag = 1.0f;        // Lower friction in air
-    float flyDrag = 5.0f;        // Friction while flying (stops sliding)
+    // =============================================================
+    // DYNAMIC STATE
+    // =============================================================
+    bool isCreativeMode     = false;
+    bool isSprinting        = false;
+    bool isSneaking         = false;
+    bool onGround           = false;
 
-    // Double Tap Logic
-    float lastSpacePressTime = 0.0f;
-    bool wasSpaceDown = false;   // Fixed: Track state as member variable
+private:
+    // Store the "Factory Defaults" to allow resetting later
+    const PlayerConfig defaultConfig; 
 
+    // Internal State
+    float walkDistance      = 0.0f;         // Accumulator for bobbing sine wave
+    float lastSpaceTime     = 0.0f;         // For double-tap detection
+    bool  wasSpaceDown      = false;
+
+    // Smooth dampener for bobbing amplitude (Fixes jitter when stopping)
+    float currentBobAmplitude = 0.0f; 
+
+public:
     Player(glm::vec3 startPos) 
-        : position(startPos), velocity(0.0f) 
+        : position(startPos), velocity(0.0f), defaultConfig() 
     {
-        camera.Position = position + glm::vec3(0, eyeLevel, 0);
+        // Initialize active config with factory defaults
+        config = defaultConfig;
+        camera.Position = position + glm::vec3(0, config.EyeLevelNormal, 0);
     }
 
+    // =============================================================
+    // IMGUI INTERFACE
+    // =============================================================
+    
+    void ApplyPreset(const std::string& name) {
+        if (name == "Minecraft (Default)") {
+            config = defaultConfig;
+        } 
+        else if (name == "Quake (Fast)") {
+            config.SpeedWalk = 8.0f; config.SpeedSprint = 12.0f; 
+            config.JumpForce = 12.0f; config.Gravity = 28.0f;
+            config.DragGround = 8.0f; config.DragAir = 1.0f; // Slippery air
+        } 
+        else if (name == "Cinematic (Slow)") {
+            config.SpeedWalk = 2.0f; config.SpeedSprint = 3.5f; 
+            config.SpeedFly = 5.0f;
+            config.BobAmplitude = 0.02f; // Almost no bob
+        }
+    }
 
+    void DrawInterface() {
+#ifdef IMGUI_VERSION
+        ImGui::PushID("PlayerController"); // prevent ID collisions
+
+        // --- Header: Controls & Presets ---
+        if (ImGui::Button("Reset Defaults")) {
+            config = defaultConfig;
+        }
+        ImGui::SameLine();
+        
+        // Preset Loader
+        ImGui::SetNextItemWidth(150);
+        if (ImGui::BeginCombo("##Presets", "Load Preset...")) {
+            if (ImGui::Selectable("Minecraft (Default)")) ApplyPreset("Minecraft (Default)");
+            if (ImGui::Selectable("Quake (Fast)"))        ApplyPreset("Quake (Fast)");
+            if (ImGui::Selectable("Cinematic (Slow)"))    ApplyPreset("Cinematic (Slow)");
+            ImGui::EndCombo();
+        }
+
+        ImGui::Separator();
+
+        // --- Section 1: Read-Only State ---
+        if (ImGui::CollapsingHeader("Player Status", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("Pos: %.2f, %.2f, %.2f", position.x, position.y, position.z);
+            ImGui::Text("Vel: %.2f, %.2f, %.2f", velocity.x, velocity.y, velocity.z);
+            
+            // Visual indicators
+            ImGui::Text("Mode: "); ImGui::SameLine();
+            if (isCreativeMode) ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "Creative");
+            else                ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.4f, 1.0f), "Survival");
+
+            ImGui::SameLine(); ImGui::Text("| Ground: "); ImGui::SameLine();
+            if (onGround) ImGui::TextColored(ImVec4(0,1,0,1), "YES");
+            else          ImGui::TextColored(ImVec4(1,0,0,1), "NO");
+            
+            ImGui::Checkbox("Creative Mode (Fly)", &isCreativeMode);
+        }
+
+        // --- Section 2: Movement Configuration ---
+        if (ImGui::CollapsingHeader("Locomotion")) {
+            ImGui::Indent();
+            ImGui::TextDisabled("Ground Movement");
+            ImGui::SliderFloat("Walk Speed",   &config.SpeedWalk,   0.0f, 20.0f, "%.2f b/s");
+            ImGui::SliderFloat("Sprint Speed", &config.SpeedSprint, 0.0f, 60.0f, "%.2f b/s");
+            ImGui::SliderFloat("Sneak Speed",  &config.SpeedSneak,  0.0f, 20.0f, "%.2f b/s");
+
+            ImGui::Spacing();
+            ImGui::TextDisabled("Flight");
+            ImGui::SliderFloat("Fly Speed",    &config.SpeedFly,       0.0f, 50.0f, "%.1f b/s");
+            ImGui::SliderFloat("Fly Sprint",   &config.SpeedFlySprint, 0.0f, 100.0f, "%.1f b/s");
+            ImGui::Unindent();
+        }
+
+        // --- Section 3: Physics ---
+        if (ImGui::CollapsingHeader("Physics & Gravity")) {
+            ImGui::Indent();
+            ImGui::SliderFloat("Gravity",      &config.Gravity,       -100.0f, 100.0f);
+            ImGui::DragFloat("Jump Force",   &config.JumpForce,     0.1f, 0.0f, 90.0f);
+            ImGui::DragFloat("Terminal Vel", &config.TerminalVelocity, 1.0f, -200.0f, 0.0f);
+            
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1, 1, 0, 1), "Friction / Drag");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Higher values mean movement stops faster");
+
+            ImGui::DragFloat("Ground Drag",  &config.DragGround,    0.1f, 0.0f, 50.0f);
+            ImGui::DragFloat("Air Drag",     &config.DragAir,       0.01f, 0.0f, 20.0f);
+            ImGui::DragFloat("Fly Drag",     &config.DragFly,       0.1f, 0.0f, 20.0f);
+            ImGui::Unindent();
+        }
+
+        // --- Section 4: Body ---
+        if (ImGui::CollapsingHeader("Dimensions & View")) {
+            ImGui::Indent();
+            if (ImGui::TreeNode("Hitbox")) {
+                ImGui::DragFloat("Width",  &config.PlayerWidth,  0.01f, 0.1f, 5.0f);
+                ImGui::DragFloat("Height", &config.PlayerHeight, 0.01f, 0.1f, 5.0f);
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNode("Eye Levels")) {
+                ImGui::DragFloat("Normal", &config.EyeLevelNormal, 0.01f, 0.1f, 3.0f);
+                ImGui::DragFloat("Sneak",  &config.EyeLevelSneak,  0.01f, 0.1f, 3.0f);
+                ImGui::TreePop();
+            }
+
+            if (ImGui::TreeNode("Camera Bobbing")) {
+                ImGui::DragFloat("Frequency", &config.BobFrequency, 0.1f, 0.0f, 30.0f);
+                ImGui::DragFloat("Amplitude", &config.BobAmplitude, 0.001f, 0.0f, 1.0f);
+                ImGui::DragFloat("Sprint Mult", &config.BobSprintMult, 0.1f, 1.0f, 3.0f);
+                ImGui::TreePop();
+            }
+            ImGui::Unindent();
+        }
+
+        ImGui::PopID();
+#else
+        // If ImGui is not enabled, this function does nothing.
+        // To enable, #define ENABLE_IMGUI in your project settings.
+#endif
+    }
+
+    // =============================================================
+    // UPDATE LOOP
+    // =============================================================
     void Update(float deltaTime, GLFWwindow* window, ITerrainGenerator* terrain) {
         HandleInput(deltaTime, window);
         
         if (isCreativeMode) {
-            ApplyCreativePhysics(deltaTime); // No collision, no gravity
+            ApplyCreativePhysics(deltaTime);
         } else {
-            ApplySurvivalPhysics(deltaTime, terrain); // Gravity + Collision
+            ApplySurvivalPhysics(deltaTime, terrain);
         }
         
-        // Sync camera
-        camera.Position = position + glm::vec3(0, eyeLevel, 0);
+        UpdateCamera(deltaTime);
     }
 
     // Pass-through for camera rotation
@@ -65,131 +225,171 @@ public:
         camera.ProcessMouseMovement(xoffset, yoffset);
     }
 
-    //glm::vec3 Position() {return position;}
-
-
 private:
 
     void HandleInput(float dt, GLFWwindow* window) {
-        // --- Double Tap Space for Creative Mode ---
+        // --- Input State Reading ---
         bool isSpaceDown = (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS);
+        bool isCtrlDown  = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS);
+        bool isShiftDown = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
 
-        // Check for "Rising Edge" (Just Pressed)
+        // --- Double Tap Space (Creative Toggle) ---
         if (isSpaceDown && !wasSpaceDown) {
             float now = (float)glfwGetTime();
-            float timeSinceLast = now - lastSpacePressTime;
-
-            if (timeSinceLast < 0.25f) {
-                // Double tap detected!
+            if (now - lastSpaceTime < 0.25f) {
                 isCreativeMode = !isCreativeMode;
-                velocity = glm::vec3(0); // Stop momentum
+                velocity = glm::vec3(0);
                 std::cout << "[Player] Creative Mode: " << (isCreativeMode ? "ON" : "OFF") << std::endl;
-                lastSpacePressTime = -1.0f; // Reset timer prevents triple-tap issues
+                lastSpaceTime = -1.0f; 
             } else {
-                lastSpacePressTime = now;
+                lastSpaceTime = now;
             }
         }
         wasSpaceDown = isSpaceDown;
 
-        // --- Movement Request ---
-        isSprinting = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
+        // --- States ---
+        isSprinting = isShiftDown; // Shift to Sprint
+        isSneaking  = isCtrlDown;  // Ctrl to Sneak
 
-        // Calculate Target Speed
-        float targetSpeed = walkSpeed;
-        if (isCreativeMode) {
-            targetSpeed = isSprinting ? flySprintSpeed : flySpeed;
-        } else {
-            targetSpeed = isSprinting ? runSpeed : walkSpeed;
-        }
-
-        // Get Input Vectors
-        glm::vec3 forward = glm::normalize(glm::vec3(camera.Front.x, 0, camera.Front.z));
-        glm::vec3 right = glm::normalize(glm::vec3(camera.Right.x, 0, camera.Right.z));
+        // Reset sprint if we stop moving or sneak
         glm::vec3 wishDir(0.0f);
+        glm::vec3 forward = glm::normalize(glm::vec3(camera.Front.x, 0, camera.Front.z));
+        glm::vec3 right   = glm::normalize(glm::vec3(camera.Right.x, 0, camera.Right.z));
 
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) wishDir += forward;
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) wishDir -= forward;
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) wishDir += right;
         if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) wishDir -= right;
 
-        // Normalize input
         if (glm::length(wishDir) > 0.01f) wishDir = glm::normalize(wishDir);
 
-        // --- Apply Input Acceleration ---
+        // --- Target Speed Calculation ---
+        float targetSpeed = config.SpeedWalk;
         if (isCreativeMode) {
-            // Vertical Fly Input
-            if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) wishDir.y += 1.0f;
-            if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) wishDir.y -= 1.0f;
-            
-            // Immediate response in creative mode
-            velocity = glm::mix(velocity, wishDir * targetSpeed, flyDrag * dt);
-            
+            targetSpeed = isSprinting ? config.SpeedFlySprint : config.SpeedFly;
         } else {
-            // Survival Ground Movement
-            // Ground control is sharp (high acceleration), Air control is floaty
-            float accel = onGround ? 15.0f : 2.0f; 
-            
-            // We only effect X/Z with WASD. Y is gravity.
-            glm::vec3 targetVel = wishDir * targetSpeed;
-            
-            velocity.x = glm::mix(velocity.x, targetVel.x, accel * dt);
-            velocity.z = glm::mix(velocity.z, targetVel.z, accel * dt);
-            
-
-            // white boy cant jump
-            if (onGround && isSpaceDown && !isCreativeMode) {
-                 velocity.y = jumpForce;
-                 onGround = false;
-            }
-
+            if (isSprinting) targetSpeed = config.SpeedSprint;
+            if (isSneaking)  targetSpeed = config.SpeedSneak;
         }
 
+        // --- Apply Velocity ---
+        if (isCreativeMode) {
+            if (isSpaceDown) wishDir.y += 1.0f;
+            if (isSneaking)  wishDir.y -= 1.0f; // Sneak moves down in creative
+            velocity = glm::mix(velocity, wishDir * targetSpeed, config.DragFly * dt);
+        } else {
+            // Survival Movement
+            float acceleration = onGround ? config.DragGround : config.DragAir;
+            
+            // Apply horizontal force
+            glm::vec3 targetVel = wishDir * targetSpeed;
+            velocity.x = glm::mix(velocity.x, targetVel.x, acceleration * dt);
+            velocity.z = glm::mix(velocity.z, targetVel.z, acceleration * dt);
+
+            // Jump
+            if (onGround && isSpaceDown) {
+                 velocity.y = config.JumpForce;
+                 onGround = false;
+            }
+        }
     }
 
     void ApplyCreativePhysics(float dt) {
-        // Simple Euler integration (velocity is already set by input)
         position += velocity * dt;
     }
 
     void ApplySurvivalPhysics(float dt, ITerrainGenerator* terrain) {
-        //  Gravity
-        velocity.y -= gravity * dt;
-        if (velocity.y < -50.0f) velocity.y = -50.0f; // Terminal velocity
+        // 1. Gravity
+        velocity.y -= config.Gravity * dt;
+        if (velocity.y < config.TerminalVelocity) velocity.y = config.TerminalVelocity;
 
-        //  Collision & Integration per Axis
-        // X
+        // 2. Integration & Collision (Sweep and Prune style per axis)
+        
+        // X Axis
         position.x += velocity.x * dt;
         if (CheckCollision(terrain)) {
             position.x -= velocity.x * dt;
             velocity.x = 0;
         }
-        // Z
+        
+        // Z Axis
         position.z += velocity.z * dt;
         if (CheckCollision(terrain)) {
             position.z -= velocity.z * dt;
             velocity.z = 0;
         }
-        // Y
+
+        // Y Axis
         position.y += velocity.y * dt;
         onGround = false;
+        
         if (CheckCollision(terrain)) {
             bool falling = velocity.y < 0;
+            
+            // Step back
             position.y -= velocity.y * dt;
+            
+            // Snap to block grid if falling (prevents jitter)
+            if (falling) {
+                // position.y = std::ceil(position.y - config.PlayerHeight) + 0.001f; 
+                onGround = true;
+            }
             velocity.y = 0;
-            if (falling) onGround = true;
         }
 
-        // Kill floor
+        // Void Floor
         if (position.y < -50) {
             position = glm::vec3(0, 100, 0);
             velocity = glm::vec3(0);
         }
     }
 
-    // UPDATED: Now supports full 3D collision (caves, overhangs, bridges)
+    void UpdateCamera(float dt) {
+        // 1. Dynamic Eye Level (Sneaking)
+        float targetEye = isSneaking ? config.EyeLevelSneak : config.EyeLevelNormal;
+        static float currentEye = config.EyeLevelNormal;
+        currentEye = glm::mix(currentEye, targetEye, 15.0f * dt);
+
+        // 2. Dynamic FOV (Sprinting)
+        // Note: Assumes camera.FovBase exists or we use a hardcoded base. 
+        // Using camera.Fov logic from previous turn.
+        float baseFov = 70.0f; // Could also be exposed in ImGui if added to Camera class
+        float targetFov = isSprinting ? (baseFov * 1.15f) : baseFov;
+        camera.SetFov(targetFov, dt);
+
+        // 3. View Bobbing (Smoothed)
+        // Fix: We dampen the *amplitude* to 0 when stopping, rather than resetting phase.
+        // This ensures the camera gently settles back to center from any part of the sine wave.
+        bool moving = onGround && !isSneaking && glm::length(glm::vec2(velocity.x, velocity.z)) > 0.1f;
+        
+        float targetAmp = 0.0f;
+        float freq = config.BobFrequency;
+
+        if (moving) {
+            targetAmp = isSprinting ? (config.BobAmplitude * config.BobSprintMult) : config.BobAmplitude;
+            freq      = isSprinting ? (config.BobFrequency * config.BobSprintMult) : config.BobFrequency;
+            
+            // Only increment sine wave phase while actually moving
+            walkDistance += dt * freq;
+        } 
+        
+        // Smoothly interpolate amplitude (10.0f = speed of fade out)
+        currentBobAmplitude = glm::mix(currentBobAmplitude, targetAmp, 10.0f * dt);
+        
+        // Prevent tiny float drifts when completely stopped
+        if (currentBobAmplitude < 0.001f) currentBobAmplitude = 0.0f;
+
+        float bobOffset = sin(walkDistance) * currentBobAmplitude;
+
+        camera.Position = position + glm::vec3(0, currentEye + bobOffset, 0);
+    }
+
     bool CheckCollision(ITerrainGenerator* terrain) {
-        glm::vec3 min = position - glm::vec3(width/2, 0, width/2);
-        glm::vec3 max = position + glm::vec3(width/2, height, width/2);
+        // AABB Collision
+        float collisionWidth = config.PlayerWidth - 0.1f; 
+        
+        glm::vec3 min = position - glm::vec3(collisionWidth/2, 0, collisionWidth/2);
+        glm::vec3 max = position + glm::vec3(collisionWidth/2, config.PlayerHeight, collisionWidth/2);
 
         int minX = static_cast<int>(std::floor(min.x));
         int maxX = static_cast<int>(std::floor(max.x));
@@ -201,11 +401,8 @@ private:
         for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
                 for (int z = minZ; z <= maxZ; z++) {
-                    // We use LOD 1 for physics (finest detail)
-                    // We no longer need GetHeight(); GetBlock handles 3D checks internally.
-                    auto texture = terrain->GetBlock((float)x, (float)y, (float)z, 1); // get the block underneath the player aabb
-
-                    if (!(texture == 0 || texture == 6)) {
+                    auto texture = terrain->GetBlock((float)x, (float)y, (float)z, 1);
+                    if (texture != 0 && texture != 6) {
                         return true;
                     }
                 }

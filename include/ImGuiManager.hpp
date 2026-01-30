@@ -143,7 +143,7 @@ public:
         // Debug Suite (F2)
         if (config.showDebugPanel) {
             RenderDebugPanel(world, config, VRAM_HEAP_SIZE_MB); // Top Left
-            RenderCameraControls(player, config);               // Top Right
+            //RenderCameraControls(player, config);               // Top Right
             RenderCullerControls(world, config);                // Bottom Right
         }
 
@@ -229,43 +229,8 @@ private:
                     
 
 
-                    if (ImGui::BeginTabItem("Player")) {
-                        ImGui::Spacing();
-                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Game Mode");
-                        ImGui::Separator();
-                        
-                        if (ImGui::Checkbox("Creative Mode (Fly)", &player.isCreativeMode)) {
-                            player.velocity = glm::vec3(0); // Stop physics glitch when switching
-                        }
-                        ImGui::SameLine(); ImGui::TextDisabled("(Double tap SPACE to toggle)");
-
-                        ImGui::Spacing();
-                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Movement Settings");
-                        ImGui::Separator();
-                        
-                        ImGui::SliderFloat("Walk Speed", &player.walkSpeed, 1.0f, 20.0f);
-                        ImGui::SliderFloat("Run Speed (Shift)", &player.runSpeed, 5.0f, 100.0f);
-                        ImGui::SliderFloat("Fly Speed", &player.flySpeed, 5.0f, 200.0f);
-                        
-                        ImGui::Spacing();
-                        ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Physics");
-                        ImGui::Separator();
-                        ImGui::SliderFloat("Jump Force", &player.jumpForce, 1.0f, 80.0f);
-                        ImGui::SliderFloat("Gravity", &player.gravity, 0.0f, 50.0f);
-
-                        ImGui::Spacing();
-                        if (ImGui::Button("Reset Player Stats")) {
-                            player.walkSpeed = 5.0f;
-                            player.runSpeed = 100.0f;
-                            player.flySpeed = 40.0f;
-                            player.jumpForce = 8.5f;
-                            player.gravity = 28.0f;
-                        }
-
-                        ImGui::EndTabItem();
-                    }
-
-
+                    
+                    
                     // 
                     if (ImGui::BeginTabItem("Engine")) {
                         ImGui::Spacing();
@@ -274,67 +239,67 @@ private:
                         
                         ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
                         ImGui::TextDisabled("The LOD system renders distant terrain at lower resolutions. "
-                                          "Adding more LOD levels exponentially increases view distance but consumes VRAM. ONE CHUNK = 32x32x32 Blocks");
-                        ImGui::PopTextWrapPos();
-                        ImGui::Spacing();
-
-                        // --- LOD Density Presets ---
-                        ImGui::Text("Render Distance Preset");
-                        bool presetChanged = false;
-                        
-                        if (!world.IsBusy()) {
-
-                            // Helper lambda for radio buttons with tooltips
-                            auto RadioWithTooltip = [&](const char* label, int v, const char* tip) {
-                                if (ImGui::RadioButton(label, &config.currentLODPreset, v)) presetChanged = true;
-                                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-                                ImGui::SameLine();
-                            };
-    
-                            RadioWithTooltip("Very Low", 0, "For low performing PCs");
-                            RadioWithTooltip("Standard", 1, "Balanced");
-                            RadioWithTooltip("High", 2, "Good view range, reasonable VRAM");
-                            RadioWithTooltip("Ultra", 3, "High Rasterization Cost");
-                            // Remove SameLine for the last one to wrap if needed, or keep it
-                            if (ImGui::RadioButton("Extreme", &config.currentLODPreset, 4)) presetChanged = true;
-                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("FOR SUPERCOMPUTERS (If you think you qualify, you probably still don't)");
-                        }
-
-                        if (presetChanged) {
-                            struct LODPreset {
-                                int activeCount;
-                                std::vector<int> radii;
-                            };
-
-                            // OPTIMIZATION: Static const to prevent re-allocation every frame
-                            static const std::vector<LODPreset> presets = {
-                                { 4, { 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0 } },                        // Low
-                                { 5, { 31, 31, 23, 15, 7, 0, 0, 0 , 0, 0, 0, 0} },                   // Standard
-                                { 6, { 17, 17, 17, 17, 17, 11, 0, 0, 0, 0, 0, 0 } },                  // Medium
-                                { 7, { 21, 21, 21, 21, 21, 21, 21, 0, 0, 0, 0, 0 } },                 // High
-                                { 9, { 25, 23, 21, 21, 21, 21, 21, 21, 21, 0, 0, 0 } }                // Extreme
-                            };
-
-                            if (config.currentLODPreset >= 0 && config.currentLODPreset < (int)presets.size()) {
-                                const auto& selected = presets[config.currentLODPreset];
-                                config.editConfig->settings.lodCount = selected.activeCount;
-                                for(int i = 0; i < 12; i++) {
-                                    if(i < (int)selected.radii.size()) 
-                                        config.editConfig->settings.lodRadius[i] = selected.radii[i];
-                                }
-                                world.Reload(*config.editConfig);
+                            "Adding more LOD levels exponentially increases view distance but consumes VRAM. ONE CHUNK = 32x32x32 Blocks");
+                            ImGui::PopTextWrapPos();
+                            ImGui::Spacing();
+                            
+                            // --- LOD Density Presets ---
+                            ImGui::Text("Render Distance Preset");
+                            bool presetChanged = false;
+                            
+                            if (!world.IsBusy()) {
+                                
+                                // Helper lambda for radio buttons with tooltips
+                                auto RadioWithTooltip = [&](const char* label, int v, const char* tip) {
+                                    if (ImGui::RadioButton(label, &config.currentLODPreset, v)) presetChanged = true;
+                                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+                                    ImGui::SameLine();
+                                };
+                                
+                                RadioWithTooltip("Very Low", 0, "For low performing PCs");
+                                RadioWithTooltip("Standard", 1, "Balanced");
+                                RadioWithTooltip("High", 2, "Good view range, reasonable VRAM");
+                                RadioWithTooltip("Ultra", 3, "High Rasterization Cost");
+                                // Remove SameLine for the last one to wrap if needed, or keep it
+                                if (ImGui::RadioButton("Extreme", &config.currentLODPreset, 4)) presetChanged = true;
+                                if (ImGui::IsItemHovered()) ImGui::SetTooltip("FOR SUPERCOMPUTERS (If you think you qualify, you probably still don't)");
                             }
+                            
+                            if (presetChanged) {
+                                struct LODPreset {
+                                    int activeCount;
+                                    std::vector<int> radii;
+                                };
+                                
+                                // OPTIMIZATION: Static const to prevent re-allocation every frame
+                                static const std::vector<LODPreset> presets = {
+                                    { 4, { 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0 } },                        // Low
+                                    { 5, { 15, 15, 15, 15, 7, 0, 0, 0 , 0, 0, 0, 0} },                   // Standard
+                                    { 6, { 17, 17, 17, 17, 17, 11, 0, 0, 0, 0, 0, 0 } },                  // Medium
+                                    { 7, { 21, 21, 21, 21, 21, 21, 21, 0, 0, 0, 0, 0 } },                 // High
+                                    { 9, { 25, 23, 21, 21, 21, 21, 21, 21, 21, 0, 0, 0 } }                // Extreme
+                                };
+                                
+                                if (config.currentLODPreset >= 0 && config.currentLODPreset < (int)presets.size()) {
+                                    const auto& selected = presets[config.currentLODPreset];
+                                    config.editConfig->settings.lodCount = selected.activeCount;
+                                    for(int i = 0; i < 12; i++) {
+                                        if(i < (int)selected.radii.size()) 
+                                        config.editConfig->settings.lodRadius[i] = selected.radii[i];
+                                    }
+                                    world.Reload(*config.editConfig);
+                                }
                         }
-
+                        
                         ImGui::Spacing();
-
+                        
                         // --- Effective Distance Calculation ---
                         int currentLODs = config.editConfig->settings.lodCount;
                         int lastLODIndex = std::clamp(currentLODs - 1, 0, 11);
                         int radius = config.editConfig->settings.lodRadius[lastLODIndex];
                         int scale = 1 << lastLODIndex;
                         int effectiveDistChunks = radius * scale;
-
+                        
                         ImGui::Text("Effective Render Distance:");
                         ImGui::SameLine();
                         if (effectiveDistChunks == 0) {
@@ -342,22 +307,22 @@ private:
                         } else {
                             ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "%d Chunks", effectiveDistChunks);
                         }
-
+                        
                         if (!world.IsBusy())
                         {
-
+                            
                             if (ImGui::SliderInt("##lodslider", &currentLODs, 1, 12, "LOD Level: %d")) {
                                 config.editConfig->settings.lodCount = currentLODs;
                             }
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Level 1-6: Standard Playable Area\nLevel 7-9: Far Horizon\nLevel 10+: Extreme Distance");
-    
+                            
                             if (ImGui::IsItemDeactivatedAfterEdit()) {
                                 world.Reload(*config.editConfig);
                             }
                         }
-
+                        
                         ImGui::Spacing();
-
+                        
                         // --- Advanced Manual Tuning ---
                         if (ImGui::TreeNodeEx("Advanced LOD Tuning", ImGuiTreeNodeFlags_DefaultOpen)) {
                             ImGui::TextDisabled("Adjust the radius (in chunks) for each detail ring.");
@@ -367,14 +332,14 @@ private:
                             // program can crash hard
                             if (!world.IsBusy())
                             {
-
+                                
                                 for (int i = 0; i < config.editConfig->settings.lodCount; i++) {
                                     int currentScale = 1 << i;
                                     ImGui::Text("LOD %d (1:%dx Scale)", i, currentScale);
                                     ImGui::SameLine();
                                     std::string sliderLabel = "##lodradius" + std::to_string(i);
                                     ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig->settings.lodRadius[i], 2, (int)(64.0));
-    
+                                    
                                     if (ImGui::IsItemDeactivatedAfterEdit()) {
                                         world.Reload(*config.editConfig);
                                     }
@@ -391,13 +356,23 @@ private:
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("SPAMMING THIS CAN CAUSE VRAM CRASH. ALLOW WORLD TO GENERATE");
                         ImGui::EndTabItem();
                     }
+                    
 
-                    // --- TAB 2: GRAPHICS ---
+                    // TAB PLAYER
+                    if (ImGui::BeginTabItem("Player")) {
+                        
+                        player.DrawInterface(); // call player internal gui exposure
+
+                        ImGui::EndTabItem();
+                    }
+
+
+                    // --- TAB: GRAPHICS ---
                     if (ImGui::BeginTabItem("Graphics")) {
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Display Options");
                         ImGui::Separator();
-
+                        
                         bool isFs = IsFullscreen();
                         if (ImGui::Checkbox("Fullscreen Mode", &isFs)) {
                             ToggleFullscreen();
@@ -417,7 +392,7 @@ private:
                         ImGui::EndTabItem();
                     }
 
-                    // --- TAB 3: INTERFACE & STYLE ---
+                    // --- TAB: INTERFACE & STYLE ---
                     if (ImGui::BeginTabItem("Interface")) {
                         ImGuiStyle& style = ImGui::GetStyle();
                         
@@ -475,7 +450,7 @@ private:
                         ImGui::EndTabItem();
                     }
 
-                    // --- TAB 4: RESOLUTION ---
+                    // --- TAB: RESOLUTION ---
                     if (ImGui::BeginTabItem("Resolution")) {
                         ImGui::Spacing();
                         ImGui::TextDisabled("(man you think i got time for this?)");
@@ -504,37 +479,37 @@ private:
 
 
     // *********** TODO: Just make these another tab in the menu
-    void RenderCameraControls(Player& player, UIConfig& config) {
-        ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
-        if (config.isGameMode) ImGui::SetNextWindowBgAlpha(0.6f);
+    // void RenderCameraControls(Player& player, UIConfig& config) {
+    //     ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
+    //     if (config.isGameMode) ImGui::SetNextWindowBgAlpha(0.6f);
 
-        ImGuiViewport* vp = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 330, vp->WorkPos.y + 16), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(310, 300), ImGuiCond_FirstUseEver);
+    //     ImGuiViewport* vp = ImGui::GetMainViewport();
+    //     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 330, vp->WorkPos.y + 16), ImGuiCond_FirstUseEver);
+    //     ImGui::SetNextWindowSize(ImVec2(310, 300), ImGuiCond_FirstUseEver);
         
-        if (ImGui::Begin("Camera/Player (F2)", &config.showCameraControls, flags)) {
-            ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
+    //     if (ImGui::Begin("Camera/Player (F2)", &config.showCameraControls, flags)) {
+    //         ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
             
-            ImGui::TextColored(ImVec4(0,1,1,1), "Status");
-            ImGui::Text("Mode: %s", player.isCreativeMode ? "CREATIVE (Fly)" : "SURVIVAL");
-            ImGui::Text("Pos: %.1f, %.1f, %.1f", player.position.x, player.position.y, player.position.z);
-            ImGui::Text("Vel: %.1f, %.1f, %.1f", player.velocity.x, player.velocity.y, player.velocity.z);
+    //         ImGui::TextColored(ImVec4(0,1,1,1), "Status");
+    //         ImGui::Text("Mode: %s", player.isCreativeMode ? "CREATIVE (Fly)" : "SURVIVAL");
+    //         ImGui::Text("Pos: %.1f, %.1f, %.1f", player.position.x, player.position.y, player.position.z);
+    //         ImGui::Text("Vel: %.1f, %.1f, %.1f", player.velocity.x, player.velocity.y, player.velocity.z);
 
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0,1,1,1), "Camera");
-            ImGui::DragFloat("FOV", &player.camera.Zoom, 0.5f, 10.0f, 120.0f);
-            ImGui::DragFloat("Sensitivity", &player.camera.MouseSensitivity, 0.01f, 0.01f, 2.0f);
+    //         ImGui::Separator();
+    //         ImGui::TextColored(ImVec4(0,1,1,1), "Camera");
+    //         ImGui::DragFloat("FOV", &player.camera.Zoom, 0.5f, 10.0f, 120.0f);
+    //         ImGui::DragFloat("Sensitivity", &player.camera.MouseSensitivity, 0.01f, 0.01f, 2.0f);
             
-            ImGui::Separator();
-            if (ImGui::Button("Teleport Up")) player.position.y += 50.0f;
-            ImGui::SameLine();
-            if (ImGui::Button("Reset")) {
-                player.position = glm::vec3(0, 150, 150);
-                player.velocity = glm::vec3(0);
-            }
-            ImGui::End();
-        }
-    }
+    //         ImGui::Separator();
+    //         if (ImGui::Button("Teleport Up")) player.position.y += 50.0f;
+    //         ImGui::SameLine();
+    //         if (ImGui::Button("Reset")) {
+    //             player.position = glm::vec3(0, 150, 150);
+    //             player.velocity = glm::vec3(0);
+    //         }
+    //         ImGui::End();
+    //     }
+    // }
     // *********** TODO: Just make these another tab in the menu
 
 

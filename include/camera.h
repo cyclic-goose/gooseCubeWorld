@@ -8,11 +8,12 @@
 
 enum Camera_Movement { FORWARD, BACKWARD, LEFT, RIGHT, UP, DOWN };
 
-const float YAW         =  90.0f;
+// Minecraft-like Defaults
+const float YAW         = -90.0f; // Face -Z by default
 const float PITCH       =  0.0f;
-const float SPEED       =  30.5f;
+const float SPEED       =  4.3f;  // Base walking speed (blocks/sec)
 const float SENSITIVITY =  0.1f;
-const float ZOOM        =  60.0f; 
+const float FOV_BASE    =  70.0f; // Standard MC FOV
 
 class Camera
 {
@@ -27,10 +28,10 @@ public:
     float Pitch;
     float MovementSpeed;
     float MouseSensitivity;
-    float Zoom;
+    float Fov; 
 
-    Camera(glm::vec3 position = glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f), float yaw = YAW, float pitch = PITCH) 
-        : Front(glm::vec3(0.0f, 0.0f, 0.0f)), MovementSpeed(SPEED), MouseSensitivity(SENSITIVITY), Zoom(ZOOM)
+    Camera(glm::vec3 position = glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3 up = glm::vec3(0.0f, 1.0f, 0.0f), float yaw = YAW, float pitch = PITCH) 
+        : Front(glm::vec3(0.0f, 0.0f, -1.0f)), MovementSpeed(SPEED), MouseSensitivity(SENSITIVITY), Fov(FOV_BASE)
     {
         Position = position;
         WorldUp = up;
@@ -43,19 +44,10 @@ public:
         return glm::lookAt(Position, Position + Front, Up);
     }
 
-    /**
-     * GetProjectionMatrix (Reverse-Z Infinite)
-     * ----------------------------------------
-     * Standard OpenGL Projection: Near= -1, Far= 1. Low precision at distance.
-     * This Projection:            Near= 1, Far= 0. High precision everywhere.
-     * * WHY?
-     * Floating point numbers have more precision near 0.
-     * By mapping the Far Plane (infinity) to 0.0, we get huge precision for distant mountains.
-     * This requires `glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE)` in main.cpp.
-     */
+    // Reverse-Z Infinite Projection (Superior precision for open worlds)
     glm::mat4 GetProjectionMatrix(float aspectRatio, float zNear = 0.1f) const
     {
-        float f = 1.0f / tan(glm::radians(Zoom) / 2.0f);
+        float f = 1.0f / tan(glm::radians(Fov) / 2.0f);
         glm::mat4 projection(0.0f);
         projection[0][0] = f / aspectRatio;
         projection[1][1] = f;
@@ -77,13 +69,21 @@ public:
     void ProcessMouseMovement(float xoffset, float yoffset, GLboolean constrainPitch = true) {
         xoffset *= MouseSensitivity;
         yoffset *= MouseSensitivity;
+
         Yaw   += xoffset;
         Pitch += yoffset;
+
         if (constrainPitch) {
             if (Pitch > 89.0f) Pitch = 89.0f;
             if (Pitch < -89.0f) Pitch = -89.0f;
         }
+
         updateCameraVectors();
+    }
+
+    // Smoothly interpolate FOV for sprinting effects
+    void SetFov(float targetFov, float dt, float speed = 10.0f) {
+        Fov += (targetFov - Fov) * speed * dt;
     }
 
     void updateCameraVectors() {
@@ -95,5 +95,4 @@ public:
         Right = glm::normalize(glm::cross(Front, WorldUp));  
         Up    = glm::normalize(glm::cross(Right, Front));
     }
-    private:
 };
