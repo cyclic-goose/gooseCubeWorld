@@ -49,21 +49,32 @@ void main() {
     vec3 localPos = vec3(x, y, z);
     vec3 normal = getCubeNormal(normIndex);
 
-    // 4. World Position Calculation
-    // We access the vec4 directly using swizzles (.xyz, .w)
-    vec4 chunkData = chunkPositions[gl_BaseInstance];
-    
-    vec3 chunkOffset = chunkData.xyz;
-    float scale = chunkData.w;
+     // 4. World Position Calculation
+    // chunkPositions[gl_BaseInstance] is set by MultiDrawIndirect
+    vec3 chunkOffset = chunkPositions[gl_BaseInstance].xyz;
+    float scale = chunkPositions[gl_BaseInstance].w;
 
     vec3 trueWorldPos = (localPos * scale) + chunkOffset;
     
-    // 5. Outputs
+    // Sinking Logic for LOD blending (optional based on your engine logic)
+    vec3 renderPos = trueWorldPos;
+    if (scale > 1.0) {
+        renderPos.y -= (scale * 1.1);
+        //renderPos.z -= 0.01;
+    }
+
+
+
+
+
+    //  Outputs
     v_Normal = normal;
     v_TexID = texID; 
+    
+    // AO: 0..3 maps to 0.0..1.0
     v_AO = float(aoVal) / 3.0; 
     
-    // UV GENERATION
+
     if (abs(normal.x) > 0.5) {
         v_TexCoord = trueWorldPos.yz; 
     } else if (abs(normal.y) > 0.5) {
@@ -72,7 +83,8 @@ void main() {
         v_TexCoord = trueWorldPos.xy;
     }
 
+    // Pass White tint (can be modified for damage flashes, selection, etc.)
     v_Color = vec3(1.0); 
 
-    gl_Position = u_ViewProjection * vec4(trueWorldPos, 1.0);
+    gl_Position = u_ViewProjection * vec4(renderPos, 1.0);
 }

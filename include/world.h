@@ -156,7 +156,7 @@ public:
         size_t nodeCapacity = steadyStateNodes + (steadyStateNodes / 5); 
         std::cout << "NODE CAPACITY " << nodeCapacity << std::endl;
 
-        m_chunkPool.Init(m_config->NODE_POOL_GROWTH_STRIDE, steadyStateNodes, nodeCapacity); 
+        m_chunkPool.Init(m_config->NODE_POOL_GROWTH_STRIDE, m_config->NODE_POOL_INITIAL_SIZE, nodeCapacity); 
         m_voxelPool.Init(m_config->VOXEL_POOL_GROWTH_STRIDE, m_config->VOXEL_POOL_INITIAL_SIZE, m_config->MAX_TRANSIENT_VOXEL_MESHES); 
 
         m_gpuMemory = std::make_unique<GpuMemoryManager>(static_cast<size_t>(m_config->VRAM_HEAP_ALLOCATION_MB) * 1024 * 1024);

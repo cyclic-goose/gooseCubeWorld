@@ -7,7 +7,7 @@
 
 struct RuntimeConfig {
     int lodCount = 4;                                                                           // starting number, changeable at runtime
-    int lodRadius[12] = { 9, 9, 9, 9, 0, 0, 0, 0 , 0, 0, 0, 0};                            // starting number, changeable at runtime
+    int lodRadius[12] = { 15, 15, 15, 15, 0, 0, 0, 0 , 0, 0, 0, 0};                            // starting number, changeable at runtime
     bool occlusionCulling = false;
     bool enableCaves = false; 
 
@@ -36,8 +36,8 @@ struct EngineConfig {
 
     RuntimeConfig settings;
 
-    EngineConfig() :    VRAM_HEAP_ALLOCATION_MB(1024), NODE_POOL_GROWTH_STRIDE(512), NODE_POOL_INITIAL_SIZE(1024*8),
-                        VOXEL_POOL_GROWTH_STRIDE(32), VOXEL_POOL_INITIAL_SIZE(1024*16), NODE_GENERATION_LIMIT(2048),
+    EngineConfig() :    VRAM_HEAP_ALLOCATION_MB(1024), NODE_POOL_GROWTH_STRIDE(512), NODE_POOL_INITIAL_SIZE(1024*64),
+                        VOXEL_POOL_GROWTH_STRIDE(32), VOXEL_POOL_INITIAL_SIZE(1024*32), NODE_GENERATION_LIMIT(2048),
                         NODE_UPLOAD_LIMIT(512), MAX_TRANSIENT_VOXEL_MESHES(1024*32) {}
 
 

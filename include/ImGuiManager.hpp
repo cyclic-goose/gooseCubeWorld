@@ -585,7 +585,7 @@ private:
         if (ImGui::Begin("StatsOverlay", nullptr, flags)) {
             ImGui::SetWindowFontScale(config.FPS_OVERLAY_FONT_SCALE);
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "FPS: %.1f", ImGui::GetIO().Framerate);
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[ESC] Menu | [TAB] Mouse Lock/Unlock | [F2] Debug Menus\n");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[ESC] Menu | [T] Random Seed | [SPCBAR x 2] Toggle Creative \n Mouse Lock/Unlock [TAB] Mouse Lock/Unlock | [F2] Debug Menus\n");
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", config.isGameMode ? "[MOUSE LOCKED]" : "[MOUSE UNLOCKED]");
             ImGui::Separator();
             ImGui::Text("XYZ: %.1f, %.1f, %.1f", camera.Position.x, camera.Position.y, camera.Position.z);
