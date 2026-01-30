@@ -200,7 +200,15 @@ public:
              float cs = 0.03f;
              // IMPORTANT: Axis mapping must match GenerateChunk (X, Z, Y)
              float caveVal = m_caveNoise->GenSingle3D(x * cs, z * cs, y * cs, m_settings.seed);
-             if (caveVal > 0.4f) return 0;
+             
+             // FIX: Surface Bias prevents surface holes (and thus floating trees)
+             int depthFromSurface = h - wy;
+             float surfaceBias = 0.0f;
+             if (depthFromSurface < 8) {
+                 surfaceBias = (8 - depthFromSurface) * 0.08f; 
+             }
+             
+             if ((caveVal - surfaceBias) > 0.4f) return 0;
         }
 
         return block; 
@@ -317,8 +325,17 @@ public:
                             else block = 19;
                         }
 
-                        if (lodScale == 1 && wy > m_settings.bedrockDepth && bufCave[idx3D] > 0.4f) {
-                            block = 0;
+                        if (lodScale == 1 && wy > m_settings.bedrockDepth) {
+                             // FIX: Surface Bias to prevent holes in surface
+                             int depthFromSurface = h - wy;
+                             float surfaceBias = 0.0f;
+                             if (depthFromSurface < 8) {
+                                 surfaceBias = (8 - depthFromSurface) * 0.08f; 
+                             }
+                             
+                             if ((bufCave[idx3D] - surfaceBias) > 0.4f) {
+                                block = 0;
+                             }
                         }
                     } else if (wy <= m_settings.seaLevel) {
                         block = (biome == 3) ? 12 : 6;
@@ -327,6 +344,25 @@ public:
                     if (lodScale == 1 && block == 0) {
                         int treeTypeHere = mapTree[idx2D];
                         int relY = wy - h;
+                        
+                        // FIX: Ensure trees don't spawn if the ground was eaten by a cave
+                        // This prevents floating trees over invisible holes
+                        if (treeTypeHere > 0 && relY > 0) {
+                            // Map wy back to local buffer Y
+                            int localGroundY = h - (int)worldYStart;
+                            if (localGroundY >= 0 && localGroundY < P) {
+                                int idxGround = x + (z*P) + (localGroundY*P*P);
+                                // Check if the ground is gone (using same logic as above, but at ground level)
+                                // Depth at ground level is 0, so bias is max (0.64).
+                                // A cave value would need to be > 1.04 to eat the surface now. Unlikely.
+                                // But good to be safe.
+                                float biasAtSurface = 8.0f * 0.08f;
+                                if ((bufCave[idxGround] - biasAtSurface) > 0.4f) {
+                                    treeTypeHere = 0; // Ground is gone, no tree
+                                }
+                            }
+                        }
+
                         if (treeTypeHere > 0) {
                             if ((treeTypeHere == 1 || treeTypeHere == 2) && relY > 0 && relY < 6) block = (treeTypeHere == 2) ? 15 : 13;
                             else if (treeTypeHere == 3 && relY > 0 && relY < 4) block = 14;
