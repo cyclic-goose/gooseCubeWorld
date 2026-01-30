@@ -202,7 +202,9 @@ private:
                 for (int z = minZ; z <= maxZ; z++) {
                     // We use LOD 1 for physics (finest detail)
                     // We no longer need GetHeight(); GetBlock handles 3D checks internally.
-                    if (terrain->GetBlock((float)x, (float)y, (float)z, 1) != 0) {
+                    auto texture = terrain->GetBlock((float)x, (float)y, (float)z, 1); // get the block underneath the player aabb
+
+                    if (!(texture == 0 || texture == 6)) {
                         return true;
                     }
                 }
