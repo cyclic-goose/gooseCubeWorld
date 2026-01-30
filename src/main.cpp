@@ -30,6 +30,8 @@
 #include "engine_config.h"
 #include "playerController.h"
 
+#include "terrain_3DNoise.h"
+
 
 // ======================================================================================
 // --- CONFIGURATION & GLOBALS ---

@@ -747,8 +747,8 @@ private:
         // We must iterate 3D space. No more "Heightmap then Y-loop".
         
         {
-            Engine::Profiler::ScopedTimer timer("[ASYNC] Fill Chunk Volume Loop");
             for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
+                //Engine::Profiler::ScopedTimer timer("[ASYNC] Fill Chunk Volume Loop");
                 float wx = (float)(worldX + (x - 1) * scale);
                 
                 for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
