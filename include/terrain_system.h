@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <FastNoise/FastNoise.h>
+#include "chunk.h" // Include chunk definition so we can write to it directly
 
 // ================================================================================================
 // 2. TERRAIN GENERATOR INTERFACE
@@ -14,21 +15,17 @@ class ITerrainGenerator {
 public:
     virtual ~ITerrainGenerator() = default;
 
-    // Core Generation
     virtual void Init() = 0; 
-    
-    // Used for Culling only (Is this chunk totally empty or totally full?)
-    // In 3D mode, this returns the max potential height of the terrain surface.
     virtual void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) = 0;
 
-    // THE BIG CHANGE: 
-    // We removed 'heightAtXZ'. The generator must calculate density internally at (x,y,z).
+    // OLD: Slow per-block call
     virtual uint8_t GetBlock(float x, float y, float z, int lodScale) const = 0;
 
-    // Returns the list of textures this generator expects
-    virtual std::vector<std::string> GetTexturePaths() const = 0;
+    // NEW: Fast batched generation
+    // We pass the chunk pointer to write directly to the voxel array
+    virtual void GenerateChunk(Chunk* chunk, int cx, int cy, int cz, int scale) = 0;
 
-    // UI & Hot Reloading
+    virtual std::vector<std::string> GetTexturePaths() const = 0;
     virtual void OnImGui() {} 
     virtual bool HasChanged() { return m_dirty; }
     virtual void ClearDirtyFlag() { m_dirty = false; }
@@ -58,12 +55,30 @@ public:
     StandardGenerator(TerrainSettings settings);
     
     void Init() override;
-    // Helper for internal use, though not strictly required by interface anymore
     int GetHeight(float x, float z) const; 
     
     uint8_t GetBlock(float x, float y, float z, int lodScale) const override;
-    void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) override;
+    
+    // Fallback implementation for standard generator (or implement optimization here too)
+    void GenerateChunk(Chunk* chunk, int cx, int cy, int cz, int scale) override {
+        // Fallback to slow loop if you haven't optimized StandardGenerator yet
+        int worldX = cx * CHUNK_SIZE * scale;
+        int worldY = cy * CHUNK_SIZE * scale;
+        int worldZ = cz * CHUNK_SIZE * scale;
 
+        for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
+            float wx = (float)(worldX + (x - 1) * scale);
+            for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
+                float wz = (float)(worldZ + (z - 1) * scale);
+                for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
+                    int wy = worldY + (y - 1) * scale;
+                    chunk->Set(x, y, z, GetBlock(wx, (float)wy, wz, scale));
+                }
+            }
+        }
+    }
+
+    void GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) override;
     std::vector<std::string> GetTexturePaths() const override;
     void OnImGui() override;
 
@@ -73,4 +88,3 @@ private:
     FastNoise::SmartNode<> m_mountainNoise;
     FastNoise::SmartNode<> m_caveNoise;
 };
-

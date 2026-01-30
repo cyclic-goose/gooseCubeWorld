@@ -30,7 +30,10 @@
 #include "engine_config.h"
 #include "playerController.h"
 
-#include "terrain_3DNoise.h"
+
+///////// Terrain includes, each terrain base is a base class to terrain_system
+#include "terrain_smooth_noise.h"
+#include "terrain_standard_gen_fast.h"
 
 
 // ======================================================================================
@@ -190,7 +193,7 @@ void processInput(GLFWwindow *window, World& world) {
             // Create the NEW Generator (e.g. Mars Generator)
             // auto newGen = std::make_unique<MarsGenerator>(12345); 
             // For now, let's just re-create Standard with a different seed to simulate a switch
-            auto newGen = std::make_unique<OverhangGenerator>();
+            auto newGen = std::make_unique<StandardGenerator2>(rand());
 
             // Load Textures for the NEW Generator
             // Important: We must unload the old array if we are strictly managing VRAM, 
@@ -303,7 +306,7 @@ int main() {
 
 
         // create our terrain generation by choosing which class we send in
-        auto defaultTerrainGenerator = std::make_unique<OverhangGenerator>(); // seed input
+        auto defaultTerrainGenerator = std::make_unique<StandardGenerator2>(); // seed input
         // Ask the generator what textures it needs
         std::vector<std::string> texturePaths = defaultTerrainGenerator->GetTexturePaths();
         // Load them into GPU

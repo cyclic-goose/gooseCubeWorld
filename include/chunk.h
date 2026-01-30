@@ -24,10 +24,16 @@ struct Chunk {
         return voxels[GetIndex(x, y, z)];
     }
 
-    inline void Set(int x, int y, int z, uint8_t v) {
+    inline void SetSafe(int x, int y, int z, uint8_t v) {
         if (x < 0 || x >= CHUNK_SIZE_PADDED || 
             y < 0 || y >= CHUNK_SIZE_PADDED || 
             z < 0 || z >= CHUNK_SIZE_PADDED) return;
+        voxels[GetIndex(x, y, z)] = v;
+        //isUniform = false; // Break uniform assumption on write
+    }
+
+    inline void Set(int x, int y, int z, uint8_t v) {
+        // set (dangerous) skip check but if our generation logic is already checking, why waste cycles here
         voxels[GetIndex(x, y, z)] = v;
         //isUniform = false; // Break uniform assumption on write
     }

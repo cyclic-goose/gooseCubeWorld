@@ -686,26 +686,20 @@ private:
     }
 
     void FillChunk(ChunkNode* node, float& outMinY, float& outMaxY) {
-        Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Fill Chunk");
+        // Engine::Profiler::ScopedTimer timer("[ASYNC] Task: Fill Chunk");
         int cx = node->cx;
         int cy = node->cy;
         int cz = node->cz;
         int scale = node->scale;
 
-        int worldX = cx * CHUNK_SIZE * scale;
         int worldY = cy * CHUNK_SIZE * scale;
-        int worldZ = cz * CHUNK_SIZE * scale;
-
         int chunkBottomY = worldY;
         int chunkTopY = worldY + (CHUNK_SIZE * scale);
 
-        // 1. Broad Phase Check
-        // The generator tells us roughly if anything interesting is here.
-        // For 3D noise, this is usually 0 to MaxTerrainHeight.
+        // 1. Broad Phase Check (Unchanged)
         int minGenH, maxGenH;
         m_generator->GetHeightBounds(cx, cz, scale, minGenH, maxGenH);
 
-        // If chunk is totally above the highest possible terrain
         if (chunkBottomY > maxGenH) {
             node->isUniform = true;
             node->uniformID = 0; // Air
@@ -714,16 +708,13 @@ private:
             outMaxY = (float)chunkBottomY;
             return;
         }
-
-        // If chunk is totally below the lowest possible terrain (and no caves?)
-        // (If your 3D noise makes caves everywhere, remove this check or set minGenH to very low)
         if (chunkTopY < minGenH) {
-             node->isUniform = true;
-             node->uniformID = 3; // Solid Stone
-             node->chunk = nullptr;
-             outMinY = (float)chunkBottomY;
-             outMaxY = (float)chunkTopY;
-             return;
+                node->isUniform = true;
+                node->uniformID = 3; // Solid Stone
+                node->chunk = nullptr;
+                outMinY = (float)chunkBottomY;
+                outMaxY = (float)chunkTopY;
+                return;
         }
 
         // 2. Allocation
@@ -731,66 +722,27 @@ private:
         node->chunk = m_voxelPool.Acquire(); 
 
         if (!node->chunk) {
-            std::cerr << "[World] CRITICAL: Voxel Pool Exhausted." << std::endl;
+            // Handle error
             node->isUniform = true;
             node->uniformID = 0;
             return;
         }
 
-        std::memset(node->chunk->voxels, 0, sizeof(node->chunk->voxels));
-        
-        bool hasBlocks = false;
-        float actualMinY = (float)chunkTopY;
-        float actualMaxY = (float)chunkBottomY;
+        // 3. Batched Generation
+        // We delegate the heavy lifting to the generator.
+        // It handles the loop internally with raw pointers and SIMD.
+        // This removes the virtual call overhead per-block.
+        m_generator->GenerateChunk(node->chunk, cx, cy, cz, scale);
 
-        // 3. Volumetric Loop
-        // We must iterate 3D space. No more "Heightmap then Y-loop".
-        
-        {
-            for (int x = 0; x < CHUNK_SIZE_PADDED; x++) {
-                //Engine::Profiler::ScopedTimer timer("[ASYNC] Fill Chunk Volume Loop");
-                float wx = (float)(worldX + (x - 1) * scale);
-                
-                for (int z = 0; z < CHUNK_SIZE_PADDED; z++) {
-                    float wz = (float)(worldZ + (z - 1) * scale);
-                    
-                    for (int y = 0; y < CHUNK_SIZE_PADDED; y++) {
-                        int wy = worldY + (y - 1) * scale; 
-                        
-                        // Call the new 3D GetBlock
-                        // NOTE: GetBlock now takes (x,y,z, lod)
-                        uint8_t blockID = m_generator->GetBlock(wx, (float)wy, wz, scale);
-                        
-                        if (blockID != 0) {
-                            node->chunk->Set(x, y, z, blockID);
-                            hasBlocks = true;
-                            
-                            // Update Tight AABB
-                            float blockBase = (float)wy;
-                            float blockTop = blockBase + scale;
-                            if (blockBase < actualMinY) actualMinY = blockBase;
-                            if (blockTop > actualMaxY) actualMaxY = blockTop;
-                        }
-                    }
-                }
-            }
-        }
-
-        // 4. Cleanup/Compaction
-        if (hasBlocks) {
-            outMinY = actualMinY;
-            outMaxY = actualMaxY;
-        } else {
-            // It was empty after all (e.g., inside a giant air bubble)
-            m_voxelPool.Release(node->chunk);
-            node->chunk = nullptr;
-            node->isUniform = true;
-            node->uniformID = 0;
-            
-            outMinY = (float)chunkBottomY;
-            outMaxY = (float)chunkBottomY;
-        }
+        // 4. Update AABB (Optional but recommended to keep logic separate)
+        // If you need exact AABB, you can do a quick scan here, or have GenerateChunk return it.
+        // For now, setting it to full chunk bounds is safer for culling than an empty AABB
+        // if the chunk actually has blocks.
+        outMinY = (float)chunkBottomY;
+        outMaxY = (float)chunkTopY;
     }
+
+
 
     void Task_Mesh(ChunkNode* node) {
         if (m_shutdown) return;
@@ -840,6 +792,8 @@ private:
         }
         return true;
     }
+
+
 
     bool IsParentReady(int cx, int cy, int cz, int lod) {
         if (lod >= m_config->settings.lodCount - 1) return true; 
