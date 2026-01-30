@@ -18,7 +18,7 @@ private:
     size_t m_maxCapacity = 0;         // Hard limit (0 = no limit)
     
     std::mutex m_mutex;
-    uint8_t m_uniqueID = 0;
+    uint8_t m_uniqueID;
 
 public:
     // growthSize: How many items to allocate at once when the pool is empty.
@@ -125,10 +125,10 @@ private:
             }
             
             // Optional: Debug logging
-            std::cout << "[ObjectPool] Expanded by " << count << ". Total: " << m_totalAllocated << std::endl;
+            std::cout << "[ObjectPool " << (int)m_uniqueID << "]" << " Expanded by " << count << ". Total: " << m_totalAllocated << std::endl;
 
         } catch (const std::bad_alloc& e) {
-            std::cerr << "[ObjectPool] CRITICAL: Memory allocation failed during expansion: " << e.what() << std::endl;
+            std::cerr << "[ObjectPool " << (int)m_uniqueID << "]" << " CRITICAL: Memory allocation failed during expansion: " << e.what() << std::endl;
         }
     }
 };

@@ -267,6 +267,7 @@ int main() {
     //Initialize GUI & GL State
     gui.Init(window);
     
+    // openGL setup
     glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE); // Reverse-Z requirement
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GREATER); // Reverse-Z comparison
@@ -279,6 +280,14 @@ int main() {
     int curScrWidth = SCR_WIDTH, curScrHeight = SCR_HEIGHT;
     int prevScrWidth = curScrWidth, prevScrHeight = curScrHeight;
     glfwGetFramebufferSize(window, &curScrWidth, &curScrHeight);
+
+    // crash on windows likely related to trying to resize before window had a valid size
+    // Guard against 0 size on initial startup (common on Windows with Fullscreen)
+    if (curScrWidth > 0 && curScrHeight > 0) {
+        g_fbo.Resize(curScrWidth, curScrHeight);
+    } else {
+        std::cout << "[Main] Warning: Initial window size is 0x0. Deferring FBO creation." << std::endl;
+    }
     
     // NOTE: g_fbo is assumed to be an external global. 
     // Ideally this should be encapsulated, but maintained here for existing logic.
@@ -288,8 +297,13 @@ int main() {
     player.camera.Pitch = -1.0f;
     player.camera.updateCameraVectors();
     
+
+
+
+
+    
     // World & Resources Scope
-    { 
+   try { 
         // shader for world and then shader that helped me debug depth buffer
         Shader worldShader("./resources/VERT_UPGRADED.glsl", "./resources/FRAG_UPGRADED.glsl");
         //Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
@@ -344,6 +358,9 @@ int main() {
             deltaTime = currentFrame - lastFrame;
             lastFrame = currentFrame;
 
+            // Prevents massive physics/movement jumps if the app hangs or is dragged
+            deltaTime = std::min(deltaTime, 0.05f); 
+
             Engine::Profiler::Get().Update();
 
             // update player before? or after world update???
@@ -363,9 +380,21 @@ int main() {
             Engine::Profiler::Get().DrawUI(appState.isGameMode);
 
 
+
+            // Minimization / Background Throttling
+            // If dimensions are 0 (minimized), pause thread to save resources
+            while (curScrWidth == 0 || curScrHeight == 0) {
+                glfwGetFramebufferSize(window, &curScrWidth, &curScrHeight);
+                glfwWaitEvents(); // Sleeps until event (resize/restore) occurs
+                if (glfwWindowShouldClose(window)) break;
+                // Reset timer so we don't jump when restoring
+                lastFrame = (float)glfwGetTime();
+            }
+            if (glfwWindowShouldClose(window)) break;
             // Handle Resize
             glfwGetFramebufferSize(window, &curScrWidth, &curScrHeight);
-            if (curScrWidth != prevScrWidth || curScrHeight != prevScrHeight) {
+            // Only resize if dimensions changed AND they are valid (>0)
+            if ((curScrWidth != prevScrWidth || curScrHeight != prevScrHeight) && curScrWidth > 0 && curScrHeight > 0) {
                 g_fbo.Resize(curScrWidth, curScrHeight);
                 prevScrWidth = curScrWidth;
                 prevScrHeight = curScrHeight;
@@ -422,6 +451,11 @@ int main() {
             prevViewProj = viewProj;
             
         }
+    }
+    catch (const std::exception& e) {
+        std::cerr << "\n[FATAL CRASH]: " << e.what() << "\n" << std::endl;
+        
+        return -1;
     }
     
     // 6. Shutdown
