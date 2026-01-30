@@ -36,6 +36,7 @@
 #include "terrain/terrain_standard_gen_fast.h"
 #include "terrain/advancedGenerator.h"
 #include "terrain/terrain_bizzaro_world.h"
+#include "terrain/terrain_superflat.h"
 
 
 // ======================================================================================
@@ -52,8 +53,10 @@ const bool START_FULLSCREEN = true;
 
 // Camera 
 //Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
-Player player(glm::vec3(-529.0f, 76.0f, 61.0f));
+//Player player(glm::vec3(-529.0f, 76.0f, 61.0f)); // good starting position for advanced generator
 //Player player(glm::vec3(4855.0f, 100.0f, -4005.0f)); // debug spot back when I needed to find this spot, turned out i was sampling the noise generator wrong resulting in bad terrain at LOD 0
+Player player(glm::vec3(0.0f, 15.0f, 9.0f));
+
 
 // Mouse State
 float lastX = SCR_WIDTH / 2.0f;
@@ -325,7 +328,7 @@ int main() {
 
 
         // create our start terrain generator by choosing which class we send in
-        auto defaultTerrainGenerator = std::make_unique<AdvancedGenerator>(); // seed input
+        auto defaultTerrainGenerator = std::make_unique<SuperflatGenerator>(); // seed input
         // Ask the generator what textures it needs
         std::vector<std::string> texturePaths = defaultTerrainGenerator->GetTexturePaths();
         // Load them into GPU

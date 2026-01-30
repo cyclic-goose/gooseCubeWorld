@@ -8,6 +8,7 @@
 #include "terrain_bizzaro_world.h"
 #include "terrain_beach_world.h"
 #include "terrain_beach_world_2.h"
+#include "terrain_superflat.h"
 
 // Direct import of your World class
 #include "world.h"
@@ -24,25 +25,28 @@
 namespace GeneratorSelector {
 
     // Helper to keep track of selection state.
-    static int currentGenIndex = 0;
+    static int currentGenIndex = 1;
     static float switchCooldown = 0.0f; // Internal cooldown state
 
     static const char* genNames[] = { 
-        "Advanced (Standard)", 
+        "Advanced (Standard)",
+        "Superflat",
         "Overhang (3D Noise)", 
-        "Bizzaro (Crater World)",
-        "Beach World (3D)",
+        "Bizzaro",
+        "Beach World (3D Capable)",
         "Experimental"
     };
 
     // Factory function to create generators based on index
+    // MAKE SURE THIS ORDER MATCHES genNAMES
     inline std::unique_ptr<ITerrainGenerator> CreateGenerator(int index, int seed) {
         switch (index) {
-            case 0: return std::make_unique<AdvancedGenerator>(seed);
-            case 1: return std::make_unique<OverhangGenerator>(); 
-            case 2: return std::make_unique<BizzaroGenerator>();
-            case 3: return std::make_unique<BeachGenerator>();
-            case 4: return std::make_unique<ComplexBiomeGenerator>();
+            case 0: return std::make_unique<AdvancedGenerator>(seed); // primary 
+            case 1: return std::make_unique<SuperflatGenerator>(); // really for testing
+            case 2: return std::make_unique<OverhangGenerator>(); 
+            case 3: return std::make_unique<BizzaroGenerator>();
+            case 4: return std::make_unique<BeachGenerator>();
+            case 5: return std::make_unique<ComplexBiomeGenerator>();
             default: return std::make_unique<AdvancedGenerator>(seed);
         }
     }
