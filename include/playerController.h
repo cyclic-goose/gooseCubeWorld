@@ -1,7 +1,7 @@
 #pragma once
 
 #include "camera.h"
-#include "terrain_system.h"
+#include "terrain/terrain_system.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -25,12 +25,12 @@ public:
     
     // Movement Speeds
     float walkSpeed = 5.0f;
-    float runSpeed = 20.0f;     // Fast sprint
+    float runSpeed = 40.0f;     // Fast sprint
     float flySpeed = 70.0f;      // Creative flight speed
     float flySprintSpeed = 100.0f; // Shift + Fly
 
     // Physics Constants
-    float jumpForce = 18.5f;
+    float jumpForce = 15.5f;
     float gravity = 22.0f;       // Snappy gravity
     float groundDrag = 8.0f;     // High friction for tight controls
     float airDrag = 1.0f;        // Lower friction in air
@@ -65,6 +65,7 @@ public:
         camera.ProcessMouseMovement(xoffset, yoffset);
     }
 
+    //glm::vec3 Position() {return position;}
 
 
 private:
@@ -185,7 +186,7 @@ private:
         }
     }
 
-    // cast a wee ray 
+    // UPDATED: Now supports full 3D collision (caves, overhangs, bridges)
     bool CheckCollision(ITerrainGenerator* terrain) {
         glm::vec3 min = position - glm::vec3(width/2, 0, width/2);
         glm::vec3 max = position + glm::vec3(width/2, height, width/2);
@@ -198,11 +199,15 @@ private:
         int maxZ = static_cast<int>(std::floor(max.z));
 
         for (int x = minX; x <= maxX; x++) {
-            for (int z = minZ; z <= maxZ; z++) {
-                int h = terrain->GetHeight(x, z);
-                for (int y = minY; y <= maxY; y++) {
-                    // Check LOD 1 solidity
-                    if (terrain->GetBlock(x, y, z, h, 1) != 0) return true;
+            for (int y = minY; y <= maxY; y++) {
+                for (int z = minZ; z <= maxZ; z++) {
+                    // We use LOD 1 for physics (finest detail)
+                    // We no longer need GetHeight(); GetBlock handles 3D checks internally.
+                    auto texture = terrain->GetBlock((float)x, (float)y, (float)z, 1); // get the block underneath the player aabb
+
+                    if (!(texture == 0 || texture == 6)) {
+                        return true;
+                    }
                 }
             }
         }

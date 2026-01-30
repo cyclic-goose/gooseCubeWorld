@@ -1,5 +1,5 @@
 /* * ======================================================================================
- * GOOSE VOXELS - MAIN ENTRY POINT
+ * GOOSE Cube Engine - MAIN ENTRY POINT
  * ======================================================================================
  * Overview:
  * Initializes GLFW, GLAD, and ImGui. Sets up the main render loop, handles input 
@@ -25,9 +25,17 @@
 #include "splash_screen.hpp"
 #include "texture_manager.h"
 #include "input_manager.h"
-#include "terrain_superflat.h"
+//#include "terrain_superflat.h"
+//#include "terrain_superflat_withGlass.h"
 #include "engine_config.h"
 #include "playerController.h"
+
+
+///////// Terrain includes, each terrain base is a base class to terrain_system
+#include "terrain/terrain_smooth_noise.h"
+#include "terrain/terrain_standard_gen_fast.h"
+#include "terrain/advancedGenerator.h"
+#include "terrain/terrain_bizzaro_world.h"
 
 
 // ======================================================================================
@@ -44,7 +52,7 @@ const bool START_FULLSCREEN = true;
 
 // Camera 
 //Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
-Player player(glm::vec3(0.0f, 150.0f, 150.0f));
+Player player(glm::vec3(-529.0f, 76.0f, 61.0f));
 
 // Mouse State
 float lastX = SCR_WIDTH / 2.0f;
@@ -174,34 +182,35 @@ void processInput(GLFWwindow *window, World& world) {
     // ==========================================================
     
     if (Input::IsJustPressed(window, GLFW_KEY_T)) { // 'T' for Terraforming
-        if (world.IsBusy())
-        {
-            std::cout << "World is still generating. Please Wait..." << std::endl;
-        }else if (switchCooldown > 0.0f) 
-        {
-            std::cout << "Generation on cooldown..." << std::endl;
+        appState.showTerrainGui = !appState.showTerrainGui;
+        // if (world.IsBusy())
+        // {
+        //     std::cout << "World is still generating. Please Wait..." << std::endl;
+        // }else if (switchCooldown > 0.0f) 
+        // {
+        //     std::cout << "Generation on cooldown..." << std::endl;
         
-        } else {
-            std::cout << "[Main] Switching Generator..." << std::endl;
+        // } else {
+        //     std::cout << "[Main] Switching Generator..." << std::endl;
 
-            // Create the NEW Generator (e.g. Mars Generator)
-            // auto newGen = std::make_unique<MarsGenerator>(12345); 
-            // For now, let's just re-create Standard with a different seed to simulate a switch
-            auto newGen = std::make_unique<SuperflatGenerator>();
+        //     // Create the NEW Generator (e.g. Mars Generator)
+        //     // auto newGen = std::make_unique<MarsGenerator>(12345); 
+        //     // For now, let's just re-create Standard with a different seed to simulate a switch
+        //     // auto newGen = std::make_unique<AdvancedGenerator>(rand());
 
-            // Load Textures for the NEW Generator
-            // Important: We must unload the old array if we are strictly managing VRAM, 
-            // but typically we just overwrite the ID reference in World.
-            // Ideally, TextureManager should have a 'DeleteTexture(id)' method.
-            std::vector<std::string> newPaths = newGen->GetTexturePaths();
-            GLuint newTexArray = TextureManager::LoadTextureArray(newPaths);
+        //     // // Load Textures for the NEW Generator
+        //     // // Important: We must unload the old array if we are strictly managing VRAM, 
+        //     // // but typically we just overwrite the ID reference in World.
+        //     // // Ideally, TextureManager should have a 'DeleteTexture(id)' method.
+        //     // std::vector<std::string> newPaths = newGen->GetTexturePaths();
+        //     // GLuint newTexArray = TextureManager::LoadTextureArray(newPaths);
 
-            // Inject into World
+        //     // // Inject into World
             
-            // Call the helper (assuming you added it to World class)
-            world.SwitchGenerator(std::move(newGen), newTexArray);
-            switchCooldown = 2.0f;
-        }
+        //     // // Call the helper (assuming you added it to World class)
+        //     // world.SwitchGenerator(std::move(newGen), newTexArray);
+        //     // switchCooldown = 2.0f;
+        // }
         
     }
 
@@ -238,7 +247,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     
-    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Voxels", NULL, NULL);
+    GLFWwindow* window = glfwCreateWindow(SCR_WIDTH, SCR_HEIGHT, "Goose Cube World", NULL, NULL);
     if (window == NULL) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
     
@@ -275,14 +284,15 @@ int main() {
     // Ideally this should be encapsulated, but maintained here for existing logic.
     g_fbo.Resize(curScrWidth, curScrHeight);
 
-    player.camera.Yaw = -90.0f;
-    player.camera.Pitch = -45.0f;
+    player.camera.Yaw = -142.0f;
+    player.camera.Pitch = -1.0f;
     player.camera.updateCameraVectors();
     
     // World & Resources Scope
     { 
         // shader for world and then shader that helped me debug depth buffer
-        Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
+        Shader worldShader("./resources/VERT_UPGRADED.glsl", "./resources/FRAG_UPGRADED.glsl");
+        //Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl");
         
         // --- World Configuration ---
@@ -299,8 +309,8 @@ int main() {
 
 
 
-        // create our terrain generation by choosing which class we send in
-        auto defaultTerrainGenerator = std::make_unique<StandardGenerator>(1337); // seed input
+        // create our start terrain generator by choosing which class we send in
+        auto defaultTerrainGenerator = std::make_unique<AdvancedGenerator>(); // seed input
         // Ask the generator what textures it needs
         std::vector<std::string> texturePaths = defaultTerrainGenerator->GetTexturePaths();
         // Load them into GPU
@@ -373,12 +383,21 @@ int main() {
             
 
             // Render Prep
+            
+            // Clear Screen (Framebuffer 0) to Debug Magenta
+            // If you see this color, the Blit from FBO to Screen failed.
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, curScrWidth, curScrHeight);
+            glClearColor(1.0f, 0.0f, 1.0f, 1.0f); 
+            glClear(GL_COLOR_BUFFER_BIT);
+
+            // Clear FBO (Game View)
             glBindFramebuffer(GL_FRAMEBUFFER, g_fbo.fbo);
             glViewport(0, 0, curScrWidth, curScrHeight);
-            glDisable(GL_SCISSOR_TEST); // Fix for ImGui scissor issues
+            glDisable(GL_SCISSOR_TEST); 
             
             glClearColor(0.53f, 0.81f, 0.91f, 1.0f); 
-            glClearDepth(0.0f); // Reverse-Z
+            glClearDepth(0.000000000f); // Reverse-Z
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 
@@ -386,8 +405,8 @@ int main() {
             // World Draw
             // Triggers: Cull(PrevDepth) -> MultiDrawIndirect, then HI-Z occlusion calc for next frame
             // see GPU_CULLING_RENDER_SYSTEM.md for render pipeline info
-            world.Draw(worldShader, viewProj, lockedCullMatrix, prevViewProj, projection, 
-                       curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum);
+            world.Draw(worldShader, viewProj, prevViewProj, projection, 
+                       curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum, player.position);
 
 
             // GUI Render
@@ -399,9 +418,9 @@ int main() {
             glfwPollEvents();
 
             // Reprojection History
-            if (!appState.lockFrustum) {
-                prevViewProj = viewProj;
-            }
+            
+            prevViewProj = viewProj;
+            
         }
     }
     

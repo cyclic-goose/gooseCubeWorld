@@ -4,29 +4,23 @@
 #include <algorithm>
 
 struct PackedVertex {
-    uint32_t data; // Reduced from 8 bytes (2x uint32) to 4 bytes (1x uint32)
+    uint32_t data; 
 
     PackedVertex() : data(0) {}
 
     PackedVertex(float x, float y, float z, float face, float ao, uint32_t textureId) {
-        // LAYOUT (32 BITS TOTAL):
-        // [00-05] X        (6 bits) : Range 0..63
-        // [06-11] Y        (6 bits) : Range 0..63
-        // [12-17] Z        (6 bits) : Range 0..63
-        // [18-20] Normal   (3 bits) : Range 0..7
-        // [21-22] AO       (2 bits) : Range 0..3
-        // [23-31] TexID    (9 bits) : Range 0..511
-
-        // OFFSET: Add 8.0f to support skirts (e.g. -1 becomes 7).
-        // Max range becomes -8 to +55.
-        uint32_t ix = (uint32_t)(x + 8.0f) & 0x3F;
-        uint32_t iy = (uint32_t)(y + 8.0f) & 0x3F;
-        uint32_t iz = (uint32_t)(z + 8.0f) & 0x3F;
+        // Bias of 0.5f prevents float truncation errors (9.99 -> 9)
+        // Mask 0x3F = 6 bits = values 0-63 (Enough for CHUNK_SIZE_PADDED = 34)
         
-        uint32_t iNorm = (uint32_t)face & 0x7;
-        uint32_t iAo   = (uint32_t)ao   & 0x3;
-        uint32_t iTex  = textureId      & 0x1FF; // Cap at 512 textures
+        uint32_t ix = (uint32_t)(x + 0.5f) & 0x3F;
+        uint32_t iy = (uint32_t)(y + 0.5f) & 0x3F;
+        uint32_t iz = (uint32_t)(z + 0.5f) & 0x3F;
+        
+        uint32_t iNorm = (uint32_t)(face + 0.5f) & 0x7;  // 3 bits
+        uint32_t iAo   = (uint32_t)(ao + 0.5f)   & 0x3;  // 2 bits
+        uint32_t iTex  = textureId      & 0x1FF; // 9 bits (512 texture IDs)
 
+        // Packing Order: X, Y, Z, Norm, AO, Tex
         data = ix | 
               (iy << 6)  | 
               (iz << 12) | 
