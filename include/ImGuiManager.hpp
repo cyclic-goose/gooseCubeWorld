@@ -10,7 +10,7 @@
 #include "world.h"
 #include "camera.h"
 #include "profiler.h"
-#include "terrain_system.h"
+#include "terrain/terrain_system.h"
 #include "playerController.h"
 
 // ================================================================================================

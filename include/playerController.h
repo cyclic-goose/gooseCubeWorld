@@ -1,7 +1,7 @@
 #pragma once
 
 #include "camera.h"
-#include "terrain_system.h"
+#include "terrain/terrain_system.h"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -25,12 +25,12 @@ public:
     
     // Movement Speeds
     float walkSpeed = 5.0f;
-    float runSpeed = 60.0f;     // Fast sprint
+    float runSpeed = 40.0f;     // Fast sprint
     float flySpeed = 100.0f;      // Creative flight speed
     float flySprintSpeed = 150.0f; // Shift + Fly
 
     // Physics Constants
-    float jumpForce = 48.5f;
+    float jumpForce = 15.5f;
     float gravity = 22.0f;       // Snappy gravity
     float groundDrag = 8.0f;     // High friction for tight controls
     float airDrag = 1.0f;        // Lower friction in air
@@ -65,6 +65,7 @@ public:
         camera.ProcessMouseMovement(xoffset, yoffset);
     }
 
+    //glm::vec3 Position() {return position;}
 
 
 private:

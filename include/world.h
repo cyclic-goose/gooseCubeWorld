@@ -34,7 +34,7 @@
 #include "profiler.h"
 #include "gpu_culler.h"
 #include "screen_quad.h"
-#include "terrain_system.h"
+#include "terrain/terrain_system.h"
 #include "engine_config.h"
 
 
@@ -540,7 +540,7 @@ public:
         }
     }
 
-    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& previousViewProjMatrix, const glm::mat4& proj, const int CUR_SCR_WIDTH, const int CUR_SCR_HEIGHT, Shader* depthDebugShader, bool depthDebug, bool frustumLock) {
+    void Draw(Shader& shader, const glm::mat4& viewProj, const glm::mat4& previousViewProjMatrix, const glm::mat4& proj, const int CUR_SCR_WIDTH, const int CUR_SCR_HEIGHT, Shader* depthDebugShader, bool depthDebug, bool frustumLock, glm::vec3 playerPosition) {
         if(m_shutdown) return;
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
@@ -552,6 +552,7 @@ public:
 
             shader.use();
             glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
+            glUniform3fv(glGetUniformLocation(shader.ID, "u_CameraPos"), 1, glm::value_ptr(playerPosition)); // set position all shader stuff inefficient for now but this is a quick fix to see fog
             glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config->settings.cubeDebugMode);
             
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_gpuMemory->GetID());

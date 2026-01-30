@@ -14,7 +14,7 @@
 class AdvancedGenerator : public ITerrainGenerator {
 public:
     struct GenSettings {
-        int seed = 1337;
+        int seed = 1804289383;
         float scale = 0.073f;           // Global scale
         
         // Height params

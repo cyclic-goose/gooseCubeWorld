@@ -32,9 +32,9 @@
 
 
 ///////// Terrain includes, each terrain base is a base class to terrain_system
-#include "terrain_smooth_noise.h"
-#include "terrain_standard_gen_fast.h"
-#include "advancedGenerator.h"
+#include "terrain/terrain_smooth_noise.h"
+#include "terrain/terrain_standard_gen_fast.h"
+#include "terrain/advancedGenerator.h"
 
 
 // ======================================================================================
@@ -51,7 +51,7 @@ const bool START_FULLSCREEN = true;
 
 // Camera 
 //Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
-Player player(glm::vec3(0.0f, 150.0f, 150.0f));
+Player player(glm::vec3(-529.0f, 76.0f, 61.0f));
 
 // Mouse State
 float lastX = SCR_WIDTH / 2.0f;
@@ -282,14 +282,15 @@ int main() {
     // Ideally this should be encapsulated, but maintained here for existing logic.
     g_fbo.Resize(curScrWidth, curScrHeight);
 
-    player.camera.Yaw = 30.0f;
-    player.camera.Pitch = 5.0f;
+    player.camera.Yaw = -142.0f;
+    player.camera.Pitch = -1.0f;
     player.camera.updateCameraVectors();
     
     // World & Resources Scope
     { 
         // shader for world and then shader that helped me debug depth buffer
-        Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
+        Shader worldShader("./resources/VERT_UPGRADED.glsl", "./resources/FRAG_UPGRADED.glsl");
+        //Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl");
         
         // --- World Configuration ---
@@ -403,7 +404,7 @@ int main() {
             // Triggers: Cull(PrevDepth) -> MultiDrawIndirect, then HI-Z occlusion calc for next frame
             // see GPU_CULLING_RENDER_SYSTEM.md for render pipeline info
             world.Draw(worldShader, viewProj, prevViewProj, projection, 
-                       curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum);
+                       curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum, player.position);
 
 
             // GUI Render
