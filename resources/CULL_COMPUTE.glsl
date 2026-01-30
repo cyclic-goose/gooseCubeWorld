@@ -20,7 +20,10 @@ struct ChunkGpuData {
     uint countTrans;      
 };
 
-layout(std430, binding = 0) readonly buffer GlobalBuffer {
+// FIX: Changed Binding from 0 to 4.
+// Binding 0 is commonly used for Vertex Data in the Vertex Shader.
+// Using 0 here caused the VS to read metadata as geometry, creating random offsets.
+layout(std430, binding = 4) readonly buffer GlobalBuffer {
     ChunkGpuData allChunks[];
 };
 
@@ -152,8 +155,10 @@ bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
     
     float furthestOccluder = min(d5, min(min(d1, d2), min(d3, d4)));
     
-    // 5. Compare
-    return maxZ < (furthestOccluder - 0.00001);
+    float lodFactor = lod / 10.0; 
+    float smartEpsilon = 0.0005 + (0.0015 * lodFactor);
+
+    return maxZ < (furthestOccluder - smartEpsilon);
 }
 
 void main() {

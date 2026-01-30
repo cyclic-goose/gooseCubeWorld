@@ -33,7 +33,7 @@ struct alignas(16) ChunkGpuData {
 struct CullerSettings {
     float zNear = 0.1f;
     float zFar = 100000000.0f;   // Default: Infinite horizon
-    bool occlusionEnabled = true;
+    bool occlusionEnabled = false; // with new terrain systems, cant get this working, either second mesh or non-collidables are screwing it up
     bool freezeCulling = false;  // Stops the compute shader updates (locks visibility)
     float frustumPadding = 0.0f; // Expand/Contract frustum for debugging
 };

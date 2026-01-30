@@ -1,10 +1,10 @@
-#include "terrain_system.h"
+#include "terrain/terrain_system.h"
 #include <imgui.h> 
 #include <algorithm>
 #include <iostream>
 
 // ================================================================================================
-// STANDARD GENERATOR IMPLEMENTATION
+// STANDARD GENERATOR (2.5D Heightmap Logic)
 // ================================================================================================
 
 StandardGenerator::StandardGenerator() : m_settings(TerrainSettings()) { Init(); }
@@ -28,12 +28,11 @@ void StandardGenerator::Init() {
 }
 
 std::vector<std::string> StandardGenerator::GetTexturePaths() const {
-    // Matches ID 1-4
     return {
-        "resources/textures/grass.jpg",    
-        "resources/textures/dirt.jpg",     
-        "resources/textures/stone.jpg",    
-        "resources/textures/bedrock.jpg"   
+        "resources/textures/dirt1.jpg",    
+        "resources/textures/dirt1.jpg",     
+        "resources/textures/dirt1.jpg",    
+        "resources/textures/dirt1.jpg"   
     };
 }
 
@@ -49,22 +48,26 @@ int StandardGenerator::GetHeight(float x, float z) const {
     mountainVal = std::pow(mountainVal, 2.0f); 
     float mountainHeight = mountainVal * m_settings.mountainAmplitude;
     
-    // PRECISION FIX: Explicit floor to prevent chunk boundary mismatches
     return m_settings.seaLevel + (int)std::floor(hillHeight + mountainHeight);
 }
 
-uint8_t StandardGenerator::GetBlock(float x, float y, float z, int heightAtXZ, int lodScale) const {
+// ADAPTED FOR COMPATIBILITY
+uint8_t StandardGenerator::GetBlock(float x, float y, float z, int lodScale) const {
+    // We calculate height locally here since the World no longer passes it in
+    int heightAtXZ = GetHeight(x, z);
+    
     int wy = (int)y;
     
-    if (lodScale == 1) { 
-            float val = m_caveNoise->GenSingle3D(x * 0.02f, y * 0.04f, z * 0.02f, m_settings.seed);
-            if (val > m_settings.caveThreshold) return 0; 
+    // 3D Cave Check (Only cut holes if we are below surface)
+    if (wy < heightAtXZ && lodScale == 1) { 
+        float val = m_caveNoise->GenSingle3D(x * 0.02f, y * 0.04f, z * 0.02f, m_settings.seed);
+        if (val > m_settings.caveThreshold) return 0; // Air
     }
 
     if (wy > heightAtXZ) return 0; 
 
     if (wy == heightAtXZ) {
-        if (wy > 180) return 4; // Snow/Bedrock texture for peaks
+        if (wy > 180) return 4; // Snow/Bedrock
         return 1; // Grass
     } 
     else if (wy > heightAtXZ - (4 * lodScale)) {
@@ -78,11 +81,11 @@ uint8_t StandardGenerator::GetBlock(float x, float y, float z, int heightAtXZ, i
 
 void StandardGenerator::GetHeightBounds(int cx, int cz, int scale, int& minH, int& maxH) {
     const int CHUNK_SIZE = 32; 
-
     int worldX = cx * CHUNK_SIZE * scale;
     int worldZ = cz * CHUNK_SIZE * scale;
     int size = CHUNK_SIZE * scale;
 
+    // Sampling corners and center is usually enough for heightmap bounds
     int h1 = GetHeight((float)worldX, (float)worldZ);
     int h2 = GetHeight((float)(worldX + size), (float)worldZ);
     int h3 = GetHeight((float)worldX, (float)(worldZ + size));
@@ -92,22 +95,14 @@ void StandardGenerator::GetHeightBounds(int cx, int cz, int scale, int& minH, in
     int min = std::min({h1, h2, h3, h4, h5});
     int max = std::max({h1, h2, h3, h4, h5});
 
-    // Add padding to handle noise variance
-    minH = min - (8 * scale);
-    maxH = max + (8 * scale);
+    minH = min - (16 * scale); // padding for caves
+    maxH = max + (4 * scale);
 }
 
 void StandardGenerator::OnImGui() {
     ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Standard Noise Gen");
-    bool valChanged = false;
-
-    if(ImGui::DragInt("Seed", &m_settings.seed)) valChanged = true;
-    if(ImGui::SliderFloat("Scale", &m_settings.scale, 0.001f, 0.1f)) valChanged = true;
-    if(ImGui::SliderFloat("Hill Amp", &m_settings.hillAmplitude, 0.0f, 500.0f)) valChanged = true;
-    if(ImGui::SliderFloat("Mnt Amp", &m_settings.mountainAmplitude, 0.0f, 8000.0f)) valChanged = true;
-    
-    if (valChanged) {
-        m_dirty = true;
-        Init(); 
-    }
+    if(ImGui::DragInt("Seed", &m_settings.seed)) { m_dirty = true; Init(); }
+    if(ImGui::SliderFloat("Scale", &m_settings.scale, 0.001f, 0.1f)) { m_dirty = true; Init(); }
 }
+
+
