@@ -6,39 +6,76 @@
 // ================================================================================================
 
 struct RuntimeConfig {
-    int lodCount = 4;                                                                           // starting number, changeable at runtime
-    int lodRadius[12] = { 15, 15, 15, 15, 0, 0, 0, 0 , 0, 0, 0, 0};                            // starting number, changeable at runtime
+    int lodCount = 4;                                           
+    int lodRadius[12] = { 15, 15, 15, 15, 0, 0, 0, 0 , 0, 0, 0, 0};
     bool occlusionCulling = false;
     bool enableCaves = false; 
 
-    // Memory & Debug
-                                                      
-    int worldHeightChunks = 64;                                                                 // World height in chunks, each chunk is 32x32x32 blocks so worldHeightChunks = 64 gives a world height of 32x64 = 2048 blocks
+    // Memory & Debug                                           
+    int worldHeightChunks = 64;                                 
     int cubeDebugMode = 4;
+};
+
+// Struct for actual memory pools (Node/Voxel data)
+struct PoolConfig {
+    size_t growthStride;    // How many items to add when empty
+    size_t initialSize;     // How many items to start with
+    size_t limit;           // Hard limit (0 = infinite)
+
+    PoolConfig(size_t growth, size_t initial, size_t cap) 
+        : growthStride(growth), initialSize(initial), limit(cap) {}
 };
 
 struct EngineConfig {
 
-    // IMMUTABLES
+    // -- READABILITY HELPERS --
+    
+    // 1. For Memory Sizes (VRAM, Buffers) - Returns Total Bytes
+    static constexpr size_t Bytes_MB(size_t megabytes) { return megabytes * 1024 * 1024; }
+    
+    // 2. For Object Pools - Returns ITEM COUNT
+    // Use these for Pool Init/Limits. Do not use Bytes_MB for pools!
+    static constexpr size_t Items_K(size_t thousands) { return thousands * 1024; }
+    static constexpr size_t Items_M(size_t millions) { return millions * 1024 * 1024; }
 
-    const int VRAM_HEAP_ALLOCATION_MB;                                                   // Sets how much VRAM the application will allocate
+    // -- IMMUTABLES --
 
-    const int NODE_POOL_GROWTH_STRIDE;                                                    // this is how many nodes (chunk voxel + chunk meta data) the object pool will increase the ram heap by each time it runs out of memory. Meaning if the program needs more ram, it will allocate enough for 512 more nodes
-    const int NODE_POOL_INITIAL_SIZE;                                                    // we can initially hold 1024 chunks (really chunks + chunk meta data) in the world
+    // General Memory
+    const int VRAM_HEAP_ALLOCATION_MB;                          
 
-    const int VOXEL_POOL_GROWTH_STRIDE;                                                    // same as above but for the actual chunk voxel data, We start with a small size and grow slowly because once voxels are uploaded to VRAM, we dont need them in RAM anyways. This is always a transient pool
-    const int VOXEL_POOL_INITIAL_SIZE; 
+    // Actual Pool Allocations
+    const PoolConfig nodePool;
+    const PoolConfig voxelPool;
 
-    const int NODE_GENERATION_LIMIT;                                                     // plain and simply how many nodes (chunks in most minds) can be in the queue to generate at any moment
-    const int NODE_UPLOAD_LIMIT;                                                          // same as above, how many nodes (chunks) can be in the upload queue total. I have found 128 to be a good number for my system. You actually dont want too many to be queued up it takes workers from other jobs
-
-    const int MAX_TRANSIENT_VOXEL_MESHES;                                               // transient voxels are basically just nodes marked as either GENERATING, MESHING, or UPLOADING. These are basically the nodes with actual voxel data ready to upload. Want to limit this to limit RAM usage.
+    // Workload Limits & Caps
+    const int NODE_GENERATION_LIMIT;                            
+    const int NODE_UPLOAD_LIMIT;
+    const int MAX_TRANSIENT_VOXEL_MESHES; 
 
     RuntimeConfig settings;
 
-    EngineConfig() :    VRAM_HEAP_ALLOCATION_MB(1024), NODE_POOL_GROWTH_STRIDE(512), NODE_POOL_INITIAL_SIZE(1024*64),
-                        VOXEL_POOL_GROWTH_STRIDE(32), VOXEL_POOL_INITIAL_SIZE(1024*32), NODE_GENERATION_LIMIT(2048),
-                        NODE_UPLOAD_LIMIT(512), MAX_TRANSIENT_VOXEL_MESHES(1024*32) {}
+    EngineConfig() : 
+        VRAM_HEAP_ALLOCATION_MB(1024),
+        
+        // Node Pool (Chunk Metadata)
+        // Stride: 512 items, Initial: 64k items, Limit: Infinite
+        // ChunkMetadata is ~168 bytes, 64k items = ~10.5 MB
+        nodePool(512, Items_K(16), 0), // this means start with size that will allow 16 thousand chunks, grow by 512 chunks if more is needed
 
 
+
+        // Voxel Data Pool (Transient raw voxel data)
+        // Stride: 256k items, Initial: 1M items, Limit: 4M items
+        // (If VoxelData is 1 byte, 1M items = 1 MB.
+
+
+        //34×34×34=39,304 bytes per Chunk.
+        //1 Chunk ≈ 39 KB.
+        voxelPool(Items_K(1), Items_K(20), Items_K(160)), //start with enough memory for 1 million voxels, grow by 16 thousand if more is needed, never go beyond enough for 4 million voxels
+
+        // 3. Limits
+        NODE_GENERATION_LIMIT(2048),
+        NODE_UPLOAD_LIMIT(512),
+        MAX_TRANSIENT_VOXEL_MESHES(Items_K(32)) // 32k limit
+    {}
 };

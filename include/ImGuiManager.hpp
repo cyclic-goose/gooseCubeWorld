@@ -13,6 +13,7 @@
 #include "terrain/terrain_system.h"
 #include "terrain/terrain_selector_ImGuiExpose.h"
 #include "playerController.h"
+#include "gui_utils.h"
 
 // ================================================================================================
 // UI CONFIGURATION
@@ -314,6 +315,7 @@ private:
                             if (ImGui::SliderInt("##lodslider", &currentLODs, 1, 12, "LOD Level: %d")) {
                                 config.editConfig->settings.lodCount = currentLODs;
                             }
+                            
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Level 1-6: Standard Playable Area\nLevel 7-9: Far Horizon\nLevel 10+: Extreme Distance");
                             
                             if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -338,8 +340,10 @@ private:
                                     ImGui::Text("LOD %d (1:%dx Scale)", i, currentScale);
                                     ImGui::SameLine();
                                     std::string sliderLabel = "##lodradius" + std::to_string(i);
-                                    ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig->settings.lodRadius[i], 2, (int)(64.0));
-                                    
+                                    ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig->settings.lodRadius[i], 2, (int)(32.0));
+                                    if (i == 0) {
+                                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("WARNING: LOD 0 has the heaviest impact on RAM due to metadata density and retained collision data.\n 1 Chunk in LOD 0 = ~40KB RAM.\n The World is CUBIC so Render distance of 32 means 32x32x(world height in chunks)x40kB\n Other LODs will have a minimal effect on RAM use since collision data is not loaded. ");
+                                     }
                                     if (ImGui::IsItemDeactivatedAfterEdit()) {
                                         world.ReloadWorld(*config.editConfig);
                                     }

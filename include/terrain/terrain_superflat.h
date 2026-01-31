@@ -41,30 +41,30 @@ public:
     // GET BLOCK (Single Voxel Physics)
     // --------------------------------------------------------------------------------------------
     uint8_t GetBlock(float worldX, float worldY, float worldZ, int lodScale) const override {
-        int integerWorldY = (int)std::floor(worldY);
+        // int integerWorldY = (int)std::floor(worldY);
 
-        // 1. Bedrock Layer
-        if (m_settings.enableBedrock && integerWorldY == 0) return 19;
+        // // 1. Bedrock Layer
+        // if (m_settings.enableBedrock && integerWorldY == 0) return 19;
 
-        // 2. Staircase Logic (Physics)
-        if (m_settings.enableStaircase) {
-             int integerWorldX = (int)std::floor(worldX);
-             int integerWorldZ = (int)std::floor(worldZ);
-             int floorHeight = m_settings.floorLevel;
+        // // 2. Staircase Logic (Physics)
+        // if (m_settings.enableStaircase) {
+        //      int integerWorldX = (int)std::floor(worldX);
+        //      int integerWorldZ = (int)std::floor(worldZ);
+        //      int floorHeight = m_settings.floorLevel;
 
-             // Simple Staircase: 3 blocks wide, 10 blocks long, going UP the X axis
-             // X: 0 to 9 (Length)
-             // Z: -1 to 1 (Width)
-             if (integerWorldZ >= -1 && integerWorldZ <= 1 && integerWorldX >= 0 && integerWorldX < 10) {
-                 int stepHeightOffset = integerWorldX + 1; // Step 1 starts at x=0
-                 if (integerWorldY == floorHeight + stepHeightOffset) {
-                     return 4; // Cobblestone Steps
-                 }
-             }
-        }
+        //      // Simple Staircase: 3 blocks wide, 10 blocks long, going UP the X axis
+        //      // X: 0 to 9 (Length)
+        //      // Z: -1 to 1 (Width)
+        //      if (integerWorldZ >= -1 && integerWorldZ <= 1 && integerWorldX >= 0 && integerWorldX < 10) {
+        //          int stepHeightOffset = integerWorldX + 1; // Step 1 starts at x=0
+        //          if (integerWorldY == floorHeight + stepHeightOffset) {
+        //              return 4; // Cobblestone Steps
+        //          }
+        //      }
+        // }
 
-        // 3. Flat Ground
-        if (integerWorldY <= m_settings.floorLevel && integerWorldY > 0) return (uint8_t)m_settings.floorBlockID;
+        // // 3. Flat Ground
+        // if (integerWorldY <= m_settings.floorLevel && integerWorldY > 0) return (uint8_t)m_settings.floorBlockID;
 
         return 0;
     }

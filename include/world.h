@@ -38,6 +38,7 @@
 #include "screen_quad.h"
 #include "terrain/terrain_system.h"
 #include "engine_config.h"
+#include "gui_utils.h"
 
 
 
@@ -135,10 +136,21 @@ public:
         size_t nodeCapacity = steadyStateNodes + (steadyStateNodes / 5); 
         std::cout << "[World] Estimated Node Capacity: " << nodeCapacity << std::endl;
 
-        // -- Initialize Pools --
-        m_chunkMetadataPool.Init(m_config->NODE_POOL_GROWTH_STRIDE, m_config->NODE_POOL_INITIAL_SIZE, nodeCapacity, static_cast<uint8_t>(0)); 
-        // Voxel pool is smaller as we only hold voxels during generation/meshing, then discard them (unless modifying).
-        m_voxelDataPool.Init(m_config->VOXEL_POOL_GROWTH_STRIDE, m_config->VOXEL_POOL_INITIAL_SIZE, m_config->MAX_TRANSIENT_VOXEL_MESHES, static_cast<uint8_t>(1)); 
+        // ID 0: Chunk Metadata
+        m_chunkMetadataPool.Init(
+            m_config->nodePool.growthStride, 
+            m_config->nodePool.initialSize, 
+            nodeCapacity, 
+            0 
+        ); 
+
+        // ID 1: Voxel Data
+        m_voxelDataPool.Init(
+            m_config->voxelPool.growthStride, 
+            m_config->voxelPool.initialSize, 
+            m_config->voxelPool.limit, 
+            1 
+        );
 
         // -- Initialize GPU Systems --
         m_vramManager = std::make_unique<GpuMemoryManager>(static_cast<size_t>(m_config->VRAM_HEAP_ALLOCATION_MB) * 1024 * 1024);
@@ -189,11 +201,11 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
     // isUniform = false. If a node is recycled from an Air chunk, this
     // flag remains true, causing you to fall through solid ground.
     // Uncomment this ONLY after fixing ChunkNode::Reset()!
-    /*
+    
     if (node->isUniform) {
         return node->uniformBlockID;
     }
-    */
+    
 
     // 5. Safety: Check if voxel data is actually generated
     if (node->voxelData == nullptr) {
@@ -272,6 +284,7 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
     size_t getVRAMUsed () {return m_vramManager.get()->GetUsedMemory();}
     size_t getVRAMAllocated () {return m_vramManager.get()->GetTotalMemory();}
     size_t getVRAMFreeBlocks () {return m_vramManager.get()->GetFreeBlockCount();}
+    int getFrameCount() {return m_frameCounter;}
     
     void calculateTotalVertices (size_t& activeChunkCount, size_t& totalVertices) {
         //size_t activeChunkCount = 0;
@@ -308,6 +321,10 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
         
         ScheduleAsyncLODUpdate(cameraPos);
         UpdateProfilerPressure();
+
+
+        //if (m_frameCounter > 1)
+            
         
         m_frameCounter++;
     }
@@ -1023,6 +1040,14 @@ private:
      * @brief Pushes current world stats to the global profiler for UI visualization.
      */
     void UpdateProfilerPressure() {
+
+        auto usage = m_voxelDataPool.GetUsedMB()+m_chunkMetadataPool.GetUsedMB(); 
+        if (usage > 5400.0f)
+            GUI::DrawScreenMessage("CRITICAL MEMORY USAGE: Approaching 6GB Memory Limit", GUI::LEVEL_CRITICAL);
+    
+
+
+        // this section will only happen if the profiler is enabled
         if (!Engine::Profiler::Get().m_Enabled) return;
         size_t pendingGen = 0;
         {
@@ -1035,6 +1060,9 @@ private:
         size_t waitingUpload = m_queueMeshedChunks.size();
         size_t activeThreads = m_activeWorkerTaskCount.load();
         size_t totalActive = m_activeChunkMap.size(); 
+
+
+
 
         Engine::Profiler::Get().SetPipelineStats(
             pendingGen, waitingMesh, waitingUpload, activeThreads, totalActive,

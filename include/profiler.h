@@ -10,6 +10,7 @@
 #include <sstream>
 #include <glad/glad.h>
 #include <imgui.h>
+//#include "gui_utils.h"
 
 // Configuration
 #define PROFILER_HISTORY_SIZE 120
@@ -300,7 +301,7 @@ public:
                 float poolPressure = (float)totalInFlight / limit;
                 
                 ImGui::Separator();
-                ImGui::Text("Voxel Pool Safety (Limit: %zu)", (size_t)limit);
+                ImGui::Text("Transient Voxels (enroute to GPU) (Limit: %zu)", (size_t)limit);
                 // Color changes to Red if we get close to the limit
                 ImVec4 poolColor = (poolPressure > 0.8f) ? ImVec4(1, 0, 0, 1) : ImVec4(0, 1, 0, 1);
                 ImGui::PushStyleColor(ImGuiCol_PlotHistogram, poolColor);
@@ -312,7 +313,7 @@ public:
                 ImGui::Separator();
                 float voxRamPressure = m_pipeline.voxelRamUsed/m_pipeline.voxelRamAllocated;
 
-                ImGui::Text("Voxel RAM USED/ALLOCATED MB %.2f/%.2f", m_pipeline.voxelRamUsed, m_pipeline.voxelRamAllocated);
+                ImGui::Text("Chunk RAM USED/ALLOCATED (MB) %.2f/%.2f", m_pipeline.voxelRamUsed, m_pipeline.voxelRamAllocated);
                 ImVec4 ramColor = ( voxRamPressure> 0.8f) ? ImVec4(1, 0, 0, 1) : ImVec4(0, 1, 0, 1);
                 ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ramColor);
                 ImGui::ProgressBar(voxRamPressure, ImVec2(-1, 0), "RAM Saturation (Will Alloc More On Need)");
@@ -322,11 +323,13 @@ public:
                 ImGui::Separator();
                 float nodeRamPressure = m_pipeline.nodeRamUsed/m_pipeline.nodeRamAllocaed;
 
-                ImGui::Text("Chunk RAM USED/ALLOCATED MB %.2f/%.2f", m_pipeline.nodeRamUsed, m_pipeline.nodeRamAllocaed);
+                ImGui::Text("Chunk Metadata RAM USED/ALLOCATED (MB) %.2f/%.2f", m_pipeline.nodeRamUsed, m_pipeline.nodeRamAllocaed);
                 ramColor = ( nodeRamPressure> 0.8f) ? ImVec4(1, 0, 0, 1) : ImVec4(0, 1, 0, 1);
                 ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ramColor);
                 ImGui::ProgressBar(nodeRamPressure, ImVec2(-1, 0), "RAM Saturation (Will Alloc More On Need)");
                 ImGui::PopStyleColor();
+                //if (m_pipeline.nodeRamUsed + m_pipeline.)
+                
             }
 
 

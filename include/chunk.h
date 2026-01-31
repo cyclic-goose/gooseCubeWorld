@@ -9,6 +9,9 @@ struct Chunk {
     // Standardized Layout: Y-Major (Y is slow, X is fast).
     // Conceptually: voxels[y][z][x]
     uint8_t voxels[CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED];
+
+    //34×34×34=39,304 bytes per Chunk.
+    //1 Chunk ≈ 39 KB.
     
     Chunk() {
         std::memset(voxels, 0, sizeof(voxels));

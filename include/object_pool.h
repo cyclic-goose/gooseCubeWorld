@@ -3,6 +3,7 @@
 #include <mutex>
 #include <iostream>
 #include <algorithm>
+#include <iomanip> // Added for std::fixed/std::setprecision
 
 // A Dynamic Object Pool that grows in "pages" (blocks) rather than one massive allocation.
 // Reduces initial RAM usage significantly.
@@ -18,7 +19,7 @@ private:
     size_t m_maxCapacity = 0;         // Hard limit (0 = no limit)
     
     std::mutex m_mutex;
-    uint8_t m_uniqueID;
+    uint8_t m_uniqueID = 0;
 
 public:
     // growthSize: How many items to allocate at once when the pool is empty.
@@ -26,17 +27,17 @@ public:
     // maxCapacity: Hard limit on total items to prevent OOM (0 = unlimited).
     void Init(size_t growthSize, size_t initialSize = 0, size_t maxCapacity = 0, uint8_t uniqueID = 0) {
         std::lock_guard<std::mutex> lock(m_mutex);
+        
+
+        m_uniqueID = uniqueID; 
         m_growthSize = std::max((size_t)1, growthSize);
         m_maxCapacity = maxCapacity;
+
+        std::cout << "[System] ObjectPool [" << (int)m_uniqueID << "] Initialized. Item Size: " << sizeof(T) << " bytes." << std::endl;
 
         if (initialSize > 0) {
             Expand(initialSize);
         }
-        
-        std::cout << "[System] ObjectPool Initialized. Growth Rate: " << m_growthSize 
-                  << ", Pre-alloc: " << initialSize 
-                  << ", Max: " << (m_maxCapacity == 0 ? "Unlimited" : std::to_string(m_maxCapacity)) << std::endl;
-        m_uniqueID = uniqueID;
     }
 
     ~ObjectPool() {
@@ -104,6 +105,7 @@ private:
         if (m_maxCapacity > 0 && m_totalAllocated + count > m_maxCapacity) {
             if (m_totalAllocated >= m_maxCapacity) {
                 // Hard limit reached
+                std::cerr << "[ObjectPool " << (int)m_uniqueID << "] HARD LIMIT REACHED. Cannot expand." << std::endl;
                 return;
             }
             // Allocate whatever remains up to the limit
@@ -124,8 +126,14 @@ private:
                 m_pool.push_back(&newBlock[i]);
             }
             
-            // Optional: Debug logging
-            std::cout << "[ObjectPool " << (int)m_uniqueID << "]" << " Expanded by " << count << ". Total: " << m_totalAllocated << std::endl;
+            // Calculate size for logging
+            double sizeMB = (double)(count * sizeof(T)) / (1024.0 * 1024.0);
+            double totalMB = (double)(m_totalAllocated * sizeof(T)) / (1024.0 * 1024.0);
+
+            std::cout << "[ObjectPool " << (int)m_uniqueID << "]" 
+                      << " Expanded by " << count << " items "
+                      << "(" << std::fixed << std::setprecision(6) << sizeMB << " MB). "
+                      << "Total: " << totalMB << " MB" << std::endl;
 
         } catch (const std::bad_alloc& e) {
             std::cerr << "[ObjectPool " << (int)m_uniqueID << "]" << " CRITICAL: Memory allocation failed during expansion: " << e.what() << std::endl;

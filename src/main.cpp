@@ -29,6 +29,7 @@
 //#include "terrain_superflat_withGlass.h"
 #include "engine_config.h"
 #include "playerController.h"
+#include "gui_utils.h"
 
 
 ///////// Terrain includes, each terrain base is a base class to terrain_system
@@ -392,13 +393,18 @@ int main() {
                 player.Update(deltaTime, window, world); // pass in world to get collision if any
             }
 
+            // GUI and PROFILER START (profiler returns in constant time if its disabled)
+            gui.BeginFrame(); // start ImGui Frame (its normal to do this every loop)
+            Engine::Profiler::Get().DrawUI(appState.isGameMode); // returns in extremely small constant time if not in debug mode (usually)
+            if (world.getFrameCount()  < 20000)
+            {
+                GUI::DrawScreenMessage("Welcome", GUI::LEVEL_WARN);
+
+            }
             processInput(window, world); // process keyboard and mouse input
             world.Update(player.camera.Position); // calc world updates like chunk loading/unloading
             
 
-            // GUI and PROFILER START (profiler returns in constant time if its disabled)
-            gui.BeginFrame(); // start ImGui Frame (its normal to do this every loop)
-            Engine::Profiler::Get().DrawUI(appState.isGameMode); // returns in extremely small constant time if not in debug mode (usually)
             ///////// *****************  logic/world gen, chunk loading/unloading
 
 
