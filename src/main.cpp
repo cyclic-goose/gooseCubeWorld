@@ -389,7 +389,7 @@ int main() {
             // update player before? or after world update???
             if (appState.isGameMode) {
                 // player needs world generator because it exposes getBlock (needed for raycasting/collisions etc)
-                player.Update(deltaTime, window, world.GetGenerator());
+                player.Update(deltaTime, window, world); // pass in world to get collision if any
             }
 
             processInput(window, world); // process keyboard and mouse input

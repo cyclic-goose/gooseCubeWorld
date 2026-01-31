@@ -7,6 +7,7 @@
 #include <iostream>
 #include <iomanip>
 #include <string>
+#include "world.h"
 
 #ifdef IMGUI_VERSION
 #include "imgui.h"
@@ -217,13 +218,13 @@ public:
     // =============================================================
     // UPDATE LOOP
     // =============================================================
-    void Update(float deltaTime, GLFWwindow* window, ITerrainGenerator* terrain) {
+    void Update(float deltaTime, GLFWwindow* window, World& world) {
         HandleInput(deltaTime, window);
         
         if (isCreativeMode) {
             ApplyCreativePhysics(deltaTime);
         } else {
-            ApplySurvivalPhysics(deltaTime, terrain);
+            ApplySurvivalPhysics(deltaTime, world);
         }
         
         UpdateCamera(deltaTime);
@@ -307,7 +308,7 @@ private:
         position += velocity * dt;
     }
 
-    void ApplySurvivalPhysics(float dt, ITerrainGenerator* terrain) {
+    void ApplySurvivalPhysics(float dt, World& world) {
         // 1. Gravity
         velocity.y -= config.Gravity * dt;
         if (velocity.y < config.TerminalVelocity) velocity.y = config.TerminalVelocity;
@@ -316,14 +317,14 @@ private:
         
         // X Axis
         position.x += velocity.x * dt;
-        if (CheckCollision(terrain)) {
+        if (CheckCollision(world)) {
             position.x -= velocity.x * dt;
             velocity.x = 0;
         }
         
         // Z Axis
         position.z += velocity.z * dt;
-        if (CheckCollision(terrain)) {
+        if (CheckCollision(world)) {
             position.z -= velocity.z * dt;
             velocity.z = 0;
         }
@@ -332,7 +333,7 @@ private:
         position.y += velocity.y * dt;
         onGround = false;
         
-        if (CheckCollision(terrain)) {
+        if (CheckCollision(world)) {
             bool falling = velocity.y < 0;
             
             // Step back
@@ -347,10 +348,10 @@ private:
         }
 
         // Void Floor
-        if (position.y < -50) {
-            position = glm::vec3(0, 100, 0);
-            velocity = glm::vec3(0);
-        }
+        // if (position.y < -50) {
+        //     position = glm::vec3(0, 100, 0);
+        //     velocity = glm::vec3(0);
+        // }
     }
 
     void UpdateCamera(float dt) {
@@ -393,13 +394,16 @@ private:
         camera.Position = position + glm::vec3(0, currentEye + bobOffset, 0);
     }
 
-    bool CheckCollision(ITerrainGenerator* terrain) {
+    bool CheckCollision(World& world) {
         // AABB Collision
+        // We reduce width slightly to allow fitting through 1-block gaps
+        // without getting stuck on walls due to floating point errors
         float collisionWidth = config.PlayerWidth - 0.1f; 
         
         glm::vec3 min = position - glm::vec3(collisionWidth/2, 0, collisionWidth/2);
         glm::vec3 max = position + glm::vec3(collisionWidth/2, config.PlayerHeight, collisionWidth/2);
 
+        // Determine grid range to check
         int minX = static_cast<int>(std::floor(min.x));
         int maxX = static_cast<int>(std::floor(max.x));
         int minY = static_cast<int>(std::floor(min.y));
@@ -407,11 +411,18 @@ private:
         int minZ = static_cast<int>(std::floor(min.z));
         int maxZ = static_cast<int>(std::floor(max.z));
 
+        // Iterate through all blocks intersecting the player's bounding box
         for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
                 for (int z = minZ; z <= maxZ; z++) {
-                    auto texture = terrain->GetBlock((float)x, (float)y, (float)z, 1);
-                    if (texture != 0 && texture != 6) {
+                    
+                    // Use the fast world lookup
+                    uint8_t blockID = world.GetBlockAt(x, y, z);
+                    
+                    // Collision Logic:
+                    // 0 = Air (no collision)
+                    // 6 = Water/Liquid (no collision) - Adjust this ID as needed
+                    if (blockID != 0 && blockID != 6) {
                         return true;
                     }
                 }
