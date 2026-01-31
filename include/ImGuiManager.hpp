@@ -342,7 +342,7 @@ private:
                                     std::string sliderLabel = "##lodradius" + std::to_string(i);
                                     ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig->settings.lodRadius[i], 2, (int)(32.0));
                                     if (i == 0) {
-                                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("WARNING: LOD 0 has the heaviest impact on RAM due to metadata density and retained collision data.\n 1 Chunk in LOD 0 = ~40KB RAM.\n The World is CUBIC so Render distance of 32 means 32x32x(world height in chunks)x40kB\n Other LODs will have a minimal effect on RAM use since collision data is not loaded. ");
+                                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Each chunk (32^3) that isnt uniform (AIR) in LOD 0 uses ~40KB of ram.\n IDs are saved in ram on LOD 0 to perform physics calculations.");
                                      }
                                     if (ImGui::IsItemDeactivatedAfterEdit()) {
                                         world.ReloadWorld(*config.editConfig);

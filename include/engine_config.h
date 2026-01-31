@@ -71,7 +71,7 @@ struct EngineConfig {
 
         //34×34×34=39,304 bytes per Chunk.
         //1 Chunk ≈ 39 KB.
-        voxelPool(Items_K(1), Items_K(20), Items_K(160)), //start with enough memory for 1 million voxels, grow by 16 thousand if more is needed, never go beyond enough for 4 million voxels
+        voxelPool(Items_K(1), Items_K(10), Items_K(30)), //start with enough memory for 1 million voxels, grow by 16 thousand if more is needed, never go beyond enough for 4 million voxels
 
         // 3. Limits
         NODE_GENERATION_LIMIT(2048),

@@ -73,7 +73,7 @@ public:
 #ifdef IMGUI_VERSION
         if (!m_enabled) return;
 
-        if (ImGui::Begin("Chunk Debugger", &m_enabled)) {
+        if (ImGui::Begin("Chunk Debugger (F4)", &m_enabled)) {
             ImGui::Checkbox("Lock Selection", &m_lockSelection);
             ImGui::SliderFloat("Ray Distance", &m_rayDistance, 1.0f, 100.0f);
             ImGui::ColorEdit4("Color", (float*)&m_highlightColor);

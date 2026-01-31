@@ -1085,9 +1085,9 @@ private:
      */
     void UpdateProfilerPressure() {
 
-        auto usage = m_voxelDataPool.GetUsedMB()+m_chunkMetadataPool.GetUsedMB(); 
-        if (usage > 5400.0f)
-            GUI::DrawScreenMessage("CRITICAL MEMORY USAGE: Approaching 6GB Memory Limit", GUI::LEVEL_CRITICAL);
+        // auto usage = m_voxelDataPool.GetUsedMB()+m_chunkMetadataPool.GetUsedMB(); 
+        // if (usage > 5400.0f)
+        //     GUI::DrawScreenMessage("CRITICAL MEMORY USAGE: Approaching 6GB Memory Limit", GUI::LEVEL_CRITICAL);
     
 
 
