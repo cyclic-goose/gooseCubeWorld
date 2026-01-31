@@ -99,6 +99,10 @@ public:
         return static_cast<float>(usedBytes) / (1024.0f * 1024.0f);
     }
 
+    size_t GetElementSize() const {
+        return sizeof(T);
+    }
+
 private:
     void Expand(size_t count) {
         // Check limits

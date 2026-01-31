@@ -1,144 +1,218 @@
 #pragma once
 
-#include <glad/glad.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
 #include <vector>
-#include <string>
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
-// Simple self-contained renderer for wireframe debug boxes
-class DebugRenderer {
-private:
-    struct BoxInstance {
-        glm::vec3 minPos;
-        glm::vec3 maxPos;
-        glm::vec3 color;
-    };
+#ifdef IMGUI_VERSION
+#include "imgui.h"
+#endif
 
-    GLuint m_vao = 0;
-    GLuint m_vbo = 0; 
-    GLuint m_program = 0;
-    std::vector<BoxInstance> m_queue;
+#include "chunkNode.h" 
+#include "shader.h"
 
+class ChunkDebugger {
 public:
-    void Init() {
-        if (m_vao != 0) return;
+    static ChunkDebugger& Get() {
+        static ChunkDebugger instance;
+        return instance;
+    }
 
-        // --- 1. COMPILE INTERNAL SHADER ---
-        // Uses gl_VertexID to generate unit cube wireframe vertices on the fly
-        const char* vsSource = R"(
-            #version 460 core
-            
-            // Hardcoded unit cube corners (0..1)
-            const vec3 corners[8] = vec3[8](
-                vec3(0,0,0), vec3(1,0,0), vec3(0,1,0), vec3(1,1,0),
-                vec3(0,0,1), vec3(1,0,1), vec3(0,1,1), vec3(1,1,1)
-            );
+    // --- Configuration ---
+    bool m_enabled = false;
+    bool m_lockSelection = false;
+    float m_rayDistance = 10.0f;
+    glm::vec4 m_highlightColor = glm::vec4(1.0f, 0.0f, 1.0f, 1.0f); // Magenta
 
-            // Wireframe indices (12 lines * 2 vertices = 24 indices)
-            const int indices[24] = int[24](
-                0,1, 1,3, 3,2, 2,0, // Bottom face
-                4,5, 5,7, 7,6, 6,4, // Top face
-                0,4, 1,5, 2,6, 3,7  // Connecting pillars
-            );
+    // --- Internal State ---
+    ChunkNode* m_selectedNode = nullptr;
+    glm::vec3 m_targetWorldPos = glm::vec3(0.0f);
+    
+    // Rendering Resources
+    GLuint m_debugVAO = 0;
+    GLuint m_debugVBO = 0;
 
-            layout(location = 0) in vec3 aMin;   // Instance Data
-            layout(location = 1) in vec3 aMax;   // Instance Data
-            layout(location = 2) in vec3 aColor; // Instance Data
+    ChunkDebugger() {
+        // Don't initialize GL resources here in case Context isn't ready yet.
+    }
 
-            uniform mat4 u_ViewProj;
-            out vec3 vColor;
+    /**
+     * @brief Updates the raycast.
+     */
+    template <typename WorldT>
+    void Update(WorldT& world, const glm::vec3& camPos, const glm::vec3& camFront) {
+        if (!m_enabled) return;
+        
+        if (m_lockSelection && m_selectedNode) return;
 
-            void main() {
-                vColor = aColor;
-                int idx = indices[gl_VertexID % 24];
-                vec3 rawPos = corners[idx];
+        m_targetWorldPos = camPos + (camFront * m_rayDistance);
+        m_selectedNode = nullptr;
+
+        for (int lod = 0; lod < world.GetConfig().settings.lodCount; lod++) {
+            int scale = 1 << lod;
+            int size = CHUNK_SIZE * scale;
+
+            int cx = (int)floor(m_targetWorldPos.x / size);
+            int cy = (int)floor(m_targetWorldPos.y / size);
+            int cz = (int)floor(m_targetWorldPos.z / size);
+
+            int64_t key = ChunkKey(cx, cy, cz, lod);
+
+            auto it = world.m_activeChunkMap.find(key);
+            if (it != world.m_activeChunkMap.end()) {
+                m_selectedNode = it->second;
+                break; 
+            }
+        }
+    }
+
+    /**
+     * @brief Draws the ImGui window with chunk details.
+     */
+    void DrawUI() {
+#ifdef IMGUI_VERSION
+        if (!m_enabled) return;
+
+        if (ImGui::Begin("Chunk Debugger", &m_enabled)) {
+            ImGui::Checkbox("Lock Selection", &m_lockSelection);
+            ImGui::SliderFloat("Ray Distance", &m_rayDistance, 1.0f, 100.0f);
+            ImGui::ColorEdit4("Color", (float*)&m_highlightColor);
+
+            ImGui::Separator();
+            ImGui::Text("Target World Pos: (%.1f, %.1f, %.1f)", m_targetWorldPos.x, m_targetWorldPos.y, m_targetWorldPos.z);
+
+            if (m_selectedNode) {
+                ChunkNode* n = m_selectedNode;
                 
-                // Mix min and max based on the 0..1 corner coords
-                vec3 worldPos = mix(aMin, aMax, rawPos);
-                gl_Position = u_ViewProj * vec4(worldPos, 1.0);
-            }
-        )";
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0,1,0,1), "CHUNK FOUND");
+                ImGui::Text("ID: %ld", n->uniqueID);
+                ImGui::Text("LOD Level: %d (Scale: %d)", n->lodLevel, n->scaleFactor);
+                ImGui::Text("Grid Coords: [%d, %d, %d]", n->gridX, n->gridY, n->gridZ);
+                
+                ImGui::Separator();
+                ImGui::Text("State: "); ImGui::SameLine();
+                switch(n->currentState.load()) {
+                    case ChunkState::MISSING:    ImGui::TextColored(ImVec4(1,0,0,1), "MISSING"); break;
+                    case ChunkState::GENERATING: ImGui::TextColored(ImVec4(1,1,0,1), "GENERATING"); break;
+                    case ChunkState::GENERATED:  ImGui::TextColored(ImVec4(0,1,1,1), "GENERATED (Wait Mesh)"); break;
+                    case ChunkState::MESHING:    ImGui::TextColored(ImVec4(1,1,0,1), "MESHING"); break;
+                    case ChunkState::MESHED:     ImGui::TextColored(ImVec4(0,1,1,1), "MESHED (Wait Upload)"); break;
+                    case ChunkState::ACTIVE:     ImGui::TextColored(ImVec4(0,1,0,1), "ACTIVE"); break;
+                }
 
-        const char* fsSource = R"(
-            #version 460 core
-            in vec3 vColor;
-            out vec4 FragColor;
-            void main() {
-                FragColor = vec4(vColor, 1.0);
-            }
-        )";
 
-        auto createShader = [](GLenum type, const char* src) -> GLuint {
-            GLuint s = glCreateShader(type);
-            glShaderSource(s, 1, &src, nullptr);
-            glCompileShader(s);
-            return s;
+
+
+                ImGui::Separator();
+                ImGui::Text("Data:");
+                ImGui::Text("Is Uniform: %s", n->isUniform ? "YES" : "NO");
+                
+
+                 // --- MEMORY USAGE SECTION ---
+                ImGui::Separator();
+                ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "RAM Memory Usage (Pools)");
+                
+                size_t metaBytes = sizeof(ChunkNode);
+                size_t voxelBytes = (n->voxelData != nullptr) ? sizeof(Chunk) : 0;
+                size_t totalBytes = metaBytes + voxelBytes;
+
+                ImGui::Text("Node Metadata: %zu bytes", metaBytes);
+                
+                if (n->voxelData) {
+                     ImGui::Text("Voxel Data:    %zu bytes (%.2f KB)", voxelBytes, voxelBytes / 1024.0f);
+                     ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f), "Total:         %.2f KB", totalBytes / 1024.0f);
+                } else {
+                     ImGui::Text("Voxel Data:    0 bytes (Uniform/Optimized)");
+                     ImGui::TextColored(ImVec4(0.6f, 1.0f, 0.6f, 1.0f), "Total:         %zu bytes", totalBytes);
+                }
+                
+                ImGui::Separator();
+                ImGui::Text("Geometry:");
+                ImGui::Text("Note: ACTIVE = vertex data in VRAM");
+                ImGui::Text("Opaque Verts: %zu", n->vertexCountOpaque);
+                ImGui::Text("Transp Verts: %zu", n->vertexCountTransparent);
+                ImGui::Text("GPU Offset Opaque: %lld", n->vramOffsetOpaque);
+                
+                // Bounding Box info
+                ImGui::Text("AABB Min: %.1f, %.1f, %.1f", n->aabbMinWorld.x, n->aabbMinWorld.y, n->aabbMinWorld.z);
+                ImGui::Text("AABB Max: %.1f, %.1f, %.1f", n->aabbMaxWorld.x, n->aabbMaxWorld.y, n->aabbMaxWorld.z);
+
+            } else {
+                ImGui::TextColored(ImVec4(1,0,0,1), "NO CHUNK AT TARGET");
+                ImGui::TextDisabled("(Try increasing Ray Distance or pointing at ground)");
+            }
+        }
+        ImGui::End();
+#endif
+    }
+
+    void RenderGizmo(Shader& debugShader, const glm::mat4& viewProj) {
+        if (!m_enabled || !m_selectedNode) return;
+        
+        // Lazy Init: Ensures OpenGL context is ready
+        if (m_debugVAO == 0) InitializeResources();
+
+        // 1. Disable Depth Test to draw ON TOP of blocks
+        GLboolean depthEnabled;
+        glGetBooleanv(GL_DEPTH_TEST, &depthEnabled);
+        glDisable(GL_DEPTH_TEST);
+
+        debugShader.use();
+        debugShader.setMat4("u_ViewProjection", viewProj);
+        debugShader.setVec4("u_Color", m_highlightColor);
+
+        // Calculate Model Matrix for the AABB
+        glm::vec3 size = m_selectedNode->aabbMaxWorld - m_selectedNode->aabbMinWorld;
+        glm::vec3 center = m_selectedNode->aabbMinWorld + (size * 0.5f);
+        
+        glm::mat4 model = glm::translate(glm::mat4(1.0f), center);
+        model = glm::scale(model, size); 
+        
+        debugShader.setMat4("u_Model", model);
+
+        glLineWidth(5.0f);
+        glBindVertexArray(m_debugVAO);
+        glDrawArrays(GL_LINES, 0, 24);
+        glBindVertexArray(0);
+
+        // 2. Restore Depth Test
+        if (depthEnabled) glEnable(GL_DEPTH_TEST);
+    }
+
+private:
+    void InitializeResources() {
+        if (m_debugVAO != 0) return;
+
+        float vertices[] = {
+            -0.5f, -0.5f, -0.5f,  0.5f, -0.5f, -0.5f,
+            -0.5f,  0.5f, -0.5f,  0.5f,  0.5f, -0.5f,
+            -0.5f, -0.5f,  0.5f,  0.5f, -0.5f,  0.5f,
+            -0.5f,  0.5f,  0.5f,  0.5f,  0.5f,  0.5f,
+            -0.5f, -0.5f, -0.5f, -0.5f,  0.5f, -0.5f,
+             0.5f, -0.5f, -0.5f,  0.5f,  0.5f, -0.5f,
+            -0.5f, -0.5f,  0.5f, -0.5f,  0.5f,  0.5f,
+             0.5f, -0.5f,  0.5f,  0.5f,  0.5f,  0.5f,
+            -0.5f, -0.5f, -0.5f, -0.5f, -0.5f,  0.5f,
+             0.5f, -0.5f, -0.5f,  0.5f, -0.5f,  0.5f,
+            -0.5f,  0.5f, -0.5f, -0.5f,  0.5f,  0.5f,
+             0.5f,  0.5f, -0.5f,  0.5f,  0.5f,  0.5f
         };
 
-        GLuint vs = createShader(GL_VERTEX_SHADER, vsSource);
-        GLuint fs = createShader(GL_FRAGMENT_SHADER, fsSource);
-        m_program = glCreateProgram();
-        glAttachShader(m_program, vs);
-        glAttachShader(m_program, fs);
-        glLinkProgram(m_program);
-        glDeleteShader(vs);
-        glDeleteShader(fs);
+        // Use standard GL 3.3+ methods for maximum safety
+        glGenVertexArrays(1, &m_debugVAO);
+        glGenBuffers(1, &m_debugVBO);
 
-        // --- 2. SETUP BUFFERS ---
-        glCreateVertexArrays(1, &m_vao);
-        glCreateBuffers(1, &m_vbo);
+        glBindVertexArray(m_debugVAO);
 
-        // Bind VBO to Binding Index 0
-        glVertexArrayVertexBuffer(m_vao, 0, m_vbo, 0, sizeof(BoxInstance));
+        glBindBuffer(GL_ARRAY_BUFFER, m_debugVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-        // Attrib 0: Min (vec3)
-        glEnableVertexArrayAttrib(m_vao, 0);
-        glVertexArrayAttribFormat(m_vao, 0, 3, GL_FLOAT, GL_FALSE, offsetof(BoxInstance, minPos));
-        glVertexArrayBindingDivisor(m_vao, 0, 1); // Per-instance
+        // Position attribute (Location 0)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
 
-        // Attrib 1: Max (vec3)
-        glEnableVertexArrayAttrib(m_vao, 1);
-        glVertexArrayAttribFormat(m_vao, 1, 3, GL_FLOAT, GL_FALSE, offsetof(BoxInstance, maxPos));
-        glVertexArrayBindingDivisor(m_vao, 1, 1); // Per-instance
-
-        // Attrib 2: Color (vec3)
-        glEnableVertexArrayAttrib(m_vao, 2);
-        glVertexArrayAttribFormat(m_vao, 2, 3, GL_FLOAT, GL_FALSE, offsetof(BoxInstance, color));
-        glVertexArrayBindingDivisor(m_vao, 2, 1); // Per-instance
-        
-        // Link all attribs to binding 0
-        glVertexArrayAttribBinding(m_vao, 0, 0);
-        glVertexArrayAttribBinding(m_vao, 1, 0);
-        glVertexArrayAttribBinding(m_vao, 2, 0);
-    }
-
-    void QueueBox(const glm::vec3& min, const glm::vec3& max, const glm::vec3& color) {
-        m_queue.push_back({min, max, color});
-    }
-
-    void Render(const glm::mat4& viewProj) {
-        if (m_queue.empty()) return;
-
-        glUseProgram(m_program);
-        glUniformMatrix4fv(glGetUniformLocation(m_program, "u_ViewProj"), 1, GL_FALSE, glm::value_ptr(viewProj));
-
-        // Upload instances
-        glNamedBufferData(m_vbo, m_queue.size() * sizeof(BoxInstance), m_queue.data(), GL_STREAM_DRAW);
-
-        glBindVertexArray(m_vao);
-        // Draw 24 vertices (lines) per instance
-        glDrawArraysInstanced(GL_LINES, 0, 24, (GLsizei)m_queue.size());
-        
-        glBindVertexArray(0);
-        glUseProgram(0);
-        
-        m_queue.clear();
-    }
-
-    ~DebugRenderer() {
-        if (m_vao) glDeleteVertexArrays(1, &m_vao);
-        if (m_vbo) glDeleteBuffers(1, &m_vbo);
-        if (m_program) glDeleteProgram(m_program);
+        glBindBuffer(GL_ARRAY_BUFFER, 0); // Unbind VBO
+        glBindVertexArray(0);             // Unbind VAO
     }
 };

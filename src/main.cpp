@@ -29,8 +29,10 @@
 //#include "terrain_superflat_withGlass.h"
 #include "engine_config.h"
 #include "playerController.h"
-#include "gui_utils.h"
 
+// utility and debug
+#include "gui_utils.h"
+#include "debug_chunks.h"
 
 ///////// Terrain includes, each terrain base is a base class to terrain_system
 #include "terrain/terrain_smooth_noise.h"
@@ -162,7 +164,8 @@ void processInput(GLFWwindow *window, World& world) {
 
     // F4: Cycle Mip Levels
     if (Input::IsJustPressed(window, GLFW_KEY_F4)) {
-        mipLevelDebug = (mipLevelDebug + 1) % 6; // Cycles 0-5
+        //mipLevelDebug = (mipLevelDebug + 1) % 6; // Cycles 0-5
+        ChunkDebugger::Get().m_enabled = !ChunkDebugger::Get().m_enabled;
     }
     
     // M: Toggle World Gen Window
@@ -326,6 +329,8 @@ int main() {
         Shader worldShader("./resources/VERT_UPGRADED.glsl", "./resources/FRAG_UPGRADED.glsl");
         //Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
         Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl"); // press F3 to see depth buffer
+
+        Shader chunkDebugShader("./resources/shaders/chunkDebugVert.glsl", "./resources/shaders/chunkDebugFrag.glsl");
         ////// ************* SHADERS *********** //////////
 
 
@@ -409,10 +414,10 @@ int main() {
 
 
 
-
-
-
-
+            
+            
+            
+            
             ///////////// *********** SCREEN PREP 
             // Minimization / Background Throttling
             // If dimensions are 0 (minimized), pause thread to save resources
@@ -433,14 +438,14 @@ int main() {
                 prevScrHeight = curScrHeight;
             }
             ///////////// *********** SCREEN PREP 
-
-
-
-
-
-
-
-
+            
+            
+            
+            
+            
+            
+            
+            
             // **************  model view projection (mvp)
             glm::mat4 projection = player.camera.GetProjectionMatrix((float)curScrWidth / (float)curScrHeight, 0.1f);
             glm::mat4 view = player.camera.GetViewMatrix();
@@ -450,14 +455,14 @@ int main() {
                 lockedCullMatrix = viewProj;
             }
             // **************  model view projection (mvp)
-
-
-
-
-
-
-
-
+            
+            
+            
+            
+            
+            
+            
+            
             ////////// ******************** Render Prep
             
             // Clear Screen (Framebuffer 0) to Debug Magenta
@@ -466,7 +471,7 @@ int main() {
             glViewport(0, 0, curScrWidth, curScrHeight);
             glClearColor(1.0f, 0.0f, 1.0f, 1.0f); 
             glClear(GL_COLOR_BUFFER_BIT);
-
+            
             // Clear FBO (Game View)
             glBindFramebuffer(GL_FRAMEBUFFER, g_fbo.fbo);
             glViewport(0, 0, curScrWidth, curScrHeight);
@@ -476,29 +481,37 @@ int main() {
             glClearDepth(0.000000000f); // Reverse-Z
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             ////////// ******************** Render Prep
-
-
-
-
-
-
+            
+            
+            
+            
+            
+            
             //////////////////// ****************************** World Draw Call
             // Triggers: Cull(PrevDepth) -> MultiDrawIndirect, then HI-Z occlusion calc for next frame
             // see GPU_CULLING_RENDER_SYSTEM.md for render pipeline info
             world.Draw(worldShader, viewProj, prevViewProj, projection, 
-                       curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum, player.position);
-            //////////////////// ****************************** World Draw Call
-
-
-
-
-
-
-            ///////////// ********************  GUI Render
-            gui.RenderUI(world, appState, player, globalConfig.VRAM_HEAP_ALLOCATION_MB);
-            gui.EndFrame();
-            ///////////// ********************  GUI Render
-
+                curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum, player.position);
+                //////////////////// ****************************** World Draw Call
+                
+                
+                
+                ///// ****************** DEBUG HELPERS BEFORE UI *************** /////////
+                if (ChunkDebugger::Get().m_enabled)
+                {
+                    ChunkDebugger::Get().Update(world, player.camera.Position, player.camera.Front);
+                    ChunkDebugger::Get().RenderGizmo(chunkDebugShader, viewProj);
+                    ChunkDebugger::Get().DrawUI();
+                }
+                ///// ****************** DEBUG HELPERS *************** /////////
+                
+                
+                
+                ///////////// ********************  GUI Render
+                gui.RenderUI(world, appState, player, globalConfig.VRAM_HEAP_ALLOCATION_MB);
+                gui.EndFrame();
+                ///////////// ********************  GUI Render
+                
 
 
 

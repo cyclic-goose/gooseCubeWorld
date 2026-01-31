@@ -40,6 +40,8 @@
 #include "engine_config.h"
 #include "gui_utils.h"
 
+//#include "debug_chunks.h"
+
 
 
 
@@ -52,8 +54,8 @@
 /**
  * @brief Main manager class for the Voxel World.
  * * Responsibilities:
- * 1. Managing the lifecycle of chunks (Generation -> Meshing -> Upload -> Unload).
- * 2. Maintaining the Octree/LOD structure around the camera.
+ * 1. Manage the lifecycle of chunks (Generation -> Meshing -> Upload -> Unload).
+ * 2. Maintaining the LOD structure around the camera.
  * 3. Interfacing with GPU memory managers and Cullers.
  * 4. Dispatching tasks to the ThreadPool.
  */
@@ -111,6 +113,7 @@ private:
 
     // Allow UI to inspect private members
     friend class ImGuiManager;
+    friend class ChunkDebugger;
 
 public:
     /**
@@ -910,7 +913,7 @@ private:
         int chunkBottomY = worldY;
         int chunkTopY = worldY + (CHUNK_SIZE * scale);
 
-        // 1. Broad Phase Check: Skip generation if outside terrain bounds
+        // 1. Broad Phase Check: Skip generation if outside terrain bounds. IMPORTANT: This is done before generating, but theres also a change a mesh could end up uniform after generating (generator puts air blocks, we should run a check after and unload that set of voxel data)
         int minGenH, maxGenH;
         m_terrainGenerator->GetHeightBounds(cx, cz, scale, minGenH, maxGenH);
 
@@ -945,7 +948,46 @@ private:
         }
 
         // 3. Batched Generation via SIMD/Internal Generator Logic
-        m_terrainGenerator->GenerateChunk(node->voxelData, cx, cy, cz, scale);
+        m_terrainGenerator->GenerateChunk(node->voxelData, cx, cy, cz, scale); // currently, the generator is dumb and has no way of marking if the block is all air
+
+        // ************ If the generated chunk turned out to be all air, then check for that quickly and get rid of the allocated voxel data IDs and set as Uniform ********* //
+        // --- OPTIMIZED POST-GENERATION CHECK (Raw Memory Scan) ---
+        // Using raw pointers removes the overhead of index calculation in Get().
+        
+        bool allSame = true;
+        uint8_t firstID = node->voxelData->Get(1, 1, 1); /// if things arent generating underground, this could be the culprit, maybe stricly set to ID 0 for air
+        
+        const uint8_t* voxels = node->voxelData->voxels;
+        // Precompute strides for X-Contiguous layout
+        const int strideY = CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED;
+        const int strideZ = CHUNK_SIZE_PADDED;
+
+        // Iterate strictly over the inner volume (1..32)
+        // We skip padding (0 and 33) to ensure we check only relevant data
+        for (int y = 1; y <= CHUNK_SIZE; ++y) {
+            int offsetY = y * strideY;
+            for (int z = 1; z <= CHUNK_SIZE; ++z) {
+                int offset = offsetY + (z * strideZ) + 1; // Start of row X at 1
+                
+                // Check 32 contiguous bytes (Compiler will likely auto-vectorize this)
+                for (int x = 0; x < CHUNK_SIZE; ++x) {
+                     if (voxels[offset + x] != firstID) {
+                         allSame = false;
+                         goto check_complete;
+                     }
+                }
+            }
+        }
+
+        check_complete:
+        if (allSame) {
+            m_voxelDataPool.Release(node->voxelData);
+            node->voxelData = nullptr;
+            node->isUniform = true;
+            node->uniformBlockID = firstID;
+        }
+        // ************ If the generated chunk turned out to be all air, then check for that quickly and get rid of the allocated voxel data IDs and set as Uniform ********* //
+
 
         outMinY = (float)chunkBottomY;
         outMaxY = (float)chunkTopY;
@@ -966,6 +1008,8 @@ private:
 
         // Execute meshing algorithm
         MeshChunk(*node->voxelData, opaqueAllocator, transAllocator, false);
+
+        // trying to detect if a block is all air and uniform after this is just really the same maybe worse than doing it right after the generate call in fillChunk. could be empty but all underground or empty but all air either way check has to be run 
         
         // Copy to node cache (heap allocation happening here)
         node->cachedMeshOpaque.assign(opaqueAllocator.Data(), opaqueAllocator.Data() + opaqueAllocator.Count());
