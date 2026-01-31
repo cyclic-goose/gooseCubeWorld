@@ -67,7 +67,7 @@ public:
     bool onGround           = false;
 
     // Interaction State
-    int selectedBlockID     = 1; // stone for now
+    int selectedBlockID     = 1; // 1 is grassss
 
 private:
     // Store the "Factory Defaults" to allow resetting later

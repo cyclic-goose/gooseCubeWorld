@@ -137,7 +137,7 @@ public:
         }
 
         // Overlay (Always on top/visible)
-        if (config.showOverlay) RenderSimpleOverlay(config, player.camera);
+        if (config.showOverlay) RenderSimpleOverlay(config, player);
 
         if (config.showGameControls) RenderGameControls(world, config, player);
 
@@ -487,41 +487,6 @@ private:
     }
 
 
-    // *********** TODO: Just make these another tab in the menu
-    // void RenderCameraControls(Player& player, UIConfig& config) {
-    //     ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
-    //     if (config.isGameMode) ImGui::SetNextWindowBgAlpha(0.6f);
-
-    //     ImGuiViewport* vp = ImGui::GetMainViewport();
-    //     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 330, vp->WorkPos.y + 16), ImGuiCond_FirstUseEver);
-    //     ImGui::SetNextWindowSize(ImVec2(310, 300), ImGuiCond_FirstUseEver);
-        
-    //     if (ImGui::Begin("Camera/Player (F2)", &config.showCameraControls, flags)) {
-    //         ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
-            
-    //         ImGui::TextColored(ImVec4(0,1,1,1), "Status");
-    //         ImGui::Text("Mode: %s", player.isCreativeMode ? "CREATIVE (Fly)" : "SURVIVAL");
-    //         ImGui::Text("Pos: %.1f, %.1f, %.1f", player.position.x, player.position.y, player.position.z);
-    //         ImGui::Text("Vel: %.1f, %.1f, %.1f", player.velocity.x, player.velocity.y, player.velocity.z);
-
-    //         ImGui::Separator();
-    //         ImGui::TextColored(ImVec4(0,1,1,1), "Camera");
-    //         ImGui::DragFloat("FOV", &player.camera.Zoom, 0.5f, 10.0f, 120.0f);
-    //         ImGui::DragFloat("Sensitivity", &player.camera.MouseSensitivity, 0.01f, 0.01f, 2.0f);
-            
-    //         ImGui::Separator();
-    //         if (ImGui::Button("Teleport Up")) player.position.y += 50.0f;
-    //         ImGui::SameLine();
-    //         if (ImGui::Button("Reset")) {
-    //             player.position = glm::vec3(0, 150, 150);
-    //             player.velocity = glm::vec3(0);
-    //         }
-    //         ImGui::End();
-    //     }
-    // }
-    // *********** TODO: Just make these another tab in the menu
-
-
     void RenderTerrainControls(World& world, UIConfig& config) {
         ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
         if (config.isGameMode) ImGui::SetNextWindowBgAlpha(0.6f);
@@ -584,7 +549,8 @@ private:
         }
     }
 
-    void RenderSimpleOverlay(const UIConfig& config, const Camera& camera) {
+    void RenderSimpleOverlay(const UIConfig& config, const Player& player) {
+        //Engine::Profiler::ScopedTimer timer("ImGui::Overlay Render Time");
         const float PAD = 10.0f;
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImVec2 window_pos = ImVec2(viewport->WorkPos.x + PAD, viewport->WorkPos.y + PAD);
@@ -599,8 +565,10 @@ private:
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[ESC] Menu | [T] Terrain Gen | [SPCBAR x 2] Toggle Creative \n Mouse Lock/Unlock [TAB] Mouse Lock/Unlock | [F2] Debug Menus\n");
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", config.isGameMode ? "[MOUSE LOCKED]" : "[MOUSE UNLOCKED]");
             ImGui::Separator();
-            ImGui::Text("XYZ: %.1f, %.1f, %.1f", camera.Position.x, camera.Position.y, camera.Position.z);
-            ImGui::Text("Angle: Y:%.1f P:%.1f", camera.Yaw, camera.Pitch);
+            ImGui::Text("XYZ: %.1f, %.1f, %.1f", player.camera.Position.x, player.camera.Position.y, player.camera.Position.z);
+            ImGui::Text("Angle: Y:%.1f P:%.1f", player.camera.Yaw, player.camera.Pitch);
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1), "Selected Block: %d",  player.selectedBlockID);
         }
         ImGui::End();
     }
