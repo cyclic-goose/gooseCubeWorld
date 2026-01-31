@@ -14,6 +14,7 @@
 #include "terrain/terrain_selector_ImGuiExpose.h"
 #include "playerController.h"
 #include "gui_utils.h"
+#include "crosshair.h"
 
 // ================================================================================================
 // UI CONFIGURATION
@@ -42,6 +43,7 @@ struct UIConfig {
     // --- State ---
     bool isGameMode = true;         // TAB: Mouse Lock toggle
     bool editConfigInitialized = false;
+    bool crossHairEnabled = true;
     
     // --- World Edit State ---
     std::unique_ptr<EngineConfig> editConfig;        
@@ -147,6 +149,9 @@ public:
             //RenderCameraControls(player, config);               // Top Right
             RenderCullerControls(world, config);                // Bottom Right
         }
+
+        if (config.crossHairEnabled)
+            Crosshair::Get().Draw();
 
         // World Generation (M)
         //if (config.showWorldSettings) RenderWorldSettings(world, config);

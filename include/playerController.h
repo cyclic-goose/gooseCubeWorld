@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <string>
 #include "world.h"
+#include "block_outliner.h"
 
 #ifdef IMGUI_VERSION
 #include "imgui.h"
@@ -90,6 +91,7 @@ public:
         config = defaultConfig;
         camera.Position = position + glm::vec3(0, config.EyeLevelNormal, 0);
         ApplyPreset("FAST"); // for now i wanna be fast 
+        //BlockSelection::Get().; // init buffer for highlight lines
     }
 
     // =============================================================
@@ -257,13 +259,15 @@ private:
         bool isSpaceDown = (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS);
         bool isCtrlDown  = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS);
         bool isShiftDown = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
-
+        // cast a ray to highlight block, then decide if player clicked and destroy block
+        World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
+        BlockSelection::Get().Update(res.success, res.blockPos);
 
         // ********** Interaction Logic ********** //
         if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
             if (!wasLeftClick) {
                 // Raycast 8 blocks
-                World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
+                //World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
                 if (res.success) {
                     world.SetBlock(res.blockPos.x, res.blockPos.y, res.blockPos.z, 0); // 0 = Air
                 }
@@ -275,7 +279,7 @@ private:
         // (right click to place block)
         if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
             if (!wasRightClick) {
-                World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
+                //World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
                 if (res.success) {
                     glm::ivec3 target = res.blockPos + res.faceNormal;
                     

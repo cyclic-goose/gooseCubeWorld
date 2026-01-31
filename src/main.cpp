@@ -331,6 +331,7 @@ int main() {
         Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl"); // press F3 to see depth buffer
 
         Shader chunkDebugShader("./resources/shaders/chunkDebugVert.glsl", "./resources/shaders/chunkDebugFrag.glsl");
+        Shader selectionShader("./resources/shaders/cubeSelectionVert.glsl", "./resources/shaders/cubeSelectionFrag.glsl");;
         ////// ************* SHADERS *********** //////////
 
 
@@ -370,7 +371,7 @@ int main() {
 
         // initialize for occlusion culler retroprojection
         glm::mat4 prevViewProj = glm::mat4(1.0f);
-
+        
 
 
         /////////////////// ****** GAME LOOP ******* //////////////////
@@ -484,6 +485,9 @@ int main() {
             
             
             
+            ////// ****** block selection highlighter ****** /////
+            BlockSelection::Get().Render(selectionShader, view, projection);
+            ////// ****** block selection highlighter ****** /////
             
             
             
@@ -505,8 +509,11 @@ int main() {
                 }
                 ///// ****************** DEBUG HELPERS *************** /////////
                 
+
                 
-                
+
+
+
                 ///////////// ********************  GUI Render
                 gui.RenderUI(world, appState, player, globalConfig.VRAM_HEAP_ALLOCATION_MB);
                 gui.EndFrame();
