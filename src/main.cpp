@@ -106,6 +106,17 @@ void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     lastY = ypos;
 }
 
+// Forward GLFW scroll calllback for the player to access (scroll can change material? )
+void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
+    // Retrieve the player pointer from the window
+    Player* player = static_cast<Player*>(glfwGetWindowUserPointer(window));
+    
+    if (player) {
+        player->ProcessScroll((float)yoffset);
+    }
+}
+
+
 // ======================================================================================
 // --- INPUT PROCESSING ---
 // ======================================================================================
@@ -265,8 +276,11 @@ int main() {
         glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
     }
     
+    // register callback functions with GLFW
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
+    glfwSetWindowUserPointer(window, &player);
+    glfwSetScrollCallback(window, scroll_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     /////////////////// ******* Initialize GLFW ********* /////////

@@ -45,6 +45,8 @@ struct PlayerConfig {
     float BobFrequency      = 10.0f;
     float BobAmplitude      = 0.07f;
     float BobSprintMult     = 1.25f;         // Multiplier for freq/amp when sprinting
+
+    float BlockInteractionDistance = 8.0f;
 };
 
 class Player {
@@ -192,7 +194,7 @@ public:
             ImGui::DragFloat("Fly Drag",     &config.DragFly,       0.1f, 0.0f, 20.0f);
             ImGui::Unindent();
         }
-
+        
         // --- Section 4: Body ---
         if (ImGui::CollapsingHeader("Dimensions & View")) {
             ImGui::Indent();
@@ -201,10 +203,11 @@ public:
                 ImGui::DragFloat("Height", &config.PlayerHeight, 0.01f, 0.1f, 5.0f);
                 ImGui::TreePop();
             }
-
+            
             if (ImGui::TreeNode("Eye Levels")) {
                 ImGui::DragFloat("Normal", &config.EyeLevelNormal, 0.01f, 0.1f, 3.0f);
                 ImGui::DragFloat("Sneak",  &config.EyeLevelSneak,  0.01f, 0.1f, 3.0f);
+                ImGui::SliderFloat("Block Interaction Distance", &config.BlockInteractionDistance, 3.0f, 60.0f);
                 ImGui::TreePop();
             }
 
@@ -261,7 +264,8 @@ private:
         bool isShiftDown = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
         
         // cast a ray to highlight block, then decide if player clicked and destroy block
-        World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
+        // Raycast N blocks
+        World::RaycastResult res = world.Raycast(camera.Position, camera.Front, config.BlockInteractionDistance);
         BlockSelection::Get().Update(res.success, res.blockPos);
         // ********** Interaction Logic ********** //
         if (isGameMode)
@@ -269,7 +273,6 @@ private:
 
             if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
                 if (!wasLeftClick) {
-                    // Raycast 8 blocks
                     //World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
                     if (res.success) {
                         world.SetBlock(res.blockPos.x, res.blockPos.y, res.blockPos.z, 0); // 0 = Air
