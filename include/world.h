@@ -719,6 +719,132 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
         }
     }
 
+    
+    // This is the logic specifically put here to handle player interaction with a specific block
+    // a modified block should flag the chunk for remesh and reupload
+     struct RaycastResult {
+        bool success = false;
+        glm::ivec3 blockPos;   // The block we hit
+        glm::ivec3 faceNormal; // The face we hit (for placement)
+        float distance;
+    };
+
+    RaycastResult Raycast(glm::vec3 origin, glm::vec3 direction, float maxDist) {
+        RaycastResult res;
+        
+        // Amanatides & Woo Voxel Traversal Algorithm
+        int x = (int)floor(origin.x);
+        int y = (int)floor(origin.y);
+        int z = (int)floor(origin.z);
+
+        int stepX = (direction.x > 0) ? 1 : -1;
+        int stepY = (direction.y > 0) ? 1 : -1;
+        int stepZ = (direction.z > 0) ? 1 : -1;
+
+        float tDeltaX = (direction.x != 0) ? std::abs(1.0f / direction.x) : 999999.0f;
+        float tDeltaY = (direction.y != 0) ? std::abs(1.0f / direction.y) : 999999.0f;
+        float tDeltaZ = (direction.z != 0) ? std::abs(1.0f / direction.z) : 999999.0f;
+
+        float distX = (stepX > 0) ? (x + 1 - origin.x) : (origin.x - x);
+        float distY = (stepY > 0) ? (y + 1 - origin.y) : (origin.y - y);
+        float distZ = (stepZ > 0) ? (z + 1 - origin.z) : (origin.z - z);
+
+        float tMaxX = (tDeltaX < 999999.0f) ? (distX * tDeltaX) : 999999.0f;
+        float tMaxY = (tDeltaY < 999999.0f) ? (distY * tDeltaY) : 999999.0f;
+        float tMaxZ = (tDeltaZ < 999999.0f) ? (distZ * tDeltaZ) : 999999.0f;
+
+        float traveled = 0.0f;
+        int lastX = x, lastY = y, lastZ = z;
+
+        while (traveled < maxDist) {
+            // Check block (0 is Air)
+            if (GetBlockAt(x, y, z) != 0) { 
+                res.success = true;
+                res.blockPos = glm::ivec3(x, y, z);
+                res.faceNormal = glm::ivec3(lastX - x, lastY - y, lastZ - z);
+                res.distance = traveled;
+                return res;
+            }
+
+            lastX = x; lastY = y; lastZ = z;
+
+            if (tMaxX < tMaxY) {
+                if (tMaxX < tMaxZ) { x += stepX; traveled = tMaxX; tMaxX += tDeltaX; } 
+                else               { z += stepZ; traveled = tMaxZ; tMaxZ += tDeltaZ; }
+            } else {
+                if (tMaxY < tMaxZ) { y += stepY; traveled = tMaxY; tMaxY += tDeltaY; } 
+                else               { z += stepZ; traveled = tMaxZ; tMaxZ += tDeltaZ; }
+            }
+        }
+        return res;
+    }
+
+    void SetBlock(int x, int y, int z, uint8_t id) {
+        // 1. Find Chunk
+        int cx = (int)floor(x / (float)CHUNK_SIZE);
+        int cy = (int)floor(y / (float)CHUNK_SIZE);
+        int cz = (int)floor(z / (float)CHUNK_SIZE);
+
+        int64_t key = ChunkKey(cx, cy, cz, 0); // Only modify LOD 0
+        
+        // NOTE: We assume SetBlock is called from Main Thread, so standard map access is safe
+        auto it = m_activeChunkMap.find(key);
+        if (it == m_activeChunkMap.end()) return; 
+
+        ChunkNode* node = it->second;
+        if (node->currentState != ChunkState::ACTIVE) return; // Busy
+
+        // 2. Handle Uniform Inflation (Critical!)
+        if (node->isUniform) {
+            if (node->uniformBlockID == id) return; // No change
+
+            // Expand memory now
+            node->voxelData = m_voxelDataPool.Acquire();
+            if (!node->voxelData) return; // OOM
+
+            // Fill with old uniform ID (using 39304 bytes size of Chunk)
+            std::memset(node->voxelData->voxels, node->uniformBlockID, sizeof(Chunk));
+            node->isUniform = false;
+        }
+
+        // 3. Update Voxel
+        int lx = x % CHUNK_SIZE; if (lx < 0) lx += CHUNK_SIZE;
+        int ly = y % CHUNK_SIZE; if (ly < 0) ly += CHUNK_SIZE;
+        int lz = z % CHUNK_SIZE; if (lz < 0) lz += CHUNK_SIZE;
+
+        // +1 for Padding offset
+        node->voxelData->Set(lx + 1, ly + 1, lz + 1, id);
+
+        // 4. Trigger Re-Mesh
+        // Setting to GENERATING forces it into the mesh queue
+        node->currentState = ChunkState::GENERATING;
+        {
+            std::lock_guard<std::mutex> lock(m_queueMutex);
+            m_queueGeneratedChunks.push(node);
+        }
+
+        // 5. Update Neighbors (Fix Seams)
+        auto TriggerNeighbor = [&](int offsetX, int offsetY, int offsetZ) {
+            int64_t nKey = ChunkKey(cx + offsetX, cy + offsetY, cz + offsetZ, 0);
+            auto nIt = m_activeChunkMap.find(nKey);
+            if (nIt != m_activeChunkMap.end()) {
+                ChunkNode* nNode = nIt->second;
+                if (nNode->currentState == ChunkState::ACTIVE) {
+                    nNode->currentState = ChunkState::GENERATING;
+                    std::lock_guard<std::mutex> lock(m_queueMutex);
+                    m_queueGeneratedChunks.push(nNode);
+                }
+            }
+        };
+
+        if (lx == 0) TriggerNeighbor(-1, 0, 0);
+        if (lx == CHUNK_SIZE - 1) TriggerNeighbor(1, 0, 0);
+        if (ly == 0) TriggerNeighbor(0, -1, 0);
+        if (ly == CHUNK_SIZE - 1) TriggerNeighbor(0, 1, 0);
+        if (lz == 0) TriggerNeighbor(0, 0, -1);
+        if (lz == CHUNK_SIZE - 1) TriggerNeighbor(0, 0, 1);
+    }
+
     /**
      * @brief Renders the world using GPU Culling and Multi-Draw Indirect.
      * * Pipeline:
