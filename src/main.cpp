@@ -245,7 +245,7 @@ void processInput(GLFWwindow *window, World& world) {
 // ======================================================================================
 
 int main() {
-    // Initialize GLFW
+    /////////////////// ******* Initialize GLFW ********* /////////
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
@@ -264,6 +264,12 @@ int main() {
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetCursorPosCallback(window, mouse_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
+    /////////////////// ******* Initialize GLFW ********* /////////
+
+
+
+    /////////////////// ******* Initialize GLAD ********* /////////
     
     // Initialize GLAD
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
@@ -280,7 +286,11 @@ int main() {
     glCullFace(GL_BACK);
     glClearColor(0.53f, 0.81f, 0.22f, 1.0f); 
 
-    // Initial FBO sizing
+    /////////////////// ******* Initialize GLAD ********* /////////
+
+
+
+    //////////// ********** Initial FBO sizing, the framebuffer object is what ultimately paints the screen regardless of whats rendered to what
     int curScrWidth = SCR_WIDTH, curScrHeight = SCR_HEIGHT;
     int prevScrWidth = curScrWidth, prevScrHeight = curScrHeight;
     glfwGetFramebufferSize(window, &curScrWidth, &curScrHeight);
@@ -297,10 +307,11 @@ int main() {
     // Ideally this should be encapsulated, but maintained here for existing logic.
     g_fbo.Resize(curScrWidth, curScrHeight);
 
+    ///////// tweak player start
     player.camera.Yaw = -142.0f;
     player.camera.Pitch = -1.0f;
     player.camera.updateCameraVectors();
-    
+    ///////// tweak player start
 
 
 
@@ -308,32 +319,34 @@ int main() {
     
     // World & Resources Scope
    try { 
+
+        ////// ************* SHADERS *********** //////////
         // shader for world and then shader that helped me debug depth buffer
         Shader worldShader("./resources/VERT_UPGRADED.glsl", "./resources/FRAG_UPGRADED.glsl");
         //Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
-        Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl");
-        
-        // --- World Configuration ---
+        Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl"); // press F3 to see depth buffer
+        ////// ************* SHADERS *********** //////////
+
+
+
+        // --- World Configuration --- //
         EngineConfig globalConfig; // GLOBAL CONFIG overwrites the engine config sent into world
         //globalConfig.VRAM_HEAP_ALLOCATION_MB = GLOBAL_VRAM_ALLOC_SIZE_MB; // *********************************** VRAM STATIC ALLOCATION 
+        // --- World Configuration --- //
         
         // lil splash screen while VRAM and RAM buffers are allocated
         RenderLoadingScreen(window, gui, globalConfig.VRAM_HEAP_ALLOCATION_MB);
 
-        // Configure LODs
-        // globalConfig.lodCount = 5;
-        // for (int i = 0; i < 5; i++) globalConfig.lodRadius[i] = 12;
-        // for (int i = 5; i < 12; i++) globalConfig.lodRadius[i] = 0; // Reserves
 
-
-
-        // create our start terrain generator by choosing which class we send in
+        ////////////// *********** create our start terrain generator by choosing which class we send in
         auto defaultTerrainGenerator = std::make_unique<SuperflatGenerator>(); // seed input
         // Ask the generator what textures it needs
         std::vector<std::string> texturePaths = defaultTerrainGenerator->GetTexturePaths();
         // Load them into GPU
         GLuint texArray = TextureManager::LoadTextureArray(texturePaths);
         World world(globalConfig, std::move(defaultTerrainGenerator));
+        ////////////// *********** create our start terrain generator by choosing which class we send in
+
 
 
         // *********** 
@@ -349,15 +362,15 @@ int main() {
         world.SetTextureArray(texArray);
 
 
-
+        // initialize for occlusion culler retroprojection
         glm::mat4 prevViewProj = glm::mat4(1.0f);
 
 
 
-        // ****** GAME LOOP ******* // 
+        /////////////////// ****** GAME LOOP ******* //////////////////
 
-        while (!glfwWindowShouldClose(window)) {
-            // Timing
+        while (!glfwWindowShouldClose(window)) { ///// ************ GAME START SCOPE ************* 
+            //////// *************** Timing
             float currentFrame = (float)glfwGetTime();
             deltaTime = currentFrame - lastFrame;
             lastFrame = currentFrame;
@@ -366,28 +379,38 @@ int main() {
             deltaTime = std::min(deltaTime, 0.05f); 
 
             Engine::Profiler::Get().Update();
+            //////// *************** Timing
 
+            
+            
+            
+            
+            ///////// *****************  logic/world gen, chunk loading/unloading
             // update player before? or after world update???
             if (appState.isGameMode) {
                 // player needs world generator because it exposes getBlock (needed for raycasting/collisions etc)
                 player.Update(deltaTime, window, world.GetGenerator());
             }
-            
 
-            // logic/world gen, chunk loading/unloading
-            processInput(window, world);
-            world.Update(player.camera.Position);
+            processInput(window, world); // process keyboard and mouse input
+            world.Update(player.camera.Position); // calc world updates like chunk loading/unloading
             
 
             // GUI and PROFILER START (profiler returns in constant time if its disabled)
-            gui.BeginFrame();
-            Engine::Profiler::Get().DrawUI(appState.isGameMode);
+            gui.BeginFrame(); // start ImGui Frame (its normal to do this every loop)
+            Engine::Profiler::Get().DrawUI(appState.isGameMode); // returns in extremely small constant time if not in debug mode (usually)
+            ///////// *****************  logic/world gen, chunk loading/unloading
 
 
 
+
+
+
+
+            ///////////// *********** SCREEN PREP 
             // Minimization / Background Throttling
             // If dimensions are 0 (minimized), pause thread to save resources
-            while (curScrWidth == 0 || curScrHeight == 0) {
+            while (curScrWidth == 0 || curScrHeight == 0) { 
                 glfwGetFramebufferSize(window, &curScrWidth, &curScrHeight);
                 glfwWaitEvents(); // Sleeps until event (resize/restore) occurs
                 if (glfwWindowShouldClose(window)) break;
@@ -403,9 +426,16 @@ int main() {
                 prevScrWidth = curScrWidth;
                 prevScrHeight = curScrHeight;
             }
-            
+            ///////////// *********** SCREEN PREP 
 
-            // model view projection (mvp)
+
+
+
+
+
+
+
+            // **************  model view projection (mvp)
             glm::mat4 projection = player.camera.GetProjectionMatrix((float)curScrWidth / (float)curScrHeight, 0.1f);
             glm::mat4 view = player.camera.GetViewMatrix();
             glm::mat4 viewProj = projection * view;
@@ -413,9 +443,16 @@ int main() {
             if (!appState.lockFrustum) {
                 lockedCullMatrix = viewProj;
             }
-            
+            // **************  model view projection (mvp)
 
-            // Render Prep
+
+
+
+
+
+
+
+            ////////// ******************** Render Prep
             
             // Clear Screen (Framebuffer 0) to Debug Magenta
             // If you see this color, the Blit from FBO to Screen failed.
@@ -432,29 +469,44 @@ int main() {
             glClearColor(0.53f, 0.81f, 0.91f, 1.0f); 
             glClearDepth(0.000000000f); // Reverse-Z
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            ////////// ******************** Render Prep
 
 
 
-            // World Draw
+
+
+
+            //////////////////// ****************************** World Draw Call
             // Triggers: Cull(PrevDepth) -> MultiDrawIndirect, then HI-Z occlusion calc for next frame
             // see GPU_CULLING_RENDER_SYSTEM.md for render pipeline info
             world.Draw(worldShader, viewProj, prevViewProj, projection, 
                        curScrWidth, curScrHeight, &depthDebug, f3DepthDebug, lockFrustum, player.position);
+            //////////////////// ****************************** World Draw Call
 
 
-            // GUI Render
+
+
+
+
+            ///////////// ********************  GUI Render
             gui.RenderUI(world, appState, player, globalConfig.VRAM_HEAP_ALLOCATION_MB);
             gui.EndFrame();
+            ///////////// ********************  GUI Render
 
-            // swap to screen buffer
+
+
+
+
+            /////// ******* swap to screen buffer
             glfwSwapBuffers(window);
             glfwPollEvents();
+            /////// ******* swap to screen buffer
 
-            // Reprojection History
-            
+            ///////  Reprojection History for occlusion culling 
             prevViewProj = viewProj;
+            ///////  Reprojection History for occlusion culling
             
-        }
+        } ///// ************ GAME LOOP CLOSE SCOPE ************* 
     }
     catch (const std::exception& e) {
         std::cerr << "\n[FATAL CRASH]: " << e.what() << "\n" << std::endl;
