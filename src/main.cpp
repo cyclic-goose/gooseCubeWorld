@@ -396,7 +396,7 @@ int main() {
             // update player before? or after world update???
             if (appState.isGameMode) {
                 // player needs world generator because it exposes getBlock (needed for raycasting/collisions etc)
-                player.Update(deltaTime, window, world); // pass in world to get collision if any
+                player.Update(deltaTime, window, world, appState.isGameMode); // pass in world to get collision if any
             }
 
             // GUI and PROFILER START (profiler returns in constant time if its disabled)
@@ -540,7 +540,9 @@ int main() {
         return -1;
     }
     
-    // 6. Shutdown
+    // Shutdown
+    BlockSelection::Get().Shutdown();
+    ChunkDebugger::Get().Shutdown();
     Engine::Profiler::Get().Shutdown();
     gui.Shutdown();
     glfwTerminate();

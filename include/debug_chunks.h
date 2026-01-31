@@ -66,6 +66,17 @@ public:
         }
     }
 
+    void Shutdown() {
+        if (m_debugVAO != 0) {
+            glDeleteVertexArrays(1, &m_debugVAO);
+            m_debugVAO = 0;
+        }
+        if (m_debugVBO != 0) {
+            glDeleteBuffers(1, &m_debugVBO);
+            m_debugVBO = 0;
+        }
+    }
+
     /**
      * @brief Draws the ImGui window with chunk details.
      */

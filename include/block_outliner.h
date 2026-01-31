@@ -54,7 +54,7 @@ public:
         // We scale slightly larger (1.002) to prevent Z-fighting with the block surface.
         // We offset by -0.001 to keep the expanded box centered.
         model = glm::translate(model, glm::vec3(-0.001f)); 
-        model = glm::scale(model, glm::vec3(1.002f));      
+        model = glm::scale(model, glm::vec3(1.02f));      
 
         shader.setMat4("model", model);
 
@@ -63,6 +63,18 @@ public:
         glDrawArrays(GL_LINES, 0, 24);
         glBindVertexArray(0);
         glLineWidth(1.0f); // Reset
+    }
+
+    
+    void Shutdown() {
+        if (m_vao != 0) {
+            glDeleteVertexArrays(1, &m_vao);
+            m_vao = 0;
+        }
+        if (m_vbo != 0) {
+            glDeleteBuffers(1, &m_vbo);
+            m_vbo = 0;
+        }
     }
 
 private:

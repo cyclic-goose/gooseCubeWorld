@@ -227,8 +227,8 @@ public:
     // =============================================================
     // UPDATE LOOP
     // =============================================================
-    void Update(float deltaTime, GLFWwindow* window, World& world) {
-        HandleInput(deltaTime, window, world);
+    void Update(float deltaTime, GLFWwindow* window, World& world, bool isGameMode) {
+        HandleInput(deltaTime, window, world, isGameMode);
         
         if (isCreativeMode) {
             ApplyCreativePhysics(deltaTime);
@@ -254,51 +254,56 @@ public:
 
 private:
 
-    void HandleInput(float dt, GLFWwindow* window, World& world) {
+    void HandleInput(float dt, GLFWwindow* window, World& world, bool isGameMode) {
         // --- Input State Reading ---
         bool isSpaceDown = (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS);
         bool isCtrlDown  = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS);
         bool isShiftDown = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
+        
         // cast a ray to highlight block, then decide if player clicked and destroy block
         World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
         BlockSelection::Get().Update(res.success, res.blockPos);
-
         // ********** Interaction Logic ********** //
-        if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
-            if (!wasLeftClick) {
-                // Raycast 8 blocks
-                //World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
-                if (res.success) {
-                    world.SetBlock(res.blockPos.x, res.blockPos.y, res.blockPos.z, 0); // 0 = Air
-                }
-            }
-            wasLeftClick = true;
-        } else wasLeftClick = false;
+        if (isGameMode)
+        {
 
-
-        // (right click to place block)
-        if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
-            if (!wasRightClick) {
-                //World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
-                if (res.success) {
-                    glm::ivec3 target = res.blockPos + res.faceNormal;
-                    
-                    // Simple collision check to prevent placing block inside player's head
-                    glm::vec3 pMin = position - glm::vec3(0.3f, 0.0f, 0.3f);
-                    glm::vec3 pMax = position + glm::vec3(0.3f, 1.8f, 0.3f);
-                    
-                    bool insidePlayer = (target.x >= pMin.x && target.x <= pMax.x) &&
-                                        (target.y >= pMin.y && target.y <= pMax.y) &&
-                                        (target.z >= pMin.z && target.z <= pMax.z);
-                    
-                    if (!insidePlayer) {
-                        world.SetBlock(target.x, target.y, target.z, (uint8_t)selectedBlockID);
+            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+                if (!wasLeftClick) {
+                    // Raycast 8 blocks
+                    //World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
+                    if (res.success) {
+                        world.SetBlock(res.blockPos.x, res.blockPos.y, res.blockPos.z, 0); // 0 = Air
                     }
                 }
-            }
-            wasRightClick = true;
-        } else wasRightClick = false;
+                wasLeftClick = true;
+            } else wasLeftClick = false;
+
+
+            // (right click to place block)
+            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS) {
+                if (!wasRightClick) {
+                    //World::RaycastResult res = world.Raycast(camera.Position, camera.Front, 8.0f);
+                    if (res.success) {
+                        glm::ivec3 target = res.blockPos + res.faceNormal;
+                        
+                        // Simple collision check to prevent placing block inside player's head
+                        glm::vec3 pMin = position - glm::vec3(0.3f, 0.0f, 0.3f);
+                        glm::vec3 pMax = position + glm::vec3(0.3f, 1.8f, 0.3f);
+                        
+                        bool insidePlayer = (target.x >= pMin.x && target.x <= pMax.x) &&
+                                            (target.y >= pMin.y && target.y <= pMax.y) &&
+                                            (target.z >= pMin.z && target.z <= pMax.z);
+                        
+                        if (!insidePlayer) {
+                            world.SetBlock(target.x, target.y, target.z, (uint8_t)selectedBlockID);
+                        }
+                    }
+                }
+                wasRightClick = true;
+            } else wasRightClick = false;
+        }
         // ********** Interaction Logic ********** //
+        
 
 
 

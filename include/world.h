@@ -780,70 +780,91 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
     }
 
     void SetBlock(int x, int y, int z, uint8_t id) {
-        // 1. Find Chunk
-        int cx = (int)floor(x / (float)CHUNK_SIZE);
-        int cy = (int)floor(y / (float)CHUNK_SIZE);
-        int cz = (int)floor(z / (float)CHUNK_SIZE);
+    // 1. Find Chunk
+    int cx = (int)floor(x / (float)CHUNK_SIZE);
+    int cy = (int)floor(y / (float)CHUNK_SIZE);
+    int cz = (int)floor(z / (float)CHUNK_SIZE);
 
-        int64_t key = ChunkKey(cx, cy, cz, 0); // Only modify LOD 0
+    int64_t key = ChunkKey(cx, cy, cz, 0); 
+    
+    auto it = m_activeChunkMap.find(key);
+    if (it == m_activeChunkMap.end()) return; 
+
+    ChunkNode* node = it->second;
+    if (node->currentState != ChunkState::ACTIVE) return; 
+
+    // 2. Handle Uniform Inflation
+    if (node->isUniform) {
+        if (node->uniformBlockID == id) return;
+        node->voxelData = m_voxelDataPool.Acquire();
+        if (!node->voxelData) return;
+        std::memset(node->voxelData->voxels, node->uniformBlockID, sizeof(Chunk));
+        node->isUniform = false;
+    }
+
+    // 3. Update Voxel (Local)
+    int lx = x % CHUNK_SIZE; if (lx < 0) lx += CHUNK_SIZE;
+    int ly = y % CHUNK_SIZE; if (ly < 0) ly += CHUNK_SIZE;
+    int lz = z % CHUNK_SIZE; if (lz < 0) lz += CHUNK_SIZE;
+
+    node->voxelData->Set(lx + 1, ly + 1, lz + 1, id);
+
+    // 4. Trigger Re-Mesh (Current Chunk)
+    node->currentState = ChunkState::GENERATING;
+    {
+        std::lock_guard<std::mutex> lock(m_queueMutex);
+        m_queueGeneratedChunks.push(node);
+    }
+
+    // 5. Update Neighbors (Fix Seams & Update Padding)
+    auto TriggerNeighbor = [&](int offsetX, int offsetY, int offsetZ) {
+        int64_t nKey = ChunkKey(cx + offsetX, cy + offsetY, cz + offsetZ, 0);
+        auto nIt = m_activeChunkMap.find(nKey);
         
-        // NOTE: We assume SetBlock is called from Main Thread, so standard map access is safe
-        auto it = m_activeChunkMap.find(key);
-        if (it == m_activeChunkMap.end()) return; 
+        if (nIt != m_activeChunkMap.end()) {
+            ChunkNode* nNode = nIt->second;
 
-        ChunkNode* node = it->second;
-        if (node->currentState != ChunkState::ACTIVE) return; // Busy
-
-        // 2. Handle Uniform Inflation (Critical!)
-        if (node->isUniform) {
-            if (node->uniformBlockID == id) return; // No change
-
-            // Expand memory now
-            node->voxelData = m_voxelDataPool.Acquire();
-            if (!node->voxelData) return; // OOM
-
-            // Fill with old uniform ID (using 39304 bytes size of Chunk)
-            std::memset(node->voxelData->voxels, node->uniformBlockID, sizeof(Chunk));
-            node->isUniform = false;
-        }
-
-        // 3. Update Voxel
-        int lx = x % CHUNK_SIZE; if (lx < 0) lx += CHUNK_SIZE;
-        int ly = y % CHUNK_SIZE; if (ly < 0) ly += CHUNK_SIZE;
-        int lz = z % CHUNK_SIZE; if (lz < 0) lz += CHUNK_SIZE;
-
-        // +1 for Padding offset
-        node->voxelData->Set(lx + 1, ly + 1, lz + 1, id);
-
-        // 4. Trigger Re-Mesh
-        // Setting to GENERATING forces it into the mesh queue
-        node->currentState = ChunkState::GENERATING;
-        {
-            std::lock_guard<std::mutex> lock(m_queueMutex);
-            m_queueGeneratedChunks.push(node);
-        }
-
-        // 5. Update Neighbors (Fix Seams)
-        auto TriggerNeighbor = [&](int offsetX, int offsetY, int offsetZ) {
-            int64_t nKey = ChunkKey(cx + offsetX, cy + offsetY, cz + offsetZ, 0);
-            auto nIt = m_activeChunkMap.find(nKey);
-            if (nIt != m_activeChunkMap.end()) {
-                ChunkNode* nNode = nIt->second;
-                if (nNode->currentState == ChunkState::ACTIVE) {
-                    nNode->currentState = ChunkState::GENERATING;
-                    std::lock_guard<std::mutex> lock(m_queueMutex);
-                    m_queueGeneratedChunks.push(nNode);
+            // CRITICAL FIX: Update the neighbor's padding memory!
+            // If the neighbor is Uniform, we MUST inflate it to store this padding change,
+            // otherwise the mesher won't see the new hole/block next to it.
+            if (nNode->isUniform) {
+                // If you have a helper for this, use it. Otherwise duplicate logic:
+                nNode->voxelData = m_voxelDataPool.Acquire();
+                if (nNode->voxelData) {
+                    std::memset(nNode->voxelData->voxels, nNode->uniformBlockID, sizeof(Chunk));
+                    nNode->isUniform = false;
                 }
             }
-        };
 
-        if (lx == 0) TriggerNeighbor(-1, 0, 0);
-        if (lx == CHUNK_SIZE - 1) TriggerNeighbor(1, 0, 0);
-        if (ly == 0) TriggerNeighbor(0, -1, 0);
-        if (ly == CHUNK_SIZE - 1) TriggerNeighbor(0, 1, 0);
-        if (lz == 0) TriggerNeighbor(0, 0, -1);
-        if (lz == CHUNK_SIZE - 1) TriggerNeighbor(0, 0, 1);
-    }
+            if (nNode->voxelData) {
+                // Map global pos to neighbor's local space
+                // Formula: local_coord - (offset * CHUNK_SIZE)
+                // If offsetX = -1 (Left Neighbor), lx=0 -> nx = 0 - (-32) = 32. 
+                // Set(nx + 1) accesses index 33 (Right Padding).
+                int nx = lx - (offsetX * CHUNK_SIZE); 
+                int ny = ly - (offsetY * CHUNK_SIZE);
+                int nz = lz - (offsetZ * CHUNK_SIZE);
+
+                nNode->voxelData->Set(nx + 1, ny + 1, nz + 1, id);
+            }
+
+            // Flag for remesh
+            if (nNode->currentState == ChunkState::ACTIVE) {
+                nNode->currentState = ChunkState::GENERATING;
+                std::lock_guard<std::mutex> lock(m_queueMutex);
+                m_queueGeneratedChunks.push(nNode);
+            }
+        }
+    };
+
+    if (lx == 0) TriggerNeighbor(-1, 0, 0);
+    if (lx == CHUNK_SIZE - 1) TriggerNeighbor(1, 0, 0);
+    if (ly == 0) TriggerNeighbor(0, -1, 0);
+    if (ly == CHUNK_SIZE - 1) TriggerNeighbor(0, 1, 0);
+    if (lz == 0) TriggerNeighbor(0, 0, -1);
+    if (lz == CHUNK_SIZE - 1) TriggerNeighbor(0, 0, 1);
+}
+
 
     /**
      * @brief Renders the world using GPU Culling and Multi-Draw Indirect.
