@@ -111,8 +111,15 @@ public:
     // --------------------------------------------------------------------------------------------
     // Returns list of textures required by this generator for the texture atlas.
     std::vector<std::string> GetTexturePaths() const override {
-        std::vector<std::string> textures(30, "resources/textures/dirt1.jpg");
-        return textures;
+        //std::vector<std::string> textures(30, "resources/textures/dirt1.jpg");
+        std::vector<std::string> texturePaths = {
+            "resources/textures/grassTop.jpg",
+            "resources/textures/mcdirt.jpg",   // ID 1
+            "resources/textures/mcgrass.jpg",
+            "resources/textures/snow1.jpg", 
+
+        };
+        return texturePaths;
     }
 
     // --------------------------------------------------------------------------------------------

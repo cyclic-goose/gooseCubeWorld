@@ -44,6 +44,28 @@ inline void MeshChunk(const Chunk& chunk,
         return chunk.Get(x, y, z);
     };
 
+    // --- TEXTURE MAPPING LOGIC ---
+    // Maps (Block ID + Face Direction) -> Texture Layer ID
+    // Face Order: 0=+X (Right), 1=-X (Left), 2=+Y (Top), 3=-Y (Bottom), 4=+Z (Front), 5=-Z (Back)
+    auto GetTextureID = [&](uint8_t blockID, int face) -> uint32_t {
+        
+        // Example: Grass Block (ID 1)
+        if (blockID == 1) {
+            if (face == 2) return 1;      // Top: Green Grass (Texture ID 1)
+            if (face == 3) return 2;      // Bottom: Dirt (Texture ID 2)
+            return 3;                     // Sides: Grass Side (Texture ID 3)
+        }
+
+        // Example: Oak Log (ID 13)
+        if (blockID == 13) {
+            if (face == 2 || face == 3) return 25; // Top/Bottom: Log Rings (Example ID)
+            return 13;                             // Sides: Log Bark (Example ID)
+        }
+
+        // Default: If no special case, the Texture ID is the same as the Block ID
+        return blockID;
+    };
+
     auto GreedyPass = [&](uint32_t* colMasks, LinearAllocator<PackedVertex>& targetAllocator, int face, int axis, int direction, int slice) {
         // 2D -> 3D Coordinate Mapping Helper
         auto GetBlockID = [&](int u_chk, int v_chk) {
@@ -65,11 +87,11 @@ inline void MeshChunk(const Chunk& chunk,
                 int u = widthStart; 
                 int v = i;
                 
-                uint32_t currentTex = GetBlockID(u, v);
+                uint32_t currentBlock = GetBlockID(u, v);
 
                 // 1. Compute Width
                 while (widthEnd < CHUNK_SIZE && (mask & (1ULL << widthEnd))) {
-                    if (GetBlockID(widthEnd, v) != currentTex) break;
+                    if (GetBlockID(widthEnd, v) != currentBlock) break;
                     widthEnd++;
                 }
                 int width = widthEnd - widthStart;
@@ -83,7 +105,7 @@ inline void MeshChunk(const Chunk& chunk,
                     if ((nextRow & runMask) == runMask) {
                         bool textureMatch = true;
                         for (int k = 0; k < width; k++) {
-                            if (GetBlockID(widthStart + k, j) != currentTex) {
+                            if (GetBlockID(widthStart + k, j) != currentBlock) {
                                 textureMatch = false;
                                 break;
                             }
@@ -104,6 +126,9 @@ inline void MeshChunk(const Chunk& chunk,
                 int w = width;
                 int h = height;
 
+                // Determine the correct visual Texture ID for this face
+                uint32_t visualTexID = GetTextureID(currentBlock, face);
+
                 auto PushVert = [&](int du, int dv) {
                     float vx, vy, vz;
                     int r_u = u + du; 
@@ -119,7 +144,8 @@ inline void MeshChunk(const Chunk& chunk,
                         if (axis == 2) vz += 1.0f;
                     }
 
-                    targetAllocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f, currentTex));
+                    // Use the resolved visual Texture ID here
+                    targetAllocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f, visualTexID));
                 };
 
                 if (direction == 1) {
