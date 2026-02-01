@@ -5,21 +5,20 @@ layout (std430, binding = 0) readonly buffer VoxelData {
     uint packedVertices[];
 };
 
-// Binding 1: Per-Chunk transform/scale data
-layout (std430, binding = 1) readonly buffer ChunkOffsets {
+// Binding 2: Per-Chunk transform/scale data
+layout (std430, binding = 2) readonly buffer ChunkOffsets {
     vec4 chunkPositions[]; 
 };
 
 uniform mat4 u_ViewProjection;
 
-// OUTPUTS
+// --- OUTPUTS ---
 out vec3 v_Normal;
 out vec2 v_TexCoord;
 out vec3 v_Color;
 out float v_AO; 
+out vec3 v_FragPos; // REQUIRED: Passed to Frag shader for Fog/Sun logic
 
-// CRITICAL: 'flat' ensures the integer ID is not interpolated. 
-// Without this, ID 1.0 might become 0.999 across a face, casting to 0.
 flat out int v_TexID; 
 
 vec3 getCubeNormal(int i) {
@@ -33,17 +32,14 @@ vec3 getCubeNormal(int i) {
 }
 
 void main() {
-    // 1. Fetch Data
     uint data = packedVertices[gl_VertexID];
 
-    // 2. Unpack Geometry
-    // We add 0.5 to move from grid-aligned integers to pixel centers if needed, 
-    // but here we just restore the float offsets.
-    float x = float(bitfieldExtract(data, 0,  6)) - 8.0;
-    float y = float(bitfieldExtract(data, 6,  6)) - 8.0;
-    float z = float(bitfieldExtract(data, 12, 6)) - 8.0;
+    // Unpack Geometry
+    float x = float(bitfieldExtract(data, 0,  6));
+    float y = float(bitfieldExtract(data, 6,  6));
+    float z = float(bitfieldExtract(data, 12, 6));
     
-    // 3. Unpack Attributes
+    // Unpack Attributes
     int normIndex = int(bitfieldExtract(data, 18, 3));
     int aoVal     = int(bitfieldExtract(data, 21, 2));
     int texID     = int(bitfieldExtract(data, 23, 9));
@@ -51,31 +47,24 @@ void main() {
     vec3 localPos = vec3(x, y, z);
     vec3 normal = getCubeNormal(normIndex);
 
-    // 4. World Position Calculation
-    // chunkPositions[gl_BaseInstance] is set by MultiDrawIndirect
+    // World Position Calculation
     vec3 chunkOffset = chunkPositions[gl_BaseInstance].xyz;
     float scale = chunkPositions[gl_BaseInstance].w;
-
     vec3 trueWorldPos = (localPos * scale) + chunkOffset;
     
-    // Sinking Logic for LOD blending (optional based on your engine logic)
+    // Sinking Logic for LOD
     vec3 renderPos = trueWorldPos;
     if (scale > 1.0) {
-        renderPos.y -= (scale * 1.001);
-        renderPos.z -= 0.01;
+        renderPos.y -= (scale * 1.1);
     }
 
-    // 5. Outputs
+    // Outputs
     v_Normal = normal;
     v_TexID = texID; 
-    
-    // AO: 0..3 maps to 0.0..1.0
+    v_FragPos = trueWorldPos; // <--- This is the new vital piece
     v_AO = float(aoVal) / 3.0; 
-    
-    // UV GENERATION
-    // We use world coordinates for consistent tiling across chunks.
-    // We assume 1.0 world unit = 1 texture repeat.
-    // If your texture looks too small/big, multiply trueWorldPos by a factor here.
+
+    // Auto-UV mapping
     if (abs(normal.x) > 0.5) {
         v_TexCoord = trueWorldPos.yz; 
     } else if (abs(normal.y) > 0.5) {
@@ -84,7 +73,6 @@ void main() {
         v_TexCoord = trueWorldPos.xy;
     }
 
-    // Pass White tint (can be modified for damage flashes, selection, etc.)
     v_Color = vec3(1.0); 
 
     gl_Position = u_ViewProjection * vec4(renderPos, 1.0);

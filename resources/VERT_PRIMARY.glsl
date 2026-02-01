@@ -5,8 +5,10 @@ layout (std430, binding = 0) readonly buffer VoxelData {
     uint packedVertices[];
 };
 
-// Binding 1: Per-Chunk transform/scale data
-layout (std430, binding = 1) readonly buffer ChunkOffsets {
+// Binding 2: Per-Chunk transform/scale data
+// This buffer contains PACKED vec4s (16 bytes per chunk).
+// Do NOT use a struct here, or the stride will mismatch the C++ buffer.
+layout (std430, binding = 2) readonly buffer ChunkOffsets {
     vec4 chunkPositions[]; 
 };
 
@@ -18,8 +20,6 @@ out vec2 v_TexCoord;
 out vec3 v_Color;
 out float v_AO; 
 
-// CRITICAL: 'flat' ensures the integer ID is not interpolated. 
-// Without this, ID 1.0 might become 0.999 across a face, casting to 0.
 flat out int v_TexID; 
 
 vec3 getCubeNormal(int i) {
@@ -37,11 +37,9 @@ void main() {
     uint data = packedVertices[gl_VertexID];
 
     // 2. Unpack Geometry
-    // We add 0.5 to move from grid-aligned integers to pixel centers if needed, 
-    // but here we just restore the float offsets.
-    float x = float(bitfieldExtract(data, 0,  6)) - 8.0;
-    float y = float(bitfieldExtract(data, 6,  6)) - 8.0;
-    float z = float(bitfieldExtract(data, 12, 6)) - 8.0;
+    float x = float(bitfieldExtract(data, 0,  6));
+    float y = float(bitfieldExtract(data, 6,  6));
+    float z = float(bitfieldExtract(data, 12, 6));
     
     // 3. Unpack Attributes
     int normIndex = int(bitfieldExtract(data, 18, 3));
@@ -51,7 +49,7 @@ void main() {
     vec3 localPos = vec3(x, y, z);
     vec3 normal = getCubeNormal(normIndex);
 
-    // 4. World Position Calculation
+     // 4. World Position Calculation
     // chunkPositions[gl_BaseInstance] is set by MultiDrawIndirect
     vec3 chunkOffset = chunkPositions[gl_BaseInstance].xyz;
     float scale = chunkPositions[gl_BaseInstance].w;
@@ -61,21 +59,22 @@ void main() {
     // Sinking Logic for LOD blending (optional based on your engine logic)
     vec3 renderPos = trueWorldPos;
     if (scale > 1.0) {
-        renderPos.y -= (scale * 1.001);
-        renderPos.z -= 0.01;
+        renderPos.y -= (scale * 1.1);
+        //renderPos.z -= 0.01;
     }
 
-    // 5. Outputs
+
+
+
+
+    //  Outputs
     v_Normal = normal;
     v_TexID = texID; 
     
     // AO: 0..3 maps to 0.0..1.0
     v_AO = float(aoVal) / 3.0; 
     
-    // UV GENERATION
-    // We use world coordinates for consistent tiling across chunks.
-    // We assume 1.0 world unit = 1 texture repeat.
-    // If your texture looks too small/big, multiply trueWorldPos by a factor here.
+
     if (abs(normal.x) > 0.5) {
         v_TexCoord = trueWorldPos.yz; 
     } else if (abs(normal.y) > 0.5) {

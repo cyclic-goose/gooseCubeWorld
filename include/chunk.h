@@ -6,22 +6,21 @@ constexpr int CHUNK_SIZE = 32;
 constexpr int CHUNK_SIZE_PADDED = CHUNK_SIZE + 2; 
 
 struct Chunk {
+    // Standardized Layout: Y-Major (Y is slow, X is fast).
+    // Conceptually: voxels[y][z][x]
     uint8_t voxels[CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED];
+
+    //34×34×34=39,304 bytes per Chunk.
+    //1 Chunk ≈ 39 KB.
     
-    int worldX = 0;
-    int worldY = 0;
-    int worldZ = 0;
-
-    // OPTIMIZATION FLAGS
-    bool isUniform = false; // True if all blocks are the same ID
-    uint8_t uniformID = 0;  // The ID if uniform
-
     Chunk() {
         std::memset(voxels, 0, sizeof(voxels));
     }
 
+    // New Standard: X is contiguous. 
+    // This matches standard C 3D array layout: arr[y][z][x]
     inline int GetIndex(int x, int y, int z) const {
-        return (x * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED) + (z * CHUNK_SIZE_PADDED) + y;
+        return x + (z * CHUNK_SIZE_PADDED) + (y * CHUNK_SIZE_PADDED * CHUNK_SIZE_PADDED);
     }
 
     inline uint8_t Get(int x, int y, int z) const {
@@ -31,18 +30,14 @@ struct Chunk {
         return voxels[GetIndex(x, y, z)];
     }
 
-    inline void Set(int x, int y, int z, uint8_t v) {
+    inline void SetSafe(int x, int y, int z, uint8_t v) {
         if (x < 0 || x >= CHUNK_SIZE_PADDED || 
             y < 0 || y >= CHUNK_SIZE_PADDED || 
             z < 0 || z >= CHUNK_SIZE_PADDED) return;
         voxels[GetIndex(x, y, z)] = v;
-        isUniform = false; // Break uniform assumption on write
     }
-    
-    // Fast fill for Air/Solid chunks
-    void FillUniform(uint8_t id) {
-        std::memset(voxels, id, sizeof(voxels));
-        isUniform = true;
-        uniformID = id;
+
+    inline void Set(int x, int y, int z, uint8_t v) {
+        voxels[GetIndex(x, y, z)] = v;
     }
 };

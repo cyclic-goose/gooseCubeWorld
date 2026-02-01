@@ -10,6 +10,7 @@
 #include <sstream>
 #include <glad/glad.h>
 #include <imgui.h>
+//#include "gui_utils.h"
 
 // Configuration
 #define PROFILER_HISTORY_SIZE 120
@@ -54,10 +55,29 @@ struct GPUTimer {
 
 class Profiler {
 public:
+
+    struct PipelineStats {
+        size_t pendingGen = 0;    // LODs calculated, waiting for thread pickup
+        size_t waitingMesh = 0;   // Generated, waiting for Mesher
+        size_t waitingUpload = 0; // Meshed, waiting for Main Thread Upload
+        size_t activeThreads = 0; 
+        size_t totalChunks = 0;
+        size_t voxelPoolLimit = 0;
+        float voxelRamAllocated = 0;
+        float voxelRamUsed = 0;
+        float nodeRamAllocaed = 0;
+        float nodeRamUsed = 0;
+    } m_pipeline;
+
+
     static Profiler& Get() {
         static Profiler instance;
         return instance;
     }
+
+    void SetPipelineStats(size_t pGen, size_t wMesh, size_t wUpload, size_t threads, size_t active, size_t limit, float voxRamAlloc, float voxRamUsed, float nRamAlloc, float nRamUsed ) {
+    m_pipeline = { pGen, wMesh, wUpload, threads, active, limit, voxRamAlloc, voxRamUsed, nRamAlloc, nRamUsed };
+}
 
     // Master Toggle: If false, timers return immediately for zero overhead
     bool m_Enabled = false; 
@@ -251,6 +271,68 @@ public:
             }
             
             RenderTimerList(m_GpuTimers, "GPU Passes (Latency: 3 Frames)", ImVec4(1.0f, 0.6f, 0.6f, 1.0f));
+
+            // Pipeline Pressure
+            if (ImGui::CollapsingHeader("CPU Pipeline Pressure", ImGuiTreeNodeFlags_DefaultOpen)) {
+                float limit = (float)m_pipeline.voxelPoolLimit;
+                if (limit == 0) limit = 1.0f; // Prevent div/0
+                // Active Worker Threads (Combined Gen + Mesh)
+                ImGui::Text("Active Tasks: %zu", m_pipeline.activeThreads);
+
+                // Pending Generation (LOD Requests)
+                ImGui::Text("Pending Gen (LODs): %zu", m_pipeline.pendingGen);
+                
+
+                // Meshing Queue Pressure (Generated -> Waiting for Mesher)
+                float meshPressure = (float)m_pipeline.waitingMesh / 1024.0f; // Soft limit 1024
+                ImGui::Text("Mesh Queue: %zu", m_pipeline.waitingMesh);
+                ImGui::ProgressBar(meshPressure, ImVec2(-1, 0), "");
+
+                // Upload Queue Pressure (Meshed -> Waiting for GPU Upload)
+                float uploadPressure = (float)m_pipeline.waitingUpload / 512.0f; // Soft limit 512A
+                ImGui::Text("Upload Queue: %zu", m_pipeline.waitingUpload);
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.9f, 0.4f, 0.4f, 1.0f)); // Reddish
+                ImGui::ProgressBar(uploadPressure, ImVec2(-1, 0), "");
+                ImGui::PopStyleColor();
+
+                // Total Voxel Pool Usage (Safety Limit)
+                // We estimate 'in flight' as the sum of all queues + active threads
+                size_t totalInFlight = m_pipeline.waitingMesh + m_pipeline.waitingUpload + m_pipeline.activeThreads;
+                float poolPressure = (float)totalInFlight / limit;
+                
+                ImGui::Separator();
+                ImGui::Text("Transient Voxels (enroute to GPU) (Limit: %zu)", (size_t)limit);
+                // Color changes to Red if we get close to the limit
+                ImVec4 poolColor = (poolPressure > 0.8f) ? ImVec4(1, 0, 0, 1) : ImVec4(0, 1, 0, 1);
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, poolColor);
+                ImGui::ProgressBar(poolPressure, ImVec2(-1, 0), "Pool Saturation");
+                ImGui::PopStyleColor();
+
+                ImGui::Text("Total Active Chunks(ChunkNode*): %zu", m_pipeline.totalChunks);
+
+                ImGui::Separator();
+                float voxRamPressure = m_pipeline.voxelRamUsed/m_pipeline.voxelRamAllocated;
+
+                ImGui::Text("Chunk RAM USED/ALLOCATED (MB) %.2f/%.2f", m_pipeline.voxelRamUsed, m_pipeline.voxelRamAllocated);
+                ImVec4 ramColor = ( voxRamPressure> 0.8f) ? ImVec4(1, 0, 0, 1) : ImVec4(0, 1, 0, 1);
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ramColor);
+                ImGui::ProgressBar(voxRamPressure, ImVec2(-1, 0), "RAM Saturation (Will Alloc More On Need)");
+                ImGui::PopStyleColor();
+
+
+                ImGui::Separator();
+                float nodeRamPressure = m_pipeline.nodeRamUsed/m_pipeline.nodeRamAllocaed;
+
+                ImGui::Text("Chunk Metadata RAM USED/ALLOCATED (MB) %.2f/%.2f", m_pipeline.nodeRamUsed, m_pipeline.nodeRamAllocaed);
+                ramColor = ( nodeRamPressure> 0.8f) ? ImVec4(1, 0, 0, 1) : ImVec4(0, 1, 0, 1);
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ramColor);
+                ImGui::ProgressBar(nodeRamPressure, ImVec2(-1, 0), "RAM Saturation (Will Alloc More On Need)");
+                ImGui::PopStyleColor();
+                //if (m_pipeline.nodeRamUsed + m_pipeline.)
+                
+            }
+
+
         }
         ImGui::End();
     }

@@ -16,12 +16,44 @@ out vec4 FragColor;
 // --- FALLBACK COLORS ---
 vec3 GetFallbackColor(int id) {
     switch (id) {
-        case 1: return vec3(0.2, 0.7, 0.2); // Grass
-        case 2: return vec3(0.45, 0.3, 0.2); // Dirt
-        case 3: return vec3(0.6, 0.6, 0.6); // Stone
-        case 4: return vec3(0.95, 0.95, 0.95); // Snow
-        case 5: return vec3(0.8, 0.7, 0.5); // Sand
-        default: return vec3(1.0, 0.0, 1.0); // Magenta
+        // --- Basic Biomes ---
+        case 1:  return vec3(0.13, 0.55, 0.13); // Grass (Standard Green)
+        case 2:  return vec3(0.47, 0.33, 0.23); // Dirt (Brown)
+        case 3:  return vec3(0.55, 0.55, 0.55); // Stone (Grey)
+        case 4:  return vec3(0.95, 0.95, 0.98); // Snow (Near White)
+        case 5:  return vec3(0.86, 0.78, 0.55); // Sand (Tan)
+
+        // --- Required IDs ---
+        case 6:  return vec3(0.20, 0.45, 0.90); // Water (Deep Blue)
+        case 7:  return vec3(0.85, 0.95, 0.98); // Glass (Pale Cyan Tint)
+
+        // --- Earthy Variations ---
+        case 8:  return vec3(0.62, 0.65, 0.70); // Clay (Blue-Grey)
+        case 9:  return vec3(0.50, 0.48, 0.48); // Gravel (Noise Grey)
+        case 10: return vec3(0.35, 0.25, 0.20); // Mud (Dark Brown)
+        case 11: return vec3(0.85, 0.65, 0.40); // Sandstone
+        case 12: return vec3(0.60, 0.80, 0.95); // Ice (Light Blue)
+
+        // --- Vegetation ---
+        case 13: return vec3(0.36, 0.25, 0.15); // Wood (Oak Log)
+        case 14: return vec3(0.15, 0.45, 0.10); // Leaves (Oak)
+        case 15: return vec3(0.26, 0.18, 0.12); // Wood (Spruce/Dark Log)
+        case 16: return vec3(0.15, 0.30, 0.20); // Leaves (Pine/Spruce)
+        case 17: return vec3(0.45, 0.55, 0.20); // Marsh/Swamp Grass
+        case 18: return vec3(0.75, 0.70, 0.35); // Dry Grass/Savanna
+
+        // --- Volcanic & Deep ---
+        case 19: return vec3(0.10, 0.10, 0.12); // Bedrock/Obsidian
+        case 20: return vec3(0.90, 0.30, 0.05); // Lava (Bright Orange)
+        case 21: return vec3(0.45, 0.05, 0.05); // Red Stone/Scorched Earth
+
+        // --- Ores ---
+        case 22: return vec3(1.00, 0.84, 0.00); // Gold
+        case 23: return vec3(0.10, 0.80, 0.75); // Gem/Diamond
+        case 24: return vec3(0.70, 0.35, 0.15); // Copper/Rust
+
+        // --- Error/Fallback ---
+        default: return vec3(1.0, 0.0, 1.0);    // Hot Pink (Error)
     }
 }
 

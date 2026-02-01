@@ -10,6 +10,11 @@
 #include "world.h"
 #include "camera.h"
 #include "profiler.h"
+#include "terrain/terrain_system.h"
+#include "terrain/terrain_selector_ImGuiExpose.h"
+#include "playerController.h"
+#include "gui_utils.h"
+#include "crosshair.h"
 
 // ================================================================================================
 // UI CONFIGURATION
@@ -22,13 +27,14 @@ struct UIConfig {
     bool showWorldSettings = false; // M: World Generation
     bool showOverlay = true;        // HUD
     bool showWireframe = false;
+    bool showTerrainGui = false;
     
     // --- Sub-window Toggles (Managed by F2 master switch usually) ---
     bool showCameraControls = true;
     bool showCullerControls = true;
 
     // --- Settings ---
-    bool vsync = false;
+    bool vsync = true;
     bool lockFrustum = false;
     float FPS_OVERLAY_FONT_SCALE = 1.35f;
     float DEBUG_FONT_SCALE = 1.4f;
@@ -37,9 +43,10 @@ struct UIConfig {
     // --- State ---
     bool isGameMode = true;         // TAB: Mouse Lock toggle
     bool editConfigInitialized = false;
+    bool crossHairEnabled = true;
     
     // --- World Edit State ---
-    WorldConfig editConfig;         
+    std::unique_ptr<EngineConfig> editConfig;        
     int currentLODPreset = 1;       // 0=Low, 1=Med, 2=High, 3=Extreme
 };
 
@@ -112,13 +119,14 @@ public:
     // MAIN RENDER INTERFACE
     // --------------------------------------------------------------------------------------------
 
-    void RenderUI(World& world, UIConfig& config, Camera& camera, const float VRAM_HEAP_SIZE_MB) {
+    // now takes in player which holds its camera 
+    void RenderUI(World& world, UIConfig& config, Player& player, const float VRAM_HEAP_SIZE_MB) {
         Engine::Profiler::ScopedTimer timer("ImGui::Render");
         
         // One-time init for edit config
-        if (!config.editConfigInitialized) {
-            config.editConfig = world.GetConfig();
-            config.editConfigInitialized = true;
+        if (!config.editConfig) {
+            // Copy the current world config into our editable pointer
+            config.editConfig = std::make_unique<EngineConfig>(world.GetConfig());
         }
 
         // Handle VSync State
@@ -128,21 +136,25 @@ public:
             lastVsync = config.vsync;
         }
 
-        // 1. Overlay (Always on top/visible)
-        if (config.showOverlay) RenderSimpleOverlay(config, camera);
+        // Overlay (Always on top/visible)
+        if (config.showOverlay) RenderSimpleOverlay(config, player);
 
-        // 2. Game Controls (Pause Menu)
-        if (config.showGameControls) RenderGameControls(world, config);
+        if (config.showGameControls) RenderGameControls(world, config, player);
 
-        // 3. Debug Suite (F2)
+        if (config.showTerrainGui) {RenderTerrainControls(world, config);}
+
+        // Debug Suite (F2)
         if (config.showDebugPanel) {
             RenderDebugPanel(world, config, VRAM_HEAP_SIZE_MB); // Top Left
-            RenderCameraControls(camera, config);               // Top Right
+            //RenderCameraControls(player, config);               // Top Right
             RenderCullerControls(world, config);                // Bottom Right
         }
 
-        // 4. World Generation (M)
-        if (config.showWorldSettings) RenderWorldSettings(world, config);
+        if (config.crossHairEnabled)
+            Crosshair::Get().Draw();
+
+        // World Generation (M)
+        //if (config.showWorldSettings) RenderWorldSettings(world, config);
         
         // RenderMenuBar(config); // Optional: Currently disabled
     }
@@ -199,7 +211,7 @@ private:
     // RENDER WIDGETS
     // --------------------------------------------------------------------------------------------
 
-    void RenderGameControls(World& world, UIConfig& config) {
+    void RenderGameControls(World& world, UIConfig& config, Player& player) {
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse; 
         // Note: We do NOT set NoInputs here because this is the Pause Menu
         ImGui::SetNextWindowBgAlpha(0.95f); 
@@ -221,72 +233,79 @@ private:
 
                 if (ImGui::BeginTabBar("PauseMenuTabs")) {
                     
-                    // --- TAB 1: GAMEPLAY ---
-                    if (ImGui::BeginTabItem("Gameplay")) {
+
+
+                    
+                    
+                    // 
+                    if (ImGui::BeginTabItem("Engine")) {
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "World Settings");
                         ImGui::Separator();
                         
                         ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
                         ImGui::TextDisabled("The LOD system renders distant terrain at lower resolutions. "
-                                          "Adding more LOD levels exponentially increases view distance but consumes VRAM. ONE CHUNK = 32x32x32 Blocks");
-                        ImGui::PopTextWrapPos();
-                        ImGui::Spacing();
-
-                        // --- LOD Density Presets ---
-                        ImGui::Text("Render Distance Preset");
-                        bool presetChanged = false;
-                        
-                        // Helper lambda for radio buttons with tooltips
-                        auto RadioWithTooltip = [&](const char* label, int v, const char* tip) {
-                            if (ImGui::RadioButton(label, &config.currentLODPreset, v)) presetChanged = true;
-                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
-                            ImGui::SameLine();
-                        };
-
-                        RadioWithTooltip("Very Low", 0, "For low performing PCs");
-                        RadioWithTooltip("Standard", 1, "Balanced");
-                        RadioWithTooltip("High", 2, "Good view range, reasonable VRAM");
-                        RadioWithTooltip("Ultra", 3, "High Rasterization Cost");
-                        // Remove SameLine for the last one to wrap if needed, or keep it
-                        if (ImGui::RadioButton("Extreme", &config.currentLODPreset, 4)) presetChanged = true;
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("For GIGA GPUs");
-
-                        if (presetChanged) {
-                            struct LODPreset {
-                                int activeCount;
-                                std::vector<int> radii;
-                            };
-
-                            // OPTIMIZATION: Static const to prevent re-allocation every frame
-                            static const std::vector<LODPreset> presets = {
-                                { 4, { 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0 } },                        // Low
-                                { 5, { 13, 13, 13, 13, 13, 0, 0, 0, 0, 0, 0, 0 } },                   // Standard
-                                { 6, { 17, 17, 17, 17, 17, 11, 0, 0, 0, 0, 0, 0 } },                  // Medium
-                                { 7, { 21, 21, 21, 21, 21, 21, 21, 0, 0, 0, 0, 0 } },                 // High
-                                { 9, { 25, 23, 21, 21, 21, 21, 21, 21, 21, 0, 0, 0 } }                // Extreme
-                            };
-
-                            if (config.currentLODPreset >= 0 && config.currentLODPreset < (int)presets.size()) {
-                                const auto& selected = presets[config.currentLODPreset];
-                                config.editConfig.lodCount = selected.activeCount;
-                                for(int i = 0; i < 12; i++) {
-                                    if(i < (int)selected.radii.size()) 
-                                        config.editConfig.lodRadius[i] = selected.radii[i];
-                                }
-                                world.Reload(config.editConfig);
+                            "Adding more LOD levels exponentially increases view distance but consumes VRAM. ONE CHUNK = 32x32x32 Blocks");
+                            ImGui::PopTextWrapPos();
+                            ImGui::Spacing();
+                            
+                            // --- LOD Density Presets ---
+                            ImGui::Text("Render Distance Preset");
+                            bool presetChanged = false;
+                            
+                            if (!world.IsBusy()) {
+                                
+                                // Helper lambda for radio buttons with tooltips
+                                auto RadioWithTooltip = [&](const char* label, int v, const char* tip) {
+                                    if (ImGui::RadioButton(label, &config.currentLODPreset, v)) presetChanged = true;
+                                    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+                                    ImGui::SameLine();
+                                };
+                                
+                                RadioWithTooltip("Very Low", 0, "For low performing PCs");
+                                RadioWithTooltip("Standard", 1, "Balanced");
+                                RadioWithTooltip("High", 2, "Good view range, reasonable VRAM");
+                                RadioWithTooltip("Ultra", 3, "High Rasterization Cost");
+                                // Remove SameLine for the last one to wrap if needed, or keep it
+                                if (ImGui::RadioButton("Extreme", &config.currentLODPreset, 4)) presetChanged = true;
+                                if (ImGui::IsItemHovered()) ImGui::SetTooltip("FOR SUPERCOMPUTERS (If you think you qualify, you probably still don't)");
                             }
+                            
+                            if (presetChanged) {
+                                struct LODPreset {
+                                    int activeCount;
+                                    std::vector<int> radii;
+                                };
+                                
+                                // OPTIMIZATION: Static const to prevent re-allocation every frame
+                                static const std::vector<LODPreset> presets = {
+                                    { 4, { 9, 9, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0 } },                        // Low
+                                    { 5, { 15, 15, 15, 15, 7, 0, 0, 0 , 0, 0, 0, 0} },                   // Standard
+                                    { 6, { 17, 17, 17, 17, 17, 11, 0, 0, 0, 0, 0, 0 } },                  // Medium
+                                    { 7, { 21, 21, 21, 21, 21, 21, 21, 0, 0, 0, 0, 0 } },                 // High
+                                    { 9, { 25, 23, 21, 21, 21, 21, 21, 21, 21, 0, 0, 0 } }                // Extreme
+                                };
+                                
+                                if (config.currentLODPreset >= 0 && config.currentLODPreset < (int)presets.size()) {
+                                    const auto& selected = presets[config.currentLODPreset];
+                                    config.editConfig->settings.lodCount = selected.activeCount;
+                                    for(int i = 0; i < 12; i++) {
+                                        if(i < (int)selected.radii.size()) 
+                                        config.editConfig->settings.lodRadius[i] = selected.radii[i];
+                                    }
+                                    world.ReloadWorld(*config.editConfig);
+                                }
                         }
-
+                        
                         ImGui::Spacing();
-
+                        
                         // --- Effective Distance Calculation ---
-                        int currentLODs = config.editConfig.lodCount;
+                        int currentLODs = config.editConfig->settings.lodCount;
                         int lastLODIndex = std::clamp(currentLODs - 1, 0, 11);
-                        int radius = config.editConfig.lodRadius[lastLODIndex];
+                        int radius = config.editConfig->settings.lodRadius[lastLODIndex];
                         int scale = 1 << lastLODIndex;
                         int effectiveDistChunks = radius * scale;
-
+                        
                         ImGui::Text("Effective Render Distance:");
                         ImGui::SameLine();
                         if (effectiveDistChunks == 0) {
@@ -294,32 +313,45 @@ private:
                         } else {
                             ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "%d Chunks", effectiveDistChunks);
                         }
-
-                        if (ImGui::SliderInt("##lodslider", &currentLODs, 1, 12, "LOD Level: %d")) {
-                            config.editConfig.lodCount = currentLODs;
+                        
+                        if (!world.IsBusy())
+                        {
+                            
+                            if (ImGui::SliderInt("##lodslider", &currentLODs, 1, 12, "LOD Level: %d")) {
+                                config.editConfig->settings.lodCount = currentLODs;
+                            }
+                            
+                            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Level 1-6: Standard Playable Area\nLevel 7-9: Far Horizon\nLevel 10+: Extreme Distance");
+                            
+                            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                                world.ReloadWorld(*config.editConfig);
+                            }
                         }
-                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Level 1-6: Standard Playable Area\nLevel 7-9: Far Horizon\nLevel 10+: Extreme Distance");
-
-                        if (ImGui::IsItemDeactivatedAfterEdit()) {
-                            world.Reload(config.editConfig);
-                        }
-
+                        
                         ImGui::Spacing();
-
+                        
                         // --- Advanced Manual Tuning ---
                         if (ImGui::TreeNodeEx("Advanced LOD Tuning", ImGuiTreeNodeFlags_DefaultOpen)) {
                             ImGui::TextDisabled("Adjust the radius (in chunks) for each detail ring.");
                             ImGui::Spacing();
-
-                            for (int i = 0; i < config.editConfig.lodCount; i++) {
-                                int currentScale = 1 << i;
-                                ImGui::Text("LOD %d (1:%dx Scale)", i, currentScale);
-                                ImGui::SameLine();
-                                std::string sliderLabel = "##lodradius" + std::to_string(i);
-                                ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig.lodRadius[i], 2, 64);
-
-                                if (ImGui::IsItemDeactivatedAfterEdit()) {
-                                    world.Reload(config.editConfig);
+                            
+                            // check if the world threads are busy before allowing LOD tuning or else
+                            // program can crash hard
+                            if (!world.IsBusy())
+                            {
+                                
+                                for (int i = 0; i < config.editConfig->settings.lodCount; i++) {
+                                    int currentScale = 1 << i;
+                                    ImGui::Text("LOD %d (1:%dx Scale)", i, currentScale);
+                                    ImGui::SameLine();
+                                    std::string sliderLabel = "##lodradius" + std::to_string(i);
+                                    ImGui::SliderInt(sliderLabel.c_str(), &config.editConfig->settings.lodRadius[i], 2, (int)(32.0));
+                                    if (i == 0) {
+                                        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Each chunk (32^3) that isnt uniform (AIR) in LOD 0 uses ~40KB of ram.\n IDs are saved in ram on LOD 0 to perform physics calculations.");
+                                     }
+                                    if (ImGui::IsItemDeactivatedAfterEdit()) {
+                                        world.ReloadWorld(*config.editConfig);
+                                    }
                                 }
                             }
                             ImGui::TreePop();
@@ -328,18 +360,28 @@ private:
                         ImGui::Spacing();
                         ImGui::Separator();
                         if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
-                            world.Reload(config.editConfig);
+                            world.ReloadWorld(*config.editConfig);
                         }
                         if (ImGui::IsItemHovered()) ImGui::SetTooltip("SPAMMING THIS CAN CAUSE VRAM CRASH. ALLOW WORLD TO GENERATE");
                         ImGui::EndTabItem();
                     }
+                    
 
-                    // --- TAB 2: GRAPHICS ---
+                    // TAB PLAYER
+                    if (ImGui::BeginTabItem("Player")) {
+                        
+                        player.DrawInterface(); // call player internal gui exposure
+
+                        ImGui::EndTabItem();
+                    }
+
+
+                    // --- TAB: GRAPHICS ---
                     if (ImGui::BeginTabItem("Graphics")) {
                         ImGui::Spacing();
                         ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.6f, 1.0f), "Display Options");
                         ImGui::Separator();
-
+                        
                         bool isFs = IsFullscreen();
                         if (ImGui::Checkbox("Fullscreen Mode", &isFs)) {
                             ToggleFullscreen();
@@ -359,7 +401,7 @@ private:
                         ImGui::EndTabItem();
                     }
 
-                    // --- TAB 3: INTERFACE & STYLE ---
+                    // --- TAB: INTERFACE & STYLE ---
                     if (ImGui::BeginTabItem("Interface")) {
                         ImGuiStyle& style = ImGui::GetStyle();
                         
@@ -417,10 +459,67 @@ private:
                         ImGui::EndTabItem();
                     }
 
-                    // --- TAB 4: RESOLUTION ---
+                    // --- TAB: RESOLUTION ---
                     if (ImGui::BeginTabItem("Resolution")) {
                         ImGui::Spacing();
                         ImGui::TextDisabled("(man you think i got time for this?)");
+                        ImGui::EndTabItem();
+                    }
+
+                    if (ImGui::BeginTabItem("About")) {
+                        // --- 1. HEADER SECTION ---
+                        //ImGui::PushFont(fontBold); // Optional: if you have a bold font loaded
+                        ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "Voxel Engine Alpha v0.5");
+                        //ImGui::PopFont();
+                        ImGui::TextDisabled("Developed by Brenden Stevens");
+                        ImGui::Separator();
+
+                        // --- 2. ENGINE ARCHITECTURE ---
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.4f, 1.0f), "Engine");
+                        ImGui::TextWrapped(
+                            "A 'hybrid' polygon-based cube rendering engine built from scratch in C++. "
+                            "Unlike raw volumetric engines, this utilizes a mesh-based approach optimized "
+                            "for extreme render distances via a custom Level of Detail (LOD) system."
+                        );
+
+                        // --- 3. RECENT UPDATES & OPTIMIZATIONS ---
+                        ImGui::Spacing();
+                        if (ImGui::CollapsingHeader("Latest Updates (v0.3+)", ImGuiTreeNodeFlags_DefaultOpen)) {
+                            ImGui::BeginGroup();
+                            ImGui::BulletText("Gameplay: Collision, Block Breaking/Placing.");
+                            ImGui::BulletText("Terrain: Virtualized generation classes for runtime switching.");
+                            ImGui::BulletText("Memory: Dynamic RAM growth; allocation only for filled chunks.");
+                            ImGui::BulletText("Optimization: Cache-efficient terrain generation (thank you -o3 flag).");
+                            ImGui::EndGroup();
+
+                            ImGui::Indent();
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+                            ImGui::Text("Debug Hotkeys: F2 (Profiling), F3 (Depth), F4 (Chunk Layout)");
+                            ImGui::PopStyleColor();
+                            ImGui::Unindent();
+                        }
+
+                        // --- 4. TECHNICAL SPECIFICATIONS ---
+                        ImGui::Spacing();
+                        if (ImGui::CollapsingHeader("Tech Stack")) {
+                            ImGui::Columns(2, "techstack", false);
+                            ImGui::SetColumnWidth(0, 150.0f);
+                            
+                            ImGui::Text("Graphics API"); ImGui::NextColumn(); ImGui::Text("OpenGL 4.6 (GLAD/GLFW)"); ImGui::NextColumn();
+                            ImGui::Text("Interface");    ImGui::NextColumn(); ImGui::Text("Dear ImGui");           ImGui::NextColumn();
+                            ImGui::Text("Mathematics");  ImGui::NextColumn(); ImGui::Text("GLM");                  ImGui::NextColumn();
+                            ImGui::Text("Build Tool");   ImGui::NextColumn(); ImGui::Text("CMake");                ImGui::NextColumn();
+                            ImGui::Text("Terrain Gen");   ImGui::NextColumn(); ImGui::Text("FastNoise2");                ImGui::NextColumn();
+                            ImGui::Text("Optimization");   ImGui::NextColumn(); ImGui::Text("FASTSIMD");                ImGui::NextColumn();
+                            ImGui::Columns(1);
+                            ImGui::Text("Figuring out wierd niche problems in my meshing algorithm: ");   ImGui::Text("Google Gemini 3");
+                            
+                        }
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+                        
                         ImGui::EndTabItem();
                     }
                     
@@ -444,42 +543,30 @@ private:
         }
     }
 
-    void RenderCameraControls(Camera& camera, UIConfig& config) {
+
+    void RenderTerrainControls(World& world, UIConfig& config) {
         ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
         if (config.isGameMode) ImGui::SetNextWindowBgAlpha(0.6f);
 
-        // Position: Top Right
         ImGuiViewport* vp = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 330, vp->WorkPos.y + 16), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(310, 300), ImGuiCond_FirstUseEver);
         
-        if (ImGui::Begin("Camera Settings", &config.showCameraControls, flags)) {
+        if (ImGui::Begin("Terrain Generation (T)", &config.showTerrainGui, flags)) {
             ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
-            
-            ImGui::TextColored(ImVec4(0,1,1,1), "Movement");
-            ImGui::DragFloat("Move Speed", &camera.MovementSpeed, 1.0f, 1.0f, 1000.0f);
-            ImGui::DragFloat("Sensitivity", &camera.MouseSensitivity, 0.01f, 0.01f, 2.0f);
-            
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0,1,1,1), "Lens");
-            ImGui::DragFloat("Zoom (FOV)", &camera.Zoom, 0.5f, 1.0f, 120.0f);
-            
-            ImGui::Separator();
-            ImGui::TextColored(ImVec4(0,1,1,1), "Transform (Read Only)");
-            ImGui::Text("Pos: %.2f, %.2f, %.2f", camera.Position.x, camera.Position.y, camera.Position.z);
-            ImGui::Text("Yaw: %.2f  Pitch: %.2f", camera.Yaw, camera.Pitch);
-            
-            if (ImGui::Button("Reset Camera")) {
-                camera.Position = glm::vec3(0, 150, 150);
-                camera.Yaw = -90.0f;
-                camera.Pitch = -45.0f;
-                camera.Zoom = 60.0f;
-                camera.MovementSpeed = 50.0f;
-                camera.updateCameraVectors();
+            GeneratorSelector::Render(world);
+
+            if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
+                world.ReloadWorld(*config.editConfig);
             }
+
             ImGui::End();
         }
+
+
     }
+
+
 
     void RenderCullerControls(World& world, UIConfig& config) {
         ImGuiWindowFlags flags = config.isGameMode ? (ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs) : 0;
@@ -519,7 +606,8 @@ private:
         }
     }
 
-    void RenderSimpleOverlay(const UIConfig& config, const Camera& camera) {
+    void RenderSimpleOverlay(const UIConfig& config, const Player& player) {
+        //Engine::Profiler::ScopedTimer timer("ImGui::Overlay Render Time");
         const float PAD = 10.0f;
         const ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImVec2 window_pos = ImVec2(viewport->WorkPos.x + PAD, viewport->WorkPos.y + PAD);
@@ -531,11 +619,13 @@ private:
         if (ImGui::Begin("StatsOverlay", nullptr, flags)) {
             ImGui::SetWindowFontScale(config.FPS_OVERLAY_FONT_SCALE);
             ImGui::TextColored(ImVec4(1, 1, 0, 1), "FPS: %.1f", ImGui::GetIO().Framerate);
-            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[ESC] Menu | [TAB] Mouse Lock/Unlock | [F2] Debug Menus\n");
+            ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", "[ESC] Menu | [T] Terrain Gen | [SPCBAR x 2] Toggle Creative \n Mouse Lock/Unlock [TAB] Mouse Lock/Unlock | [F2] Debug Menus\n");
             ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1), "%s", config.isGameMode ? "[MOUSE LOCKED]" : "[MOUSE UNLOCKED]");
             ImGui::Separator();
-            ImGui::Text("XYZ: %.1f, %.1f, %.1f", camera.Position.x, camera.Position.y, camera.Position.z);
-            ImGui::Text("Angle: Y:%.1f P:%.1f", camera.Yaw, camera.Pitch);
+            ImGui::Text("XYZ: %.1f, %.1f, %.1f", player.camera.Position.x, player.camera.Position.y, player.camera.Position.z);
+            ImGui::Text("Angle: Y:%.1f P:%.1f", player.camera.Yaw, player.camera.Pitch);
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 1.0f, 1), "Selected Block: %d",  player.selectedBlockID);
         }
         ImGui::End();
     }
@@ -569,15 +659,15 @@ private:
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "GPU MEMORY");
             ImGui::Separator();
-            size_t used = world.m_gpuMemory->GetUsedMemory();
-            size_t total = world.m_gpuMemory->GetTotalMemory();
+            size_t used = world.getVRAMUsed();
+            size_t total = world.getVRAMAllocated();
             float usedMB = (used / 1024.0f / 1024.0f);
             float totalMB = VRAM_HEAP_SIZE_MB;
             float ratio = (float)used / (float)total;
             
             ImGui::Text("VRAM: %.1f / %.1f MB", usedMB, totalMB);
             ImGui::ProgressBar(ratio, ImVec2(-1.0f, 15.0f));
-            ImGui::Text("Fragmentation: %zu free blocks", world.m_gpuMemory->GetFreeBlockCount());
+            ImGui::Text("Fragmentation: %zu free blocks", world.getVRAMFreeBlocks());
 
             // --- Geometry ---
             ImGui::Spacing();
@@ -586,12 +676,13 @@ private:
             
             size_t activeChunks = 0;
             size_t totalVertices = 0;
-            for (const auto& pair : world.m_chunks) {
-                if (pair.second->state == ChunkState::ACTIVE) {
-                    activeChunks++;
-                    totalVertices += pair.second->vertexCount;
-                }
-            }
+            world.calculateTotalVertices(activeChunks, totalVertices);
+            // for (const auto& pair : world.m_chunks) {
+            //     if (pair.second->state == ChunkState::ACTIVE) {
+            //         activeChunks++;
+            //         totalVertices += pair.second->vertexCountOpaque;
+            //     }
+            // }
             
             ImGui::Text("Active Chunks: %zu", activeChunks);
             ImGui::Text("Resident Vertices: %s", FormatNumber(totalVertices).c_str());
@@ -608,74 +699,36 @@ private:
             // --- Shader Debugging ---
             ImGui::Text("Cube Texture Debugging:");
             bool debugChanged = false;
-            if (ImGui::RadioButton("Normal Shader", &config.editConfig.cubeDebugMode, 0)) debugChanged = true;
-            if (ImGui::RadioButton("Debug Normals", &config.editConfig.cubeDebugMode, 1)) debugChanged = true;
-            if (ImGui::RadioButton("Debug AO", &config.editConfig.cubeDebugMode, 2)) debugChanged = true;
-            if (ImGui::RadioButton("Debug UVs", &config.editConfig.cubeDebugMode, 3)) debugChanged = true;
-            if (ImGui::RadioButton("Flat Color", &config.editConfig.cubeDebugMode, 4)) debugChanged = true;
+            if (ImGui::RadioButton("Normal Shader", &config.editConfig->settings.cubeDebugMode, 0)) debugChanged = true;
+            if (ImGui::RadioButton("Debug Normals", &config.editConfig->settings.cubeDebugMode, 1)) debugChanged = true;
+            if (ImGui::RadioButton("Debug AO", &config.editConfig->settings.cubeDebugMode, 2)) debugChanged = true;
+            if (ImGui::RadioButton("Debug UVs", &config.editConfig->settings.cubeDebugMode, 3)) debugChanged = true;
+            if (ImGui::RadioButton("Flat Color", &config.editConfig->settings.cubeDebugMode, 4)) debugChanged = true;
 
             if (debugChanged) {
-                world.setCubeDebugMode(config.editConfig.cubeDebugMode);
+                world.setCubeDebugMode(config.editConfig->settings.cubeDebugMode);
             }
 
             ImGui::Spacing();
             ImGui::TextColored(ImVec4(0, 1, 1, 1), "THREADING");
             ImGui::Separator();
-            ImGui::Text("Pool Tasks: %zu", world.m_pool.GetQueueSize());
+            //ImGui::Text("Pool Tasks: %zu", world.m_pool.GetQueueSize());
             
+            // grab all of the ImGui controls its that easy
+            //world.GetGenerator()->OnImGui();
+            if (ImGui::Button("Reset World State", ImVec2(-1, 40))) {
+                world.ReloadWorld(*config.editConfig);
+            }
+
+
             ImGui::End();
+
+
+
         }
     }
 
-    void RenderWorldSettings(World& world, UIConfig& config) {
-        ImGuiWindowFlags flags = 0;
-        if (config.isGameMode) {
-            flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
-            ImGui::SetNextWindowBgAlpha(0.75f);
-        }
-        ImGui::SetNextWindowPos(ImVec2(16,801), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(593,550), ImGuiCond_FirstUseEver);
-        
-        if (ImGui::Begin("World Generation (M)", &config.showWorldSettings)) {
-            ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
-            
-            if (ImGui::CollapsingHeader("Terrain Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::DragInt("Seed", &config.editConfig.seed);
-                ImGui::SliderFloat("Noise Scale", &config.editConfig.scale, 0.001f, 0.1f);
-                ImGui::SliderFloat("Hill Amp", &config.editConfig.hillAmplitude, 0.0f, 500.0f);
-                ImGui::SliderFloat("Hill Freq", &config.editConfig.hillFrequency, 0.05f, 10.0f);
-                ImGui::SliderFloat("Mountain Amp", &config.editConfig.mountainAmplitude, 0.0f, 8000.0f);
-                ImGui::SliderFloat("Mountain Freq", &config.editConfig.mountainFrequency, 0.01f, 0.2f);
-                ImGui::SliderInt("Sea Level", &config.editConfig.seaLevel, 0, 500);
-            }
 
-            if (ImGui::CollapsingHeader("World Dimensions")) {
-                ImGui::SliderInt("Height (Chunks)", &config.editConfig.worldHeightChunks, 8, 128);
-                ImGui::TextColored(ImVec4(0.7,0.7,0.7,1), "Note: Height changes require full reload.");
-            }
-
-            if (ImGui::CollapsingHeader("LOD Settings")) {
-                ImGui::SliderInt("LOD Count", &config.editConfig.lodCount, 1, 12);
-                for (int i = 0; i < config.editConfig.lodCount; i++) {
-                    std::string label = "LOD " + std::to_string(i) + " Radius";
-                    ImGui::SliderInt(label.c_str(), &config.editConfig.lodRadius[i], 0, 64);
-                }
-            }
-
-            if (ImGui::CollapsingHeader("Caves")) {
-                ImGui::Checkbox("Enable Caves", &config.editConfig.enableCaves);
-                if (config.editConfig.enableCaves) {
-                    ImGui::SliderFloat("Threshold", &config.editConfig.caveThreshold, 0.0f, 1.0f);
-                }
-            }
-            
-            ImGui::Separator();
-            if (ImGui::Button("REGENERATE WORLD (R)", ImVec2(-1, 40))) {
-                world.Reload(config.editConfig);
-            }
-            ImGui::End();
-        }
-    }
 
     void RenderMenuBar(UIConfig& config) {
         if (ImGui::BeginMainMenuBar()) {
