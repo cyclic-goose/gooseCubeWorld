@@ -70,7 +70,8 @@ inline void MeshChunk(const Chunk& chunk,
         // 2D -> 3D Coordinate Mapping Helper
         auto GetBlockID = [&](int u_chk, int v_chk) {
             int bx, by, bz;
-            if (axis == 0)      { bx = slice; by = u_chk; bz = v_chk; } 
+            // Axis 0 Fix: Map u->Z, v->Y to prevent 90 degree rotation
+            if (axis == 0)      { bx = slice; by = v_chk; bz = u_chk; } 
             else if (axis == 1) { bx = v_chk; by = slice; bz = u_chk; } 
             else                { bx = u_chk; by = v_chk; bz = slice; } 
             // Note: passing PADDING here because GetBlockID is working in local 0..31 space
@@ -134,7 +135,9 @@ inline void MeshChunk(const Chunk& chunk,
                     int r_u = u + du; 
                     int r_v = v + dv; 
 
-                    if (axis == 0)      { vx = slice; vy = r_u; vz = r_v; } 
+                    // Axis 0 Fix: u maps to Z (horizontal), v maps to Y (vertical)
+                    // This ensures vertical textures (logs) stand up correctly on X-faces.
+                    if (axis == 0)      { vx = slice; vy = r_v; vz = r_u; } 
                     else if (axis == 1) { vx = r_v; vy = slice; vz = r_u; } 
                     else                { vx = r_u; vy = r_v; vz = slice; } 
                     
@@ -148,10 +151,16 @@ inline void MeshChunk(const Chunk& chunk,
                     targetAllocator.Push(PackedVertex(vx, vy, vz, (float)face, 1.0f, visualTexID));
                 };
 
-                if (direction == 1) {
+                // Axis 0 requires winding flip because we swapped U/V mapping (Right-Hand Rule)
+                bool flipWinding = (axis == 0); 
+                bool positiveDir = (direction == 1);
+
+                if (positiveDir != flipWinding) { 
+                    // Standard Winding (CCW relative to face)
                     PushVert(0, 0); PushVert(w, 0); PushVert(w, h);
                     PushVert(0, 0); PushVert(w, h); PushVert(0, h);
                 } else {
+                    // Inverted Winding
                     PushVert(0, 0); PushVert(w, h); PushVert(w, 0);
                     PushVert(0, 0); PushVert(0, h); PushVert(w, h);
                 }
@@ -178,7 +187,8 @@ inline void MeshChunk(const Chunk& chunk,
                 for (int col = 0; col < CHUNK_SIZE; col++) {
                     int x, y, z;
                     
-                    if (axis == 0)      { x = slice; y = col; z = row; } 
+                    // Axis 0 Fix: x=slice, y=row (V/Vertical), z=col (U/Horizontal)
+                    if (axis == 0)      { x = slice; y = row; z = col; } 
                     else if (axis == 1) { x = row;   y = slice; z = col; } 
                     else                { x = col;   y = row;   z = slice; } 
                     
