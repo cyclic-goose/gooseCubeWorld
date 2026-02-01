@@ -34,7 +34,7 @@ struct UIConfig {
     bool showCullerControls = true;
 
     // --- Settings ---
-    bool vsync = false;
+    bool vsync = true;
     bool lockFrustum = false;
     float FPS_OVERLAY_FONT_SCALE = 1.35f;
     float DEBUG_FONT_SCALE = 1.4f;
@@ -465,6 +465,63 @@ private:
                         ImGui::TextDisabled("(man you think i got time for this?)");
                         ImGui::EndTabItem();
                     }
+
+                    if (ImGui::BeginTabItem("About")) {
+                        // --- 1. HEADER SECTION ---
+                        //ImGui::PushFont(fontBold); // Optional: if you have a bold font loaded
+                        ImGui::TextColored(ImVec4(0.4f, 0.7f, 1.0f, 1.0f), "Voxel Engine Alpha v0.5");
+                        //ImGui::PopFont();
+                        ImGui::TextDisabled("Developed by Brenden Stevens");
+                        ImGui::Separator();
+
+                        // --- 2. ENGINE ARCHITECTURE ---
+                        ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.9f, 0.9f, 0.4f, 1.0f), "Engine");
+                        ImGui::TextWrapped(
+                            "A 'hybrid' polygon-based cube rendering engine built from scratch in C++. "
+                            "Unlike raw volumetric engines, this utilizes a mesh-based approach optimized "
+                            "for extreme render distances via a custom Level of Detail (LOD) system."
+                        );
+
+                        // --- 3. RECENT UPDATES & OPTIMIZATIONS ---
+                        ImGui::Spacing();
+                        if (ImGui::CollapsingHeader("Latest Updates (v0.3+)", ImGuiTreeNodeFlags_DefaultOpen)) {
+                            ImGui::BeginGroup();
+                            ImGui::BulletText("Gameplay: Collision, Block Breaking/Placing.");
+                            ImGui::BulletText("Terrain: Virtualized generation classes for runtime switching.");
+                            ImGui::BulletText("Memory: Dynamic RAM growth; allocation only for filled chunks.");
+                            ImGui::BulletText("Optimization: Cache-efficient terrain generation (thank you -o3 flag).");
+                            ImGui::EndGroup();
+
+                            ImGui::Indent();
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+                            ImGui::Text("Debug Hotkeys: F2 (Profiling), F3 (Depth), F4 (Chunk Layout)");
+                            ImGui::PopStyleColor();
+                            ImGui::Unindent();
+                        }
+
+                        // --- 4. TECHNICAL SPECIFICATIONS ---
+                        ImGui::Spacing();
+                        if (ImGui::CollapsingHeader("Tech Stack")) {
+                            ImGui::Columns(2, "techstack", false);
+                            ImGui::SetColumnWidth(0, 150.0f);
+                            
+                            ImGui::Text("Graphics API"); ImGui::NextColumn(); ImGui::Text("OpenGL 4.6 (GLAD/GLFW)"); ImGui::NextColumn();
+                            ImGui::Text("Interface");    ImGui::NextColumn(); ImGui::Text("Dear ImGui");           ImGui::NextColumn();
+                            ImGui::Text("Mathematics");  ImGui::NextColumn(); ImGui::Text("GLM");                  ImGui::NextColumn();
+                            ImGui::Text("Build Tool");   ImGui::NextColumn(); ImGui::Text("CMake");                ImGui::NextColumn();
+                            ImGui::Text("Terrain Gen");   ImGui::NextColumn(); ImGui::Text("FastNoise2");                ImGui::NextColumn();
+                            ImGui::Text("Optimization");   ImGui::NextColumn(); ImGui::Text("FASTSIMD");                ImGui::NextColumn();
+                            ImGui::Columns(1);
+                            ImGui::Text("Figuring out wierd niche problems in my meshing algorithm: ");   ImGui::Text("Google Gemini 3");
+                            
+                        }
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+                        
+                        ImGui::EndTabItem();
+                    }
                     
                     ImGui::EndTabBar();
                 }
@@ -671,55 +728,7 @@ private:
         }
     }
 
-    // void RenderWorldSettings(World& world, UIConfig& config) {
-    //     ImGuiWindowFlags flags = 0;
-    //     if (config.isGameMode) {
-    //         flags |= ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoMouseInputs;
-    //         ImGui::SetNextWindowBgAlpha(0.75f);
-    //     }
-    //     ImGui::SetNextWindowPos(ImVec2(16,801), ImGuiCond_FirstUseEver);
-    //     ImGui::SetNextWindowSize(ImVec2(593,550), ImGuiCond_FirstUseEver);
-        
-    //     if (ImGui::Begin("World Generation (M)", &config.showWorldSettings)) {
-    //         ImGui::SetWindowFontScale(config.DEBUG_FONT_SCALE);
-            
-    //         if (ImGui::CollapsingHeader("Terrain Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-    //             ImGui::DragInt("Seed", &config.editConfig.seed);
-    //             ImGui::SliderFloat("Noise Scale", &config.editConfig.scale, 0.001f, 0.1f);
-    //             ImGui::SliderFloat("Hill Amp", &config.editConfig.hillAmplitude, 0.0f, 500.0f);
-    //             ImGui::SliderFloat("Hill Freq", &config.editConfig.hillFrequency, 0.05f, 10.0f);
-    //             ImGui::SliderFloat("Mountain Amp", &config.editConfig.mountainAmplitude, 0.0f, 8000.0f);
-    //             ImGui::SliderFloat("Mountain Freq", &config.editConfig.mountainFrequency, 0.01f, 0.2f);
-    //             ImGui::SliderInt("Sea Level", &config.editConfig.seaLevel, 0, 500);
-    //         }
 
-    //         if (ImGui::CollapsingHeader("World Dimensions")) {
-    //             ImGui::SliderInt("Height (Chunks)", &config.editConfig.worldHeightChunks, 8, 128);
-    //             ImGui::TextColored(ImVec4(0.7,0.7,0.7,1), "Note: Height changes require full reload.");
-    //         }
-
-    //         if (ImGui::CollapsingHeader("LOD Settings")) {
-    //             ImGui::SliderInt("LOD Count", &config.editConfig.lodCount, 1, 12);
-    //             for (int i = 0; i < config.editConfig.lodCount; i++) {
-    //                 std::string label = "LOD " + std::to_string(i) + " Radius";
-    //                 ImGui::SliderInt(label.c_str(), &config.editConfig.lodRadius[i], 0, 64);
-    //             }
-    //         }
-
-    //         if (ImGui::CollapsingHeader("Caves")) {
-    //             ImGui::Checkbox("Enable Caves", &config.editConfig.enableCaves);
-    //             if (config.editConfig.enableCaves) {
-    //                 ImGui::SliderFloat("Threshold", &config.editConfig.caveThreshold, 0.0f, 1.0f);
-    //             }
-    //         }
-            
-    //         ImGui::Separator();
-    //         if (ImGui::Button("REGENERATE WORLD (R)", ImVec2(-1, 40))) {
-    //             world.Reload(config.editConfig);
-    //         }
-    //         ImGui::End();
-    //     }
-    // }
 
     void RenderMenuBar(UIConfig& config) {
         if (ImGui::BeginMainMenuBar()) {

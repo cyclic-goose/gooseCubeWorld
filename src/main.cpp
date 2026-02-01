@@ -56,9 +56,9 @@ const bool START_FULLSCREEN = true;
 
 // Camera 
 //Camera camera(glm::vec3(0.0f, 150.0f, 150.0f), glm::vec3(0.0f, 1.0f, 0.0f), -90.0f, -45.0f);
-//Player player(glm::vec3(-529.0f, 76.0f, 61.0f)); // good starting position for advanced generator
+Player player(glm::vec3(-529.0f, 76.0f, 61.0f)); // good starting position for advanced generator
 //Player player(glm::vec3(4855.0f, 100.0f, -4005.0f)); // debug spot back when I needed to find this spot, turned out i was sampling the noise generator wrong resulting in bad terrain at LOD 0
-Player player(glm::vec3(0.0f, 15.0f, 9.0f));
+//Player player(glm::vec3(0.0f, 15.0f, 9.0f)); // start loc for superflat
 
 
 // Mouse State
@@ -291,7 +291,7 @@ int main() {
     
     // Initialize GLAD
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
-    
+    glfwSwapInterval(1); // hardcode vsync on for now so it doesnt try and run as fast as possible, toggleable in settings
     //Initialize GUI & GL State
     gui.Init(window);
     
@@ -360,7 +360,7 @@ int main() {
 
 
         ////////////// *********** create our start terrain generator by choosing which class we send in
-        auto defaultTerrainGenerator = std::make_unique<SuperflatGenerator>(); // seed input
+        auto defaultTerrainGenerator = std::make_unique<AdvancedGenerator>(); // seed input
         // Ask the generator what textures it needs
         std::vector<std::string> texturePaths = defaultTerrainGenerator->GetTexturePaths();
         // Load them into GPU
@@ -416,7 +416,7 @@ int main() {
             // GUI and PROFILER START (profiler returns in constant time if its disabled)
             gui.BeginFrame(); // start ImGui Frame (its normal to do this every loop)
             Engine::Profiler::Get().DrawUI(appState.isGameMode); // returns in extremely small constant time if not in debug mode (usually)
-            if (world.getFrameCount()  < 20000)
+            if (world.getFrameCount()  < 10000)
             {
                 GUI::DrawScreenMessage("Welcome", GUI::LEVEL_WARN);
 

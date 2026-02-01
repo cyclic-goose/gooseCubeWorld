@@ -29,7 +29,7 @@ void RenderLoadingScreen(GLFWwindow* window, ImGuiManager &gui, float HEAP_SIZE_
         
         ImGui::Begin("Loading", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
         ImGui::SetWindowFontScale(3.0f);
-        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Cyclic Goose Voxel Engine");
+        ImGui::TextColored(ImVec4(1, 1, 0, 1), "Goose Cube Engine");
         ImGui::SetWindowFontScale(2.0f);
         ImGui::Separator();
         ImGui::Text("Reserving Memory...");
@@ -52,7 +52,7 @@ void RenderLoadingScreen(GLFWwindow* window, ImGuiManager &gui, float HEAP_SIZE_
         ImGui::SetNextWindowBgAlpha(0.0f); 
         
         ImGui::Begin("Version", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.3.1-alpha"); 
+        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "v0.5.1-alpha"); 
         ImGui::End();
         ImGui::End();
         

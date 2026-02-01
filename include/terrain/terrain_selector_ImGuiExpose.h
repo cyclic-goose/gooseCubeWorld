@@ -25,7 +25,7 @@
 namespace GeneratorSelector {
 
     // Helper to keep track of selection state.
-    static int currentGenIndex = 1;
+    static int currentGenIndex = 0;
     static float switchCooldown = 0.0f; // Internal cooldown state
 
     static const char* genNames[] = { 
