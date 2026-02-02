@@ -128,6 +128,8 @@ void GpuCuller::GenerateHiZ(GLuint depthTexture, int width, int height) {
 
     int numLevels = 1 + (int)floor(log2(std::max(width, height)));
     m_hizShader->use();
+
+    
     
     int inW = width;
     int inH = height;

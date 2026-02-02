@@ -6,7 +6,8 @@ layout(binding = 0, r32f) readonly uniform image2D u_InputImg;
 layout(binding = 1, r32f) writeonly uniform image2D u_OutputImg;
 
 uniform vec2 u_OutDimension;
-uniform vec2 u_InDimension; 
+uniform vec2 u_InDimension;
+uniform bool u_IsCopyPass; //Toggle for the first pass
 
 void main() {
     ivec2 outCoord = ivec2(gl_GlobalInvocationID.xy);
@@ -16,6 +17,7 @@ void main() {
     if (outCoord.x >= outDim.x || outCoord.y >= outDim.y) {
         return;
     }
+    
 
     ivec2 inCoord = outCoord * 2;
 

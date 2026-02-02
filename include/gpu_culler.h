@@ -36,7 +36,7 @@ struct CullerSettings {
     bool occlusionEnabled = true; // with new terrain systems, cant get this working, either second mesh or non-collidables are screwing it up
     bool freezeCulling = false;  // Stops the compute shader updates (locks visibility)
     float frustumPadding = 0.0f; // Expand/Contract frustum for debugging
-    float epsilonConstant = 0.0031; // 0.0031 seems to be a good aggresiveness without too much artifacting
+    float epsilonConstant = 0.0071; // 0.0031 seems to be a good aggresiveness without too much artifacting
 };
 
 // ================================================================================================

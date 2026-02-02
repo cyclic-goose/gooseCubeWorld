@@ -934,11 +934,11 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_vramManager->GetID());           // Big Vertex Buffer
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_gpuOcclusionCuller->GetVisibleChunkBuffer()); // Chunk Meta Data
 
-            if (m_textureArrayID != 0) {
-                 glActiveTexture(GL_TEXTURE0);
+            //if (m_textureArrayID != 0) {
+                 glActiveTexture(GL_TEXTURE1);
                  glBindTexture(GL_TEXTURE_2D_ARRAY, m_textureArrayID);
-                 shader.setInt("u_Textures", 0);
-            }
+                 shader.setInt("u_Textures", 1);
+           //}
 
             glBindVertexArray(m_dummyVAO); // We generate vertices in VS via SV_VertexID, or pull from SSBO
 

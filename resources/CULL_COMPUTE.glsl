@@ -147,22 +147,22 @@ bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
     
     // OLD SYSTEM for choosing chunks
     //// [TWEAK HERE] LOD Bias
-    //float lod = clamp(log2(maxDim) - 1.0, 0.0, 10.0);
+    float lod = clamp(log2(maxDim) - 2.0, 0.0, 10.0);
     // OLD SYSTEM
 
     // ********* NEW SYSTEM
     // Calculate distance from camera to chunk center
-    float dist = distance(u_CameraPos, (minAABB + maxAABB) * 0.5);
+    //float dist = distance(u_CameraPos, (minAABB + maxAABB) * 0.5);
 
     // Base LOD calculation
-    float lod = log2(maxDim);
+    //float lod = log2(maxDim);
 
     // DYNAMIC BIAS:
     // If close (<100m), use -1.0 (Safe, fast).
     // If far (>100m), use -0.5 or even 0.0 (Very precise).
-    float bias = (dist > 100.0) ? 0.0 : -0.0; 
+    //float bias = (dist > 1000.0) ? 0.0 : -0.5; 
 
-    lod = clamp(lod + bias, 0.0, 10.0);
+    //lod = clamp(lod + bias, 0.0, 10.0);
     // ********* NEW SYSTEM
 
 

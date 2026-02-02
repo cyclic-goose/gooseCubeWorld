@@ -13,7 +13,7 @@ struct RuntimeConfig {
 
     // Memory & Debug                                           
     int worldHeightChunks = 64;                                 
-    int cubeDebugMode = 4;
+    int cubeDebugMode = 0;
 };
 
 // Struct for actual memory pools (Node/Voxel data)
