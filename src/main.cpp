@@ -340,8 +340,9 @@ int main() {
 
         ////// ************* SHADERS *********** //////////
         // shader for world and then shader that helped me debug depth buffer
-        Shader worldShader("./resources/VERT_UPGRADED.glsl", "./resources/FRAG_UPGRADED.glsl");
         //Shader worldShader("./resources/VERT_PRIMARY.glsl", "./resources/FRAG_PRIMARY.glsl");
+        //Shader worldShader("./resources/VERT_UPGRADED.glsl", "./resources/FRAG_UPGRADED.glsl");
+        Shader worldShader("./resources/VERT_ULTRA.glsl", "./resources/FRAG_ULTRA.glsl");
         Shader depthDebug("./resources/debug_quad_vert.glsl", "./resources/debug_quad_frag.glsl"); // press F3 to see depth buffer
 
         Shader chunkDebugShader("./resources/shaders/chunkDebugVert.glsl", "./resources/shaders/chunkDebugFrag.glsl");

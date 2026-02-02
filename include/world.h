@@ -73,6 +73,84 @@ static float STORM_SPEED = 0.1f;
 
 
 
+/// OPAQUE ULTRA VERTEX AND FRAG SHADER UTILS ///
+struct ShaderParams {
+    // --- Atmosphere ---
+    float sunAzimuth = 0.4f;
+    float sunElevation = 0.6f;
+    glm::vec3 skyColorTop = glm::vec3(0.2f, 0.4f, 0.8f);
+    glm::vec3 skyColorHorizon = glm::vec3(0.6f, 0.7f, 0.8f);
+    glm::vec3 sunColor = glm::vec3(1.0f, 0.9f, 0.8f);
+    float sunIntensity = 2.0f;
+
+    // --- Fog & Clouds ---
+    float fogDensity = 0.006f;
+    float cloudCoverage = 0.45f;
+    float cloudSpeed = 0.05f;
+    float cloudSoftness = 0.1f;
+
+    // --- Post-Process Simulation ---
+    float exposure = 1.0f;
+    float saturation = 1.2f;
+    float gamma = 2.2f;
+    
+    // --- Water/Wind ---
+    float time = 0.0f;
+    float windStrength = 0.1f;
+
+    // --- Helper to update shader uniforms ---
+    void UpdateUniforms(const Shader& shader) {
+        glm::vec3 sunDir = glm::normalize(glm::vec3(sin(sunAzimuth), sunElevation, cos(sunAzimuth)));
+        
+        shader.use();
+        shader.setVec3("u_SunDir", sunDir);
+        shader.setVec3("u_SkyColorTop", skyColorTop);
+        shader.setVec3("u_SkyColorHorizon", skyColorHorizon);
+        shader.setVec3("u_SunColor", sunColor);
+        shader.setFloat("u_SunIntensity", sunIntensity);
+
+        shader.setFloat("u_FogDensity", fogDensity);
+        shader.setFloat("u_CloudCoverage", cloudCoverage);
+        shader.setFloat("u_CloudSpeed", cloudSpeed);
+        shader.setFloat("u_CloudSoftness", cloudSoftness);
+
+        shader.setFloat("u_Exposure", exposure);
+        shader.setFloat("u_Saturation", saturation);
+        shader.setFloat("u_Gamma", gamma);
+
+        shader.setFloat("u_Time", time);
+        shader.setFloat("u_WindStrength", windStrength);
+    }
+
+    // --- ImGui Inspector ---
+    void RenderShaderUI() {
+        if (ImGui::CollapsingHeader("Atmosphere & Sun")) {
+            ImGui::SliderFloat("Sun Azimuth", &sunAzimuth, 0.0f, 6.28f);
+            ImGui::SliderFloat("Sun Elevation", &sunElevation, -0.5f, 1.0f);
+            ImGui::ColorEdit3("Sun Color", glm::value_ptr(sunColor));
+            ImGui::SliderFloat("Sun Intensity", &sunIntensity, 0.0f, 5.0f);
+            ImGui::ColorEdit3("Sky Top", glm::value_ptr(skyColorTop));
+            ImGui::ColorEdit3("Sky Horizon", glm::value_ptr(skyColorHorizon));
+        }
+
+        if (ImGui::CollapsingHeader("Fog & Clouds")) {
+            ImGui::SliderFloat("Fog Density", &fogDensity, 0.0001f, 0.1f, "%.4f");
+            ImGui::SliderFloat("Cloud Coverage", &cloudCoverage, 0.0f, 1.0f);
+            ImGui::SliderFloat("Cloud Speed", &cloudSpeed, 0.0f, 1.0f);
+            ImGui::SliderFloat("Cloud Softness", &cloudSoftness, 0.01f, 1.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Camera / Lens")) {
+            ImGui::SliderFloat("Exposure", &exposure, 0.1f, 5.0f);
+            ImGui::SliderFloat("Saturation", &saturation, 0.0f, 3.0f);
+            ImGui::SliderFloat("Gamma", &gamma, 1.0f, 3.0f);
+            ImGui::SliderFloat("Wind Strength", &windStrength, 0.0f, 1.0f);
+        }
+    }
+};
+
+/// OPAQUE ULTRA VERTEX AND FRAG SHADER UTILS ///
+
 
 // ================================================================================================
 //                                          WORLD CLASS
@@ -922,38 +1000,86 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
 
         // --- PASS 2: RENDER GEOMETRY ---
         {   
-            Engine::Profiler::Get().BeginGPU("GPU: MDI DRAW"); 
+            // --- PASS 2: RENDER GEOMETRY ---
+            {   
+                Engine::Profiler::Get().BeginGPU("GPU: MDI DRAW"); 
 
-            shader.use();
-            // Standard Uniforms
-            glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
-            glUniform3fv(glGetUniformLocation(shader.ID, "u_CameraPos"), 1, glm::value_ptr(playerPosition)); 
-            glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config->settings.cubeDebugMode);
-            glUniform1f(glGetUniformLocation(shader.ID, "u_Time"), (float)glfwGetTime());
-            
-            // Bind SSBOs (Shader Storage Buffer Objects)
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_vramManager->GetID());           // Big Vertex Buffer
-            glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_gpuOcclusionCuller->GetVisibleChunkBuffer()); // Chunk Meta Data
+                shader.use();
 
-            //if (m_textureArrayID != 0) {
-                 glActiveTexture(GL_TEXTURE1);
-                 glBindTexture(GL_TEXTURE_2D_ARRAY, m_textureArrayID);
-                 shader.setInt("u_Textures", 1);
-           //}
+                // ------------------------------------------------------------
+                // 1. STANDARD UNIFORMS
+                // ------------------------------------------------------------
+                // (Preserving your existing raw calls where you had them)
+                glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
+                glUniform3fv(glGetUniformLocation(shader.ID, "u_CameraPos"), 1, glm::value_ptr(playerPosition)); 
+                glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config->settings.cubeDebugMode);
+                
+                float time = (float)glfwGetTime();
+                glUniform1f(glGetUniformLocation(shader.ID, "u_Time"), time);
 
-            glBindVertexArray(m_dummyVAO); // We generate vertices in VS via SV_VertexID, or pull from SSBO
+                // ------------------------------------------------------------
+                // 2. NEW "ULTRA" VISUALS UNIFORMS
+                // ------------------------------------------------------------
+                // I'm using your Shader class helpers here for cleaner code.
+                // Ideally, these values come from your ShaderParams struct/GUI.
+                
+                // -- Atmosphere --
+                // Direction: (X, Y, Z). Normalized. Y is UP.
+                glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, 0.6f, 0.3f)); 
+                shader.setVec3("u_SunDir", sunDir);
+                shader.setVec3("u_SunColor", glm::vec3(1.0f, 0.95f, 0.85f));
+                shader.setFloat("u_SunIntensity", 0.8f);
+                
+                shader.setVec3("u_SkyColorTop", glm::vec3(0.2f, 0.4f, 0.8f));
+                shader.setVec3("u_SkyColorHorizon", glm::vec3(0.6f, 0.7f, 0.8f));
 
-            // Setup State
-            glEnable(GL_POLYGON_OFFSET_FILL);
-            glPolygonOffset(1.0f, 1.0f); // Prevent Z-fighting
-            glEnable(GL_DEPTH_TEST);
-            glDepthMask(GL_TRUE); 
+                // -- Fog & Clouds --
+                // UPDATED: Lowered density significantly to prevent ground fogging artifacts
+                shader.setFloat("u_FogDensity", 0.000008f);      // 0.0005 = Large view distance, 0.01 = Thick fog
+                shader.setFloat("u_CloudCoverage", 0.45f);     // 0.0 (clear) to 1.0 (overcast)
+                shader.setFloat("u_CloudSpeed", 0.05f);
+                shader.setFloat("u_CloudSoftness", 0.2f);      // 0.1 (sharp) to 1.0 (fuzzy)
 
-            // -- Draw Opaque --
-            // uses glMultiDrawArraysIndirectCount to draw only visible chunks
-            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_gpuOcclusionCuller->GetIndirectOpaque());
-            glBindBuffer(GL_PARAMETER_BUFFER, m_gpuOcclusionCuller->GetAtomicCounter()); // Contains count of visible chunks
-            glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_gpuOcclusionCuller->GetMaxChunks(), 0);
+                // -- Post-Process Simulation --
+                shader.setFloat("u_Exposure", 1.0f);
+                shader.setFloat("u_Saturation", 1.2f);         // >1.0 for vibrant colors
+                shader.setFloat("u_Gamma", 1.8f);
+                
+                // -- Physics/Animation --
+                shader.setFloat("u_WindStrength", 0.5f);       // Controls vertex displacement intensity
+
+                // ------------------------------------------------------------
+                // 3. BIND RESOURCES
+                // ------------------------------------------------------------
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_vramManager->GetID()); 
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpuOcclusionCuller->GetVisibleChunkBuffer()); 
+
+                if (m_textureArrayID != 0) {
+                        glActiveTexture(GL_TEXTURE1);
+                        glBindTexture(GL_TEXTURE_2D_ARRAY, m_textureArrayID);
+                        // Ensure this matches the binding in the shader (usually binding 0 or 1)
+                        // If you bound to GL_TEXTURE1, set uniform to 1.
+                        shader.setInt("u_Textures", 1); 
+                }
+
+                glBindVertexArray(m_dummyVAO); 
+
+                // ------------------------------------------------------------
+                // 4. DRAW STATE & EXECUTION
+                // ------------------------------------------------------------
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(1.0f, 1.0f); 
+                glEnable(GL_DEPTH_TEST);
+                glDepthMask(GL_TRUE); 
+                
+                // REVERSE Z SUPPORT: Use GL_GREATER for 1.0 -> 0.0 depth
+                glDepthFunc(GL_GREATER); 
+
+                glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_gpuOcclusionCuller->GetIndirectOpaque());
+                glBindBuffer(GL_PARAMETER_BUFFER, m_gpuOcclusionCuller->GetAtomicCounter()); 
+                glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_gpuOcclusionCuller->GetMaxChunks(), 0);
+            }
+            // ************ END DRAW OPAQUE ********** //
 
             // -- Draw Transparent -- ////////////////////////////// WATER SHADER STUFF
             {
