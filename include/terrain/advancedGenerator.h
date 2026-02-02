@@ -42,15 +42,16 @@ public:
         int seaLevel = 30;                  
         int maxWorldHeight = 1024;          
         int bedrockDepth = 3;               
-        int deepslateLevel = 10;            // Level below which stone becomes deepslate
+        int deepslateLevel = 10;            
         
         // --- Biome Settings ---
         float biomeMapScale = 0.1f;         
         
         // --- Vegetation ---
-        int treeChanceForest = 15;          
+        int treeChanceForest = 65;          
         int treeChancePlains = 100;         
-        int treeChanceDesert = 200;         
+        int treeChanceDesert = 200;
+        int maxTreeLOD = 4;                 // Max LOD level to generate standard vegetation
     };
 
     AdvancedGenerator() : m_settings(GenSettings()) { Init(); }
@@ -83,9 +84,8 @@ public:
     // ASSET MANAGEMENT
     // --------------------------------------------------------------------------------------------
     std::vector<std::string> GetTexturePaths() const override {
-        // IDs correlate to index + 1
         std::vector<std::string> texturePaths = {
-            "resources/textures/minecraftDefaults/grasstop.png",          // ID 1
+            "resources/textures/minecraftDefaults/OldGrassTop.png",          // ID 1
             "resources/textures/minecraftDefaults/dirt.png",              // ID 2
             "resources/textures/minecraftDefaults/grass_block_side.png",  // ID 3
             "resources/textures/minecraftDefaults/stone.png",             // ID 4
@@ -93,7 +93,7 @@ public:
             "resources/textures/minecraftDefaults/dirt.png",              // ID 6 (Water Placeholder)
             "resources/textures/minecraftDefaults/snow.png",              // ID 7
             "resources/textures/minecraftDefaults/ice.png",               // ID 8
-            "resources/textures/minecraftDefaults/oak_leaves.png",        // ID 9
+            "resources/textures/minecraftDefaults/default_leaves.png",        // ID 9
             "resources/textures/minecraftDefaults/obsidian.png",          // ID 10
             "resources/textures/minecraftDefaults/dark_oak_log.png",      // ID 11
             "resources/textures/minecraftDefaults/dark_oak_log_top.png",  // ID 12
@@ -106,6 +106,19 @@ public:
         int h = seed + x * 374761393 + z * 668265263;
         h = (h ^ (h >> 13)) * 1274126177;
         return (h ^ (h >> 16));
+    }
+    
+    // 3D Hash for leaf randomness
+    inline int PseudoRandomHash3D(int x, int y, int z, int seed) const {
+        int h = seed + x * 374761393 + y * 668265263 + z * 432352357;
+        h = (h ^ (h >> 13)) * 1274126177;
+        return (h ^ (h >> 16));
+    }
+
+    // Helper to get consistent random float 0..1 from coords
+    inline float HashFloat(int x, int z, int seed) const {
+        int val = PseudoRandomHash(x, z, seed);
+        return (val & 0xFFFF) / 65535.0f;
     }
 
     int GetHeight(float x, float z) const {
@@ -154,9 +167,11 @@ public:
     }
 
     // --------------------------------------------------------------------------------------------
-    // GET BLOCK
+    // GET BLOCK (Slow single access, use GenerateChunk for speed)
     // --------------------------------------------------------------------------------------------
     uint8_t GetBlock(float x, float y, float z, int lodScale) const override {
+        // NOTE: This function is slow because we can't precompute trees for single block access.
+        // It's mostly used for player collision/raycasting, not terrain gen.
         int integerX = (int)std::floor(x);
         int integerZ = (int)std::floor(z);
         int worldY   = (int)std::floor(y);
@@ -164,7 +179,7 @@ public:
         int surfaceHeight = GetHeight(x, z);
 
         // Bedrock
-        if (worldY <= m_settings.bedrockDepth) return 10; // ID 10: Obsidian as Bedrock
+        if (worldY <= m_settings.bedrockDepth) return 10; 
 
         // Biome Calculation
         float normalizedX = x * m_settings.coordinateScale;
@@ -175,97 +190,52 @@ public:
         float adjustedTemp = tempVal - (surfaceHeight - m_settings.seaLevel) * 0.005f;
         
         uint8_t biomeID = 0; // 0: Plains
-        if (adjustedTemp > 0.4f && moistVal < -0.2f) biomeID = 2;       // Desert/Barren
-        else if (adjustedTemp < -0.3f || surfaceHeight > 220) biomeID = 3; // Snow/Peak
-        else if (moistVal > 0.2f) biomeID = 1;                          // Forest
-
-        // Tree Logic (LOD 1 only)
-        if (lodScale == 1 && worldY > surfaceHeight) {
-            for (int dx = -2; dx <= 2; ++dx) {
-                for (int dz = -2; dz <= 2; ++dz) {
-                    int neighborX = integerX + dx;
-                    int neighborZ = integerZ + dz;
-                    
-                    int chance = 0; uint8_t treeType = 0;
-                    if (biomeID == 1)      { chance = m_settings.treeChanceForest; treeType = 1; } // Dark Oak Forest
-                    else if (biomeID == 0) { chance = m_settings.treeChancePlains; treeType = 2; } // Oak Plains
-                    else if (biomeID == 3) { chance = 60; treeType = 2; }                          // Snow Oak
-                    
-                    if (chance > 0) {
-                         int neighborHeight = GetHeight((float)neighborX, (float)neighborZ);
-                         if (neighborHeight > m_settings.seaLevel && neighborHeight < 200) {
-                            if ((std::abs(PseudoRandomHash(neighborX, neighborZ, m_settings.seed)) % chance) == 0) {
-                                int relativeY = worldY - neighborHeight;
-                                int distSq = dx*dx + dz*dz;
-                                
-                                // Logs
-                                if (distSq == 0) {
-                                    if (relativeY > 0 && relativeY < 6) {
-                                        return (treeType == 1) ? 11 : 5; // 11=Dark Oak, 5=Oak
-                                    }
-                                } 
-                                // Leaves
-                                else {
-                                    if (relativeY >= 4 && relativeY <= 6 && distSq <= 2) return 9; // Oak Leaves
-                                }
-                            }
-                         }
-                    }
-                }
-            }
-        }
+        if (moistVal > 0.4f && adjustedTemp > 0.2f) biomeID = 1; // Mega Flora removed -> Forest
+        else if (adjustedTemp > 0.4f && moistVal < -0.2f) biomeID = 2; // Desert
+        else if (adjustedTemp < -0.3f || surfaceHeight > 220) biomeID = 3; // Snow
+        else if (moistVal > 0.2f) biomeID = 1; // Forest
 
         // Terrain Fill (Air/Water)
         if (worldY > surfaceHeight) {
-            if (worldY <= m_settings.seaLevel) return (biomeID == 3) ? 8 : 6; // 8=Ice, 6=Water
+            if (worldY <= m_settings.seaLevel) return (biomeID == 3) ? 8 : 6;
             return 0; // Air
         }
 
         // Underground vs Surface Blocks
         int depth = surfaceHeight - worldY;
-        uint8_t blockID = (worldY < m_settings.deepslateLevel) ? 13 : 4; // 13=Deepslate, 4=Stone
-        
-        // Topsoil
+        uint8_t blockID = (worldY < m_settings.deepslateLevel) ? 13 : 4;
         if (depth < lodScale) {
-            blockID = (biomeID == 2) ? 2 : (biomeID == 3 ? 7 : 1); // 2=Dirt, 7=Snow, 1=Grass
+            blockID = (biomeID == 2) ? 2 : (biomeID == 3 ? 7 : (biomeID == 4 ? 3 : 1)); 
         } else if (depth < (4 * lodScale)) {
-            blockID = 2; // Dirt
+            blockID = 2; 
         }
-        
-        // Peaks override
         if (worldY > 220) {
-            if (depth < lodScale) blockID = 7; // Snow
-            else if (depth < (10 * lodScale)) blockID = 8; // Ice
-            else blockID = 4; // Stone
+            if (depth < lodScale) blockID = 7; 
+            else if (depth < (10 * lodScale)) blockID = 8; 
+            else blockID = 4; 
         }
-
-        // Volcanic/Crater override
         float craterZone = m_craterNoise->GenSingle2D(normalizedX * m_settings.craterScale * 0.1f, normalizedZ * m_settings.craterScale * 0.1f, m_settings.seed + 55);
         if (craterZone > m_settings.craterTriggerThreshold && worldY <= surfaceHeight) {
              if (blockID != 0 && blockID != 6) {
                  float factor = (craterZone - m_settings.craterTriggerThreshold) / (1.0f - m_settings.craterTriggerThreshold);
-                 if (factor > 0.2f) blockID = 10; // Obsidian Center
-                 else blockID = 10;               // Obsidian Rim
+                 if (factor > 0.2f) blockID = 10; else blockID = 10;
              }
         }
-
-        // Caves
+        
+        // CAVES (Only at high detail)
         if (lodScale == 1 && worldY > m_settings.bedrockDepth) {
              float caveScale = 0.03f;
              float caveVal = m_caveNoise->GenSingle3D(x * caveScale, z * caveScale, y * caveScale, m_settings.seed);
-             
              int depthFromSurface = surfaceHeight - worldY;
              float surfaceBias = 0.0f;
              if (depthFromSurface < 8) surfaceBias = (8 - depthFromSurface) * 0.08f; 
-             
              if ((caveVal - surfaceBias) > 0.4f) return 0;
         }
-
         return blockID; 
     }
 
     // --------------------------------------------------------------------------------------------
-    // GENERATE CHUNK (Batch)
+    // GENERATE CHUNK (Optimized Batch)
     // --------------------------------------------------------------------------------------------
     void GenerateChunk(Chunk* chunk, int cx, int cy, int cz, int lodScale) override {
         static thread_local std::vector<float> bufferHeightMap;
@@ -296,7 +266,7 @@ public:
         float worldStartY = (float)((cy * CHUNK_SIZE - 1) * lodScale);
         float worldStep   = (float)lodScale;
 
-        // Phase 1: Noise
+        // Phase 1: Noise (Parallelized by library)
         m_baseTerrainNoise->GenUniformGrid2D(bufferHeightMap.data(), worldStartX * genScale * m_settings.hillFrequency, worldStartZ * genScale * m_settings.hillFrequency, PADDED_CHUNK_SIZE, PADDED_CHUNK_SIZE, worldStep * genScale * m_settings.hillFrequency, worldStep * genScale * m_settings.hillFrequency, m_settings.seed);
         m_mountainNoise->GenUniformGrid2D(bufferMountain.data(), worldStartX * genScale * 0.5f * m_settings.mountainFrequency, worldStartZ * genScale * 0.5f * m_settings.mountainFrequency, PADDED_CHUNK_SIZE, PADDED_CHUNK_SIZE, worldStep * genScale * 0.5f * m_settings.mountainFrequency, worldStep * genScale * 0.5f * m_settings.mountainFrequency, m_settings.seed + 1);
         m_megaPeakNoise->GenUniformGrid2D(bufferMegaPeak.data(), worldStartX * genScale * m_settings.megaPeakRarity * 0.1f, worldStartZ * genScale * m_settings.megaPeakRarity * 0.1f, PADDED_CHUNK_SIZE, PADDED_CHUNK_SIZE, worldStep * genScale * m_settings.megaPeakRarity * 0.1f, worldStep * genScale * m_settings.megaPeakRarity * 0.1f, m_settings.seed + 99);
@@ -332,23 +302,27 @@ public:
             float moist = bufferMoisture[i];
 
             uint8_t biome = 0; 
-            if (temp > 0.4f && moist < -0.2f) biome = 2; // Desert/Barren
-            else if (temp < -0.3f || mapFinalHeight[i] > 220) biome = 3; // Snow/Peak
+            if (moist > 0.4f && temp > 0.2f) biome = 1; // Mega Flora removed -> Forest
+            else if (temp > 0.4f && moist < -0.2f) biome = 2; // Desert
+            else if (temp < -0.3f || mapFinalHeight[i] > 220) biome = 3; // Snow
             else if (moist > 0.2f) biome = 1; // Forest
             mapBiomeID[i] = biome;
 
             mapTreeData[i] = 0;
-            if (lodScale == 1) {
-                int absX = (cx * CHUNK_SIZE - 1) + (i % PADDED_CHUNK_SIZE);
-                int absZ = (cz * CHUNK_SIZE - 1) + (i / PADDED_CHUNK_SIZE);
+            // Updated LOD check for standard trees
+            if (lodScale <= m_settings.maxTreeLOD) {
+                int absX = (int)worldStartX + (i % PADDED_CHUNK_SIZE) * lodScale;
+                int absZ = (int)worldStartZ + (i / PADDED_CHUNK_SIZE) * lodScale;
                 
                 int chance = 0; uint8_t treeType = 0;
-                if (biome == 1)      { chance = m_settings.treeChanceForest; treeType = 1; } // Dark Oak
-                else if (biome == 0) { chance = m_settings.treeChancePlains; treeType = 2; } // Oak
-                else if (biome == 3) { chance = 60; treeType = 2; } // Oak
+                if (biome == 1)      { chance = m_settings.treeChanceForest; treeType = 1; }
+                else if (biome == 0) { chance = m_settings.treeChancePlains; treeType = 2; }
+                else if (biome == 3) { chance = 60; treeType = 2; }
 
                 if (mapFinalHeight[i] > m_settings.seaLevel && mapFinalHeight[i] < 200 && chance > 0) {
-                    if ((std::abs(PseudoRandomHash(absX, absZ, m_settings.seed)) % chance) == 0) {
+                    // Reduce chance slightly if LOD is high to prevent dense noise
+                    int effectiveChance = chance * lodScale;
+                    if ((std::abs(PseudoRandomHash(absX, absZ, m_settings.seed)) % effectiveChance) == 0) {
                         mapTreeData[i] = treeType;
                     }
                 }
@@ -361,8 +335,10 @@ public:
             m_caveNoise->GenUniformGrid3D(bufferCave3D.data(), worldStartX * caveScale, worldStartZ * caveScale, worldStartY * caveScale, PADDED_CHUNK_SIZE, PADDED_CHUNK_SIZE, PADDED_CHUNK_SIZE, caveScale, caveScale, caveScale, m_settings.seed);
         }
 
-        // Phase 4: Voxel Loop
+        // Phase 4: Voxel Loop (TERRAIN ONLY)
         uint8_t* voxels = chunk->voxels;
+        //memset(voxels, 0, size3D * sizeof(uint8_t)); // Only needed if chunk wasn't cleared
+
         for (int y = 0; y < PADDED_CHUNK_SIZE; y++) {
             int currentWorldY = (int)worldStartY + (y * lodScale);
             
@@ -376,16 +352,16 @@ public:
                     uint8_t block = 0;
 
                     if (currentWorldY <= m_settings.bedrockDepth && currentWorldY >= 0) {
-                        block = 10; // Bedrock -> Obsidian
+                        block = 10;
                     } else if (currentWorldY <= h) {
-                        block = (currentWorldY < m_settings.deepslateLevel) ? 13 : 4; // Deepslate/Stone Base
+                        block = (currentWorldY < m_settings.deepslateLevel) ? 13 : 4;
                         int depth = h - currentWorldY;
                         
                         // Topsoil
                         if (depth < lodScale) {
-                            block = (biome == 2) ? 2 : (biome == 3 ? 7 : 1); // Dirt, Snow, or Grass
+                            block = (biome == 2) ? 2 : (biome == 3 ? 7 : (biome == 4 ? 3 : 1));
                         } else if (depth < (4 * lodScale)) {
-                            block = 2; // Dirt
+                            block = 2; 
                         }
                         
                         // Caps
@@ -400,7 +376,7 @@ public:
                         if (craterVal > m_settings.craterTriggerThreshold && currentWorldY > m_settings.bedrockDepth) {
                              if (block != 0 && block != 6) {
                                  float factor = (craterVal - m_settings.craterTriggerThreshold) / (1.0f - m_settings.craterTriggerThreshold);
-                                 if (factor > 0.2f) block = 10; // Obsidian
+                                 if (factor > 0.2f) block = 10; 
                                  else block = 10; 
                              }
                         }
@@ -413,49 +389,105 @@ public:
                              if ((bufferCave3D[idx3D] - surfaceBias) > 0.4f) block = 0;
                         }
                     } else if (currentWorldY <= m_settings.seaLevel) {
-                        block = (biome == 3) ? 8 : 6; // Ice or Water
-                    }
-
-                    if (lodScale == 1 && block == 0) {
-                        int treeTypeHere = mapTreeData[idx2D];
-                        int relY = currentWorldY - h;
-                        
-                        if (treeTypeHere > 0 && relY > 0) {
-                            int localGroundY = h - (int)worldStartY;
-                            if (localGroundY >= 0 && localGroundY < PADDED_CHUNK_SIZE) {
-                                int idxGround = x + (z*PADDED_CHUNK_SIZE) + (localGroundY*PADDED_CHUNK_SIZE*PADDED_CHUNK_SIZE);
-                                float biasAtSurface = 8.0f * 0.08f;
-                                if ((bufferCave3D[idxGround] - biasAtSurface) > 0.4f) treeTypeHere = 0;
-                            }
-                        }
-
-                        if (treeTypeHere > 0) {
-                            if (bufferCrater[idx2D] > m_settings.craterTriggerThreshold) treeTypeHere = 0;
-                            
-                            if (treeTypeHere > 0) {
-                                if (relY > 0 && relY < 6) {
-                                    block = (treeTypeHere == 1) ? 11 : 5; // 11=DarkOak, 5=Oak
-                                }
-                            }
-                        }
-                        
-                        if (block == 0) {
-                            for (int nz = -1; nz <= 1; nz++) {
-                                for (int nx = -1; nx <= 1; nx++) {
-                                    if (nx == 0 && nz == 0) continue; 
-                                    if (x+nx>=0 && x+nx<PADDED_CHUNK_SIZE && z+nz>=0 && z+nz<PADDED_CHUNK_SIZE) {
-                                        int ni = (x+nx) + (z+nz)*PADDED_CHUNK_SIZE;
-                                        int nTree = mapTreeData[ni];
-                                        int nRelY = currentWorldY - mapFinalHeight[ni];
-                                        
-                                        if ((nTree == 1 || nTree == 2) && nRelY >= 4 && nRelY <= 6) block = 9; // Leaves
-                                    }
-                                }
-                            }
-                        }
+                        block = (biome == 3) ? 8 : 6;
                     }
                     
                     voxels[idx3D] = block;
+                }
+            }
+        }
+
+        // Phase 5: Vegetation "PUSH" Optimization
+        // Instead of scanning neighbors for every air block (Pull), we iterate known trees and write them (Push).
+        // This dramatically reduces checks in empty air.
+        if (lodScale <= m_settings.maxTreeLOD) {
+            for (int z = 0; z < PADDED_CHUNK_SIZE; z++) {
+                for (int x = 0; x < PADDED_CHUNK_SIZE; x++) {
+                    int idx2D = x + (z * PADDED_CHUNK_SIZE);
+                    int treeType = mapTreeData[idx2D];
+                    
+                    if (treeType > 0) {
+                        int rootH = mapFinalHeight[idx2D];
+                        
+                        // Convert world height to local voxel index Y
+                        // We need the tree to start at 'rootH + 1'
+                        // localY = (worldY - startY) / lod
+                        
+                        int localRootY = (rootH - (int)worldStartY) / lodScale;
+                        
+                        // If tree root is completely above chunk, skip
+                        if (localRootY >= PADDED_CHUNK_SIZE) continue;
+                        
+                        int absX = (int)worldStartX + (x * lodScale);
+                        int absZ = (int)worldStartZ + (z * lodScale);
+                        int treeSeed = PseudoRandomHash(absX, absZ, m_settings.seed);
+                        int treeHeight = 5 + (std::abs(treeSeed) % 4); 
+                        if (treeType == 1) treeHeight += 2; 
+
+                        // Pre-calculate canopy bounds
+                        int maxH = treeHeight;
+                        int leavesStart = treeHeight - 4; 
+                        
+                        // Write Tree blocks directly into voxels array
+                        // We loop relative to the tree root
+                        
+                        // 1. TRUNK
+                        for (int th = 1; th < treeHeight - 1; th++) {
+                            int vy = localRootY + th;
+                            if (vy >= 0 && vy < PADDED_CHUNK_SIZE) {
+                                int vIdx = x + z * PADDED_CHUNK_SIZE + vy * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE;
+                                // Overwrite only if air or water (optional check)
+                                if (voxels[vIdx] == 0 || voxels[vIdx] == 6) {
+                                    voxels[vIdx] = (treeType == 1) ? 11 : 5;
+                                }
+                            }
+                        }
+
+                        // 2. CANOPY (Iterate local volume)
+                        int rad = 3; // Max radius
+                        for (int ly = leavesStart; ly <= maxH; ly++) {
+                             int vy = localRootY + ly;
+                             if (vy < 0 || vy >= PADDED_CHUNK_SIZE) continue;
+                             
+                             // Calculate target radius for this height layer
+                             float progress = (float)ly / (float)treeHeight;
+                             float maxRad = (treeType == 1) ? 3.5f : 2.5f;
+                             maxRad += (treeSeed % 100) / 100.0f;
+                             float radiusShape = 1.0f - std::pow(std::abs(progress - 0.7f) * 2.5f, 2.0f);
+                             float currentRadius = maxRad * std::max(0.0f, radiusShape);
+                             float currentRadSq = currentRadius * currentRadius;
+
+                             // Scan local area for leaves
+                             for (int lz = -rad; lz <= rad; lz++) {
+                                 for (int lx = -rad; lx <= rad; lx++) {
+                                     int vx = x + lx;
+                                     int vz = z + lz;
+                                     
+                                     // Check Bounds
+                                     if (vx >= 0 && vx < PADDED_CHUNK_SIZE && vz >= 0 && vz < PADDED_CHUNK_SIZE) {
+                                         float dSq = (float)(lx*lx + lz*lz) * (lodScale * lodScale); // Scale distance check? No, voxel distance.
+                                         // If lodScale > 1, the tree looks "chunky" which is expected. 
+                                         // Distance is in "voxels" here to match shape.
+                                         
+                                         if ((float)(lx*lx + lz*lz) < currentRadSq) {
+                                              // Fluff/Edge noise
+                                              bool isEdge = (float)(lx*lx + lz*lz) > (currentRadSq * 0.6f);
+                                              int absVX = (int)worldStartX + vx * lodScale;
+                                              int absVZ = (int)worldStartZ + vz * lodScale;
+                                              int absVY = (int)worldStartY + vy * lodScale;
+
+                                              if (!isEdge || (PseudoRandomHash3D(absVX, absVY, absVZ, m_settings.seed) % 100 < 70)) {
+                                                  int vIdx = vx + vz * PADDED_CHUNK_SIZE + vy * PADDED_CHUNK_SIZE * PADDED_CHUNK_SIZE;
+                                                  if (voxels[vIdx] == 0) { // Only place leaves in air
+                                                      voxels[vIdx] = 9;
+                                                  }
+                                              }
+                                         }
+                                     }
+                                 }
+                             }
+                        }
+                    }
                 }
             }
         }
@@ -479,6 +511,12 @@ public:
              if(ImGui::SliderFloat("Mnt Freq", &m_settings.mountainFrequency, 0.1f, 5.0f)) changed = true;
              if(ImGui::SliderFloat("Mnt Amp", &m_settings.mountainAmplitude, 10.0f, 200.0f)) changed = true;
              if(ImGui::SliderFloat("Biome Size", &m_settings.biomeMapScale, 0.01f, 0.5f)) changed = true;
+        }
+
+        if (ImGui::CollapsingHeader("Vegetation (Standard)")) {
+             if(ImGui::SliderInt("Max LOD for Trees", &m_settings.maxTreeLOD, 1, 8)) changed = true;
+             if(ImGui::SliderInt("Forest Density (1/N)", &m_settings.treeChanceForest, 2, 100)) changed = true;
+             if(ImGui::SliderInt("Plains Density (1/N)", &m_settings.treeChancePlains, 10, 500)) changed = true;
         }
         
         if (ImGui::CollapsingHeader("Mega Craters")) {
@@ -511,5 +549,6 @@ private:
     FastNoise::SmartNode<> m_moistureNoise;
     FastNoise::SmartNode<> m_caveNoise;
     FastNoise::SmartNode<> m_megaPeakNoise; 
-    FastNoise::SmartNode<> m_craterNoise; 
+    FastNoise::SmartNode<> m_craterNoise;
+    FastNoise::SmartNode<> m_treeDensityNoise;
 };
