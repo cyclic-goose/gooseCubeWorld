@@ -30,7 +30,7 @@ namespace GeneratorSelector {
 
     static const char* genNames[] = { 
         "Advanced (Standard)",
-        "Superflat",
+        "gm_Flatgrass",
         "Overhang (3D Noise)", 
         "Bizzaro",
         "Beach World (3D Capable)",

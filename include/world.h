@@ -791,7 +791,8 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
 
         while (traveled < maxDist) {
             // Check block (0 is Air)
-            if (GetBlockAt(x, y, z) != 0) { 
+            auto blockHit = GetBlockAt(x, y, z);
+            if (blockHit != 0 && blockHit !=6) { // FOR NOW, SKIPPING WATER TOO 
                 res.success = true;
                 res.blockPos = glm::ivec3(x, y, z);
                 res.faceNormal = glm::ivec3(lastX - x, lastY - y, lastZ - z);
@@ -1185,6 +1186,8 @@ private:
         FillChunkVoxels(node, outMinY, outMaxY);
         
         // Note: outMinY/outMaxY can be used to tighten AABB here if desired.
+        node->aabbMinWorld.y = outMinY;
+        node->aabbMaxWorld.y = outMaxY;
         
         std::lock_guard<std::mutex> lock(m_queueMutex);
         if (m_isShuttingDown) return;
