@@ -39,6 +39,8 @@ uniform float u_P11;        // Projection[1][1]
 uniform float u_zNear;      // Camera Z Near
 uniform float u_zFar;       // Camera Z Far
 uniform bool u_OcclusionEnabled; 
+uniform float u_epsilonConstant;
+uniform vec3 u_CameraPos;
 
 // --- OUTPUTS ---
 struct DrawCommand {
@@ -143,8 +145,26 @@ bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
     vec2 dims = (maxUV - minUV) * u_PyramidSize;
     float maxDim = max(dims.x, dims.y);
     
-    // [TWEAK HERE] LOD Bias
-    float lod = clamp(log2(maxDim) - 3.0, 0.0, 10.0);
+    // OLD SYSTEM for choosing chunks
+    //// [TWEAK HERE] LOD Bias
+    //float lod = clamp(log2(maxDim) - 1.0, 0.0, 10.0);
+    // OLD SYSTEM
+
+    // ********* NEW SYSTEM
+    // Calculate distance from camera to chunk center
+    float dist = distance(u_CameraPos, (minAABB + maxAABB) * 0.5);
+
+    // Base LOD calculation
+    float lod = log2(maxDim);
+
+    // DYNAMIC BIAS:
+    // If close (<100m), use -1.0 (Safe, fast).
+    // If far (>100m), use -0.5 or even 0.0 (Very precise).
+    float bias = (dist > 100.0) ? 0.0 : -0.0; 
+
+    lod = clamp(lod + bias, 0.0, 10.0);
+    // ********* NEW SYSTEM
+
 
     // 4. Sample Hi-Z (5 Taps: Corners + Center)
     float d1 = textureLod(u_DepthPyramid, vec2(minUV.x, minUV.y), lod).r;
@@ -156,7 +176,7 @@ bool IsOccluded(vec3 minAABB, vec3 maxAABB) {
     float furthestOccluder = min(d5, min(min(d1, d2), min(d3, d4)));
     
     float lodFactor = lod / 10.0; 
-    float smartEpsilon = 0.0005 + (0.0015 * lodFactor);
+    float smartEpsilon = u_epsilonConstant + (0.005 * lodFactor);
 
     return maxZ < (furthestOccluder - smartEpsilon);
 }

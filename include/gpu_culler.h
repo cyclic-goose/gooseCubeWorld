@@ -31,11 +31,12 @@ struct alignas(16) ChunkGpuData {
 
 // Settings exposed to the UI (ImGui) to control culling behavior live.
 struct CullerSettings {
-    float zNear = 0.1f;
-    float zFar = 100000000.0f;   // Default: Infinite horizon
-    bool occlusionEnabled = false; // with new terrain systems, cant get this working, either second mesh or non-collidables are screwing it up
+    float zNear = 0.01f;
+    float zFar = 10000000000.0f;   // Default: Infinite horizon
+    bool occlusionEnabled = true; // with new terrain systems, cant get this working, either second mesh or non-collidables are screwing it up
     bool freezeCulling = false;  // Stops the compute shader updates (locks visibility)
     float frustumPadding = 0.0f; // Expand/Contract frustum for debugging
+    float epsilonConstant = 0.0031; // 0.0031 seems to be a good aggresiveness without too much artifacting
 };
 
 // ================================================================================================
@@ -80,6 +81,7 @@ public:
     void Cull(const glm::mat4& viewProj, 
               const glm::mat4& prevViewProj, 
               const glm::mat4& proj, 
+              const glm::vec3& playerPos,
               GLuint depthTexture);
 
     // --------------------------------------------------------------------------------------------

@@ -453,7 +453,7 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
                     node->aabbMaxWorld, 
                     (float)node->scaleFactor, 
                     opaqueIdx, node->vertexCountOpaque, 
-                    transIdx, node->vertexCountTransparent
+                    transIdx, node->vertexCountTransparent // MAYBE DONT PASS node->vertexCountTrans, it might be used as an occluder
                 );
 
                 // Clear CPU caches to save RAM
@@ -916,7 +916,7 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
         // Outputs draw commands to an Indirect Buffer.
         {
             Engine::Profiler::Get().BeginGPU("GPU: Buffer and Cull Compute"); 
-            m_gpuOcclusionCuller->Cull(viewProj, previousViewProjMatrix, proj, g_fbo.hiZTex);
+            m_gpuOcclusionCuller->Cull(viewProj, previousViewProjMatrix, proj, playerPosition, g_fbo.hiZTex);
             Engine::Profiler::Get().EndGPU();
         }
 
@@ -1031,7 +1031,7 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
                 glDepthMask(GL_TRUE);
                 glDisable(GL_BLEND);
             }
-            // -- Draw Transparent -- ////////////////////////////// WATER SHADER STUFF
+            // -- End Draw Transparent -- ////////////////////////////// WATER SHADER STUFF
 
             // Restore State
             glDepthMask(GL_TRUE);

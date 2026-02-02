@@ -26,8 +26,8 @@ GpuCuller::GpuCuller(size_t maxChunks) : m_maxChunks(maxChunks) {
     m_hizShader = std::make_unique<Shader>("./resources/HI_Z_DOWN.glsl");
 
     glCreateSamplers(1, &m_depthSampler);
-    glSamplerParameteri(m_depthSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
-    glSamplerParameteri(m_depthSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glSamplerParameteri(m_depthSampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glSamplerParameteri(m_depthSampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glSamplerParameteri(m_depthSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glSamplerParameteri(m_depthSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
@@ -153,7 +153,7 @@ void GpuCuller::GenerateHiZ(GLuint depthTexture, int width, int height) {
     }
 }
 
-void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, GLuint depthTexture) {
+void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, const glm::mat4& proj, const glm::vec3 & playerPos, GLuint depthTexture) {
     if (m_fence) {
         GLenum waitReturn = glClientWaitSync(m_fence, GL_SYNC_FLUSH_COMMANDS_BIT, 0);
         if (waitReturn == GL_ALREADY_SIGNALED || waitReturn == GL_CONDITION_SATISFIED) {
@@ -175,6 +175,8 @@ void GpuCuller::Cull(const glm::mat4& viewProj, const glm::mat4& prevViewProj, c
     m_cullShader->setFloat("u_P11", proj[1][1]);
     m_cullShader->setFloat("u_zNear", m_settings.zNear);
     m_cullShader->setFloat("u_zFar", m_settings.zFar);
+    m_cullShader->setFloat("u_epsilonConstant", m_settings.epsilonConstant);
+    m_cullShader->setVec3("u_CameraPos", playerPos);
     
     bool occlusionActive = m_settings.occlusionEnabled && depthTexture != 0 && m_depthPyramidWidth > 0 && m_drawnCount > 0;
 

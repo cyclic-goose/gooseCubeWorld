@@ -8,7 +8,7 @@
 struct RuntimeConfig {
     int lodCount = 4;                                           
     int lodRadius[12] = { 15, 15, 15, 15, 0, 0, 0, 0 , 0, 0, 0, 0};
-    bool occlusionCulling = false;
+    bool occlusionCulling = true;
     bool enableCaves = false; 
 
     // Memory & Debug                                           

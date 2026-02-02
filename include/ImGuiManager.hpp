@@ -596,7 +596,8 @@ private:
             // ImGui::TextColored(ImVec4(1, 0.5, 0, 1), "Logic");
             // ImGui::Separator();
             ImGui::TextWrapped("Currently partially working. Can greatly increase FPS while on the ground. But many false positives around complex goemtry.");
-            
+
+            ImGui::SliderFloat("'1 - Aggressiveness'", &settings.epsilonConstant, 0.0001, 0.01, "%.6f");
             ImGui::Checkbox("Enable Occlusion Culling", &settings.occlusionEnabled);
             ImGui::Checkbox("Freeze Culling Result", &settings.freezeCulling);
             
