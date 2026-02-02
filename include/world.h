@@ -45,6 +45,28 @@
 
 
 
+// --- Colors (Cartoon Style) ---
+static glm::vec3 WATER_COLOR_DEEP    = glm::vec3(0.0f, 0.4f, 0.85f); // Bright blue
+static glm::vec3 WATER_COLOR_SHALLOW = glm::vec3(0.2f, 0.9f, 1.0f);  // Cyan
+static glm::vec3 WATER_COLOR_FOAM    = glm::vec3(1.0f, 1.0f, 1.0f);  // White
+
+// --- Physics / Rendering ---
+static float WATER_SHORE_SOFTNESS = 0.5f;   // Harder edge for cartoon look
+static float WATER_CLARITY        = 15.0f;  // Visibility depth
+static float WATER_FOAM_HEIGHT    = 0.6f;   // Wave height for white caps
+static float WATER_HEIGHT_OFFSET  = -0.15f; // New: Moves water down slightly
+
+// --- Wave Layers (DirX, DirY, Steepness, Wavelength) ---
+static glm::vec4 WAVE_LAYER_1 = glm::vec4(1.0f, 0.5f, 0.25f, 6.0f); // Swell
+static glm::vec4 WAVE_LAYER_2 = glm::vec4(0.7f, 1.0f, 0.25f, 3.1f); // Chop
+static glm::vec4 WAVE_LAYER_3 = glm::vec4(0.2f, 0.3f, 0.35f, 10.3f); // Detail
+
+// --- Storm Settings ---
+static float STORM_FREQ  = 0.01f;
+static float STORM_SPEED = 0.1f;
+
+
+
 
 
 // ================================================================================================
@@ -115,6 +137,9 @@ private:
     friend class ImGuiManager;
     friend class ChunkDebugger;
 
+    // water frag shader
+    std::unique_ptr<Shader> waterShader;
+
 public:
     /**
      * @brief Construct a new World object.
@@ -158,6 +183,9 @@ public:
         // -- Initialize GPU Systems --
         m_vramManager = std::make_unique<GpuMemoryManager>(static_cast<size_t>(m_config->VRAM_HEAP_ALLOCATION_MB) * 1024 * 1024);
         m_gpuOcclusionCuller = std::make_unique<GpuCuller>(nodeCapacity);
+
+        // init water shader runtime with unique ptr
+        waterShader = std::make_unique<Shader> ("./resources/shaders/waterVert.glsl", "./resources/shaders/waterFrag.glsl");
         
         glCreateVertexArrays(1, &m_dummyVAO);
     }
@@ -920,14 +948,80 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
             glBindBuffer(GL_PARAMETER_BUFFER, m_gpuOcclusionCuller->GetAtomicCounter()); // Contains count of visible chunks
             glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_gpuOcclusionCuller->GetMaxChunks(), 0);
 
-            // -- Draw Transparent --
-            // Drawn after opaque for blending
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glDepthMask(GL_FALSE); // Don't write to depth buffer
-            
-            glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_gpuOcclusionCuller->GetIndirectTrans());
-            glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_gpuOcclusionCuller->GetMaxChunks(), 0);
+            // -- Draw Transparent -- ////////////////////////////// WATER SHADER STUFF
+            {
+                // --- 1. RENDER STATE ---
+                glEnable(GL_BLEND);
+                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+                
+                // Transparent pass: Do not write to depth, but test against it
+                glDepthMask(GL_FALSE); 
+                glDepthFunc(GL_GREATER); // Reverse-Z (Matches your engine init)
+
+                // Activate Shader
+                waterShader->use();
+
+                // --- 2. CONFIGURATION UNIFORMS (Visuals) ---
+                // Colors
+                waterShader->setVec3("u_DeepWaterColor",    WATER_COLOR_DEEP);
+                waterShader->setVec3("u_ShallowWaterColor", WATER_COLOR_SHALLOW);
+                waterShader->setVec3("u_FoamColor",         WATER_COLOR_FOAM);
+
+                // Physics
+                waterShader->setFloat("u_ShoreSoftness",  WATER_SHORE_SOFTNESS);
+                waterShader->setFloat("u_WaterClarity",   WATER_CLARITY);
+                waterShader->setFloat("u_WaveFoamHeight", WATER_FOAM_HEIGHT);
+
+                // Waves & Storms
+                waterShader->setVec4("u_WaveLayer1", WAVE_LAYER_1);
+                waterShader->setVec4("u_WaveLayer2", WAVE_LAYER_2);
+                waterShader->setVec4("u_WaveLayer3", WAVE_LAYER_3);
+                waterShader->setFloat("u_StormFrequency", STORM_FREQ);
+                waterShader->setFloat("u_StormSpeed",     STORM_SPEED);
+                waterShader->setFloat("u_WaterHeightOffset", WATER_HEIGHT_OFFSET);
+
+                // --- 3. ENVIRONMENT UNIFORMS (Per-Frame) ---
+                // Camera & Transform
+                waterShader->setMat4("u_ViewProjection", viewProj);
+                waterShader->setVec3("u_CameraPosition", playerPosition);
+                waterShader->setFloat("u_Time", (float)glfwGetTime()); 
+
+                // Lighting (Sun)
+                glm::vec3 sunDirection = glm::vec3(0.4f, 0.6f, 0.3f); // Or use your engine's sun var
+                waterShader->setVec3("u_SunDirection", sunDirection);
+
+                // Reverse-Z & Screen Specs
+                waterShader->setFloat("u_CameraNearPlane", 0.1f); // Must match Camera.zNear
+                waterShader->setVec2("u_ScreenSize", (float)CUR_SCR_WIDTH, (float)CUR_SCR_HEIGHT);
+
+
+                // --- 4. TEXTURES ---
+                // Bind Scene Depth (from GBuffer/Opaque pass) for soft particles/shoreline
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, g_fbo.depthTex);
+                waterShader->setInt("u_SceneDepthTexture", 1); // Matches binding=1 in shader
+
+
+                // --- 5. BUFFERS & DRAW ---
+                // Binding 0: Raw Vertex Data
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_vramManager->GetID());
+                
+                // Binding 2: Chunk Offsets (Critical for position logic)
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpuOcclusionCuller->GetVisibleChunkBuffer());
+
+                // Indirect Draw Command
+                // Requires: Indirect Buffer + Atomic Counter for count
+                glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_gpuOcclusionCuller->GetIndirectTrans());
+                glBindBuffer(GL_PARAMETER_BUFFER,     m_gpuOcclusionCuller->GetAtomicCounter()); 
+                
+                glMultiDrawArraysIndirectCount(GL_TRIANGLES, 0, 0, (GLsizei)m_gpuOcclusionCuller->GetMaxChunks(), 0);
+
+
+                // --- 6. CLEANUP ---
+                glDepthMask(GL_TRUE);
+                glDisable(GL_BLEND);
+            }
+            // -- Draw Transparent -- ////////////////////////////// WATER SHADER STUFF
 
             // Restore State
             glDepthMask(GL_TRUE);
@@ -992,6 +1086,42 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_CULL_FACE);
     }
+
+
+    void RenderWaterUI() {
+        if (ImGui::CollapsingHeader("Water Visuals", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::ColorEdit3("Deep Color",    &WATER_COLOR_DEEP[0]);
+            ImGui::ColorEdit3("Shallow Color", &WATER_COLOR_SHALLOW[0]);
+            ImGui::ColorEdit3("Foam Color",    &WATER_COLOR_FOAM[0]);
+
+            ImGui::DragFloat("Clarity",        &WATER_CLARITY, 0.5f, 1.0f, 100.0f);
+            ImGui::DragFloat("Shore Softness", &WATER_SHORE_SOFTNESS, 0.1f, 0.0f, 5.0f);
+            ImGui::DragFloat("Foam Height",    &WATER_FOAM_HEIGHT, 0.05f, 0.0f, 2.0f);
+            ImGui::DragFloat("Height Offset",  &WATER_HEIGHT_OFFSET, 0.005f, -1.0f, 1.0f);
+        }
+
+        if (ImGui::CollapsingHeader("Wave Physics")) {
+            // Helper to display vector inputs cleanly
+            auto WaveControl = [](const char* label, glm::vec4& wave) {
+                ImGui::PushID(label);
+                ImGui::Text("%s", label);
+                ImGui::DragFloat2("Direction", &wave.x, 0.05f, -1.0f, 1.0f);
+                ImGui::DragFloat("Steepness", &wave.z, 0.01f, 0.0f, 1.0f);
+                ImGui::DragFloat("Wavelength", &wave.w, 0.1f, 0.1f, 50.0f);
+                ImGui::Separator();
+                ImGui::PopID();
+            };
+
+            WaveControl("Layer 1 (Swell)",  WAVE_LAYER_1);
+            WaveControl("Layer 2 (Chop)",   WAVE_LAYER_2);
+            WaveControl("Layer 3 (Detail)", WAVE_LAYER_3);
+            
+            ImGui::Text("Storm");
+            ImGui::DragFloat("Storm Freq",  &STORM_FREQ, 0.001f);
+            ImGui::DragFloat("Storm Speed", &STORM_SPEED, 0.01f);
+        }
+    }
+
 
     void ReloadWorld(EngineConfig newConfig) {
         m_config = std::make_unique<EngineConfig>(newConfig);

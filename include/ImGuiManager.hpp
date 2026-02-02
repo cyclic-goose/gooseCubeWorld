@@ -399,6 +399,7 @@ private:
                             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
                         }
                         ImGui::EndTabItem();
+                        world.RenderWaterUI();
                     }
 
                     // --- TAB: INTERFACE & STYLE ---
