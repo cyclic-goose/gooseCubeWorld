@@ -586,15 +586,16 @@ private:
             
             CullerSettings& settings = culler->GetSettings();
 
-            ImGui::TextColored(ImVec4(1, 0.5, 0, 1), "Shader Uniforms");
-            ImGui::Separator();
+            // ImGui::TextColored(ImVec4(1, 0.5, 0, 1), "Shader Uniforms");
+            // ImGui::Separator();
             
-            ImGui::DragFloat("zNear", &settings.zNear, 0.01f, 0.001f, 10.0f);
-            ImGui::DragFloat("zFar", &settings.zFar, 1000.0f, 100.0f, 100000000.0f, "%.0f");
+            // ImGui::DragFloat("zNear", &settings.zNear, 0.01f, 0.001f, 10.0f);
+            // ImGui::DragFloat("zFar", &settings.zFar, 1000.0f, 100.0f, 100000000.0f, "%.0f");
             
-            ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1, 0.5, 0, 1), "Logic");
-            ImGui::Separator();
+            // ImGui::Spacing();
+            // ImGui::TextColored(ImVec4(1, 0.5, 0, 1), "Logic");
+            // ImGui::Separator();
+            ImGui::TextWrapped("Currently partially working. Can greatly increase FPS while on the ground. But many false positives around complex goemtry.");
             
             ImGui::Checkbox("Enable Occlusion Culling", &settings.occlusionEnabled);
             ImGui::Checkbox("Freeze Culling Result", &settings.freezeCulling);
