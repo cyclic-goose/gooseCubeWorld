@@ -1298,7 +1298,7 @@ private:
         LinearAllocator<PackedVertex> transAllocator(50000); 
 
         // Execute meshing algorithm
-        MeshChunk(*node->voxelData, opaqueAllocator, transAllocator, false);
+        MeshChunk(*node->voxelData, opaqueAllocator, transAllocator, node->lodLevel);
 
         // trying to detect if a block is all air and uniform after this is just really the same maybe worse than doing it right after the generate call in fillChunk. could be empty but all underground or empty but all air either way check has to be run 
         

@@ -145,7 +145,7 @@ void main() {
 
     // 4. Artifact Prevention
     if (chunkScale > 1.0) {
-        worldPos.y -= (chunkScale * 0.1);
+        worldPos.y -= (chunkScale * .6);
     }
 
     gl_Position = u_ViewProjection * vec4(worldPos, 1.0);

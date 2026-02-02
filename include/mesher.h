@@ -117,6 +117,11 @@ inline void MeshChunk(const Chunk& chunk,
                 // get the block type at the start of the run
                 uint32_t current_block_type = get_block_id_from_plane(u_pos, v_pos);
 
+                // Check if this specific block type allows greedy meshing at the current LOD
+                // We disable meshing for Water (6) at LOD 0 to allow vertex displacement shaders.
+                // For all other cases (including Water at LOD > 0), we allow merging.
+                bool can_merge = (current_block_type != 6) || (lod_level > 0);
+
                 // --- step 1: determine run width (horizontal merge) ---
                 
                 // expand to the right as long as blocks match
@@ -124,14 +129,8 @@ inline void MeshChunk(const Chunk& chunk,
                     // if block type changes, stop merging
                     if (get_block_id_from_plane(run_end, v_pos) != current_block_type) break;
                     
-                    // --- OPTIMIZATION: SMART WATER FIX ---
-                    // ONLY disable greedy meshing if it is Water (6) AND the Top Face (2) AND we are LOD 0.
-                    // If LOD > 0, we allow greedy meshing to merge water into huge flat quads.
-                    if (current_block_type == 6 && face_idx == 2 && lod_level == 0) {
-                        // verify we at least process the first block, then break
-                        if (run_end > run_start) break;
-                    }
-                    // -------------------------------------
+                    // if merging is disabled for this block/LOD combo, stop after the first block
+                    if (!can_merge && run_end > run_start) break;
 
                     run_end++;
                 }
@@ -146,9 +145,8 @@ inline void MeshChunk(const Chunk& chunk,
                 
                 int quad_height = 1;
                 
-                // Check if we should try to merge vertically
-                // Same logic: if it's water top-face at LOD 0, DO NOT merge. Otherwise, optimize away!
-                if (current_block_type != 6 || face_idx != 2 || lod_level > 0) {
+                // only attempt vertical merge if allowed
+                if (can_merge) {
                     
                     // check subsequent rows to see if they match the current run
                     for (int next_row_iter = row_iter + 1; next_row_iter < CHUNK_SIZE; next_row_iter++) {
