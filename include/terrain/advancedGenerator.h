@@ -113,11 +113,19 @@ public:
     std::vector<std::string> GetTexturePaths() const override {
         //std::vector<std::string> textures(30, "resources/textures/dirt1.jpg");
         std::vector<std::string> texturePaths = {
-            "resources/textures/grassTop.jpg",
-            "resources/textures/mcdirt.jpg",   // ID 1
-            "resources/textures/mcgrass.jpg",
-            "resources/textures/snow1.jpg", 
-
+            "resources/textures/minecraftDefaults/grasstop.png",
+            "resources/textures/minecraftDefaults/dirt.png",
+            "resources/textures/minecraftDefaults/grass_block_side.png",
+            "resources/textures/minecraftDefaults/stone.png",
+            "resources/textures/minecraftDefaults/oak_log_top.png",
+            "resources/textures/minecraftDefaults/dirt.png",
+            "resources/textures/minecraftDefaults/snow.png",
+            "resources/textures/minecraftDefaults/ice.png",
+            "resources/textures/minecraftDefaults/oak_leaves.png",
+            "resources/textures/minecraftDefaults/obsidian.png",
+            "resources/textures/minecraftDefaults/dark_oak_log.png",
+            "resources/textures/minecraftDefaults/dark_oak_log_top.png"
+            "resources/textures/minecraftDefaults/deepslate.png",
         };
         return texturePaths;
     }
@@ -486,9 +494,9 @@ public:
                         
                         // Mountain caps
                         if (currentWorldY > 220) {
-                            if (depth < lodScale) block = 4;
-                            else if (depth < (10 * lodScale)) block = 12;
-                            else block = 19;
+                            if (depth < lodScale) block = 7;
+                            else if (depth < (10 * lodScale)) block = 7;
+                            else block = 7;
                         }
 
                         // Volcanic/Crater Surface Replacement
@@ -510,7 +518,7 @@ public:
                              if ((bufferCave3D[idx3D] - surfaceBias) > 0.4f) block = 0;
                         }
                     } else if (currentWorldY <= m_settings.seaLevel) {
-                        block = (biome == 3) ? 12 : 6; // Water or Ice
+                        block = (biome == 3) ? 8 : 6; // Water or Ice
                     }
 
                     // B. Tree & Decoration Logic
@@ -536,7 +544,7 @@ public:
                             // Place Trunk
                             if (treeTypeHere > 0) {
                                 if ((treeTypeHere == 1 || treeTypeHere == 2) && relY > 0 && relY < 6) block = (treeTypeHere == 2) ? 15 : 13;
-                                else if (treeTypeHere == 3 && relY > 0 && relY < 4) block = 14;
+                                else if (treeTypeHere == 3 && relY > 0 && relY < 4) block = 4;
                             }
                         }
                         
@@ -553,9 +561,9 @@ public:
                                         int nRelY = currentWorldY - mapFinalHeight[ni];
                                         
                                         // Oak Leaves
-                                        if (nTree == 1 && nRelY >= 4 && nRelY <= 6) block = 14;
+                                        if (nTree == 1 && nRelY >= 4 && nRelY <= 6) block = 9;
                                         // Pine Leaves
-                                        else if (nTree == 2 && nRelY >= 3 && nRelY <= 6) block = 16;
+                                        else if (nTree == 2 && nRelY >= 3 && nRelY <= 6) block = 9;
                                     }
                                 }
                             }
