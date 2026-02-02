@@ -929,6 +929,7 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
             glUniformMatrix4fv(glGetUniformLocation(shader.ID, "u_ViewProjection"), 1, GL_FALSE, glm::value_ptr(viewProj));
             glUniform3fv(glGetUniformLocation(shader.ID, "u_CameraPos"), 1, glm::value_ptr(playerPosition)); 
             glUniform1i(glGetUniformLocation(shader.ID, "u_DebugMode"), m_config->settings.cubeDebugMode);
+            glUniform1f(glGetUniformLocation(shader.ID, "u_Time"), (float)glfwGetTime());
             
             // Bind SSBOs (Shader Storage Buffer Objects)
             glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_vramManager->GetID());           // Big Vertex Buffer

@@ -12,6 +12,17 @@
 // --- configuration ---
 constexpr int PADDING = 1; 
 
+// --- Material Definitions ---
+// Define specific block IDs here for clarity
+constexpr uint8_t BLOCK_WATER = 6;
+constexpr uint8_t BLOCK_ICE = 8;
+constexpr uint8_t BLOCK_LEAVES = 9; // NOTE: Ensure this matches your leaf ID (e.g. 14 or 16 in your palette)
+constexpr uint8_t BLOCK_GLASS_RED = 20; 
+constexpr uint8_t BLOCK_GLASS_BLUE = 21; 
+
+// High-bit flag for shader to detect water movement (Bit 8, value 256)
+constexpr uint32_t FLAG_ANIMATED_WAVE = 0x100; 
+
 inline uint32_t count_trailing_zeros(uint32_t x) {
 #if defined(_MSC_VER)
     return _tzcnt_u32(x);
@@ -20,16 +31,29 @@ inline uint32_t count_trailing_zeros(uint32_t x) {
 #endif
 }
 
+// Determines if a block belongs in the "Transparent" pass (Alpha Blended).
 inline bool is_transparent(uint8_t id) {
-    // FIX: Only Water (6) should be in the transparent bucket.
-    // Leaves (9) and Ice (8) are moved to Opaque to prevent them 
-    // from being rendered with water shaders/effects and to ensure 
-    // proper culling of blocks underneath them (like Stone under Ice).
-    return id == 6; 
+    return id == BLOCK_WATER || id == BLOCK_GLASS_RED || id == BLOCK_GLASS_BLUE; 
 }
 
+// Determines if a block belongs in the "Opaque" pass (includes Cutouts like Leaves).
 inline bool is_opaque(uint8_t id) {
     return id != 0 && !is_transparent(id);
+}
+
+// Determines if a block fully blocks vision (for culling).
+inline bool is_occluding(uint8_t id) {
+    if (id == 0) return false;                 // Air
+    if (id == BLOCK_LEAVES) return false;      // Leaves (Has holes)
+    if (is_transparent(id)) return false;      // Glass/Water (See-through)
+    return true;                               // Stone, Dirt, Wood, etc.
+}
+
+// Determines if the block should have vertex displacement (waves/wind) in the shader.
+inline bool should_wave(uint8_t id) {
+    // We animate Water AND Leaves. 
+    // This returns TRUE for leaves, which disables greedy meshing for them (critical for bending).
+    return id == BLOCK_WATER || id == BLOCK_LEAVES; 
 }
 
 inline void MeshChunk(const Chunk& chunk, 
@@ -45,28 +69,28 @@ inline void MeshChunk(const Chunk& chunk,
     };
 
     auto get_texture_id = [&](uint8_t block_id, int face_dir) -> uint32_t {
-        // face_dir: 2 = Top, 3 = Bottom
-        
-        // Grass Block (ID 1)
-        if (block_id == 1) {
-            if (face_dir == 2) return 1;      
-            if (face_dir == 3) return 2;      
-            return 3;                     
+        uint32_t tex_id = block_id; // Default mapping
+
+        if (block_id == 1) { // Grass
+            if (face_dir == 2) tex_id = 1;      
+            else if (face_dir == 3) tex_id = 2;      
+            else tex_id = 3;                     
+        }
+        else if (block_id == 5) { // Oak Log
+            if (face_dir == 2 || face_dir == 3) tex_id = 5; 
+            else tex_id = 11;                             
+        }
+        else if (block_id == 11) { // Dark Oak Log
+            if (face_dir == 2 || face_dir == 3) tex_id = 12;
+            else tex_id = 11;
         }
 
-        // Oak Log (ID 5)
-        if (block_id == 5) {
-            if (face_dir == 2 || face_dir == 3) return 5; 
-            return 11;                             
-        }
-        
-        // Dark Oak Log (ID 11)
-        if (block_id == 11) {
-            if (face_dir == 2 || face_dir == 3) return 12;
-            return 11;
+        // --- PACKING MATERIAL FLAGS ---
+        if (should_wave(block_id)) {
+            tex_id |= FLAG_ANIMATED_WAVE;
         }
 
-        return block_id;
+        return tex_id;
     };
 
     auto perform_greedy_pass = [&](uint32_t* face_masks, LinearAllocator<PackedVertex>& target_allocator, int face_idx, int axis_idx, int direction, int slice_idx) {
@@ -89,9 +113,11 @@ inline void MeshChunk(const Chunk& chunk,
                 
                 uint32_t current_block_type = get_block_id_from_plane(u_pos, v_pos);
                 
-                // Water (6) doesn't merge at LOD 0 to allow shader displacement.
-                // Leaves/Ice are now opaque, so they will merge (good for performance).
-                bool can_merge = (current_block_type != 6) || (lod_level > 0);
+                // --- Merge Logic ---
+                // If it waves (water/leaves), we DO NOT merge at LOD 0.
+                // This ensures every leaf block is an individual cube, allowing us to bend them.
+                bool is_fluid = should_wave(current_block_type);
+                bool can_merge = (!is_fluid) || (lod_level > 0);
 
                 while (run_end < CHUNK_SIZE && (current_row_mask & (1ULL << run_end))) {
                     if (get_block_id_from_plane(run_end, v_pos) != current_block_type) break;
@@ -199,19 +225,16 @@ inline void MeshChunk(const Chunk& chunk,
                     
                     uint8_t neighbor_id = get_block(neighbor_x + PADDING, neighbor_y + PADDING, neighbor_z + PADDING);
 
+                    // --- UPDATED CULLING LOGIC ---
                     if (is_opaque(current_id)) {
-                        // Opaque blocks render if neighbor is Air or Transparent (Water)
-                        if (neighbor_id == 0 || is_transparent(neighbor_id)) {
+                        if (!is_occluding(neighbor_id)) {
                             row_mask_opaque |= (1u << col_iter);
                         }
                     } 
                     else if (is_transparent(current_id)) {
-                        // Transparent (Water only now)
-                        // Render if neighbor is NOT Water (Air or Solid or different transparent)
-                        if (current_id == 6) {
-                            if (neighbor_id == 0 || (is_transparent(neighbor_id) && neighbor_id != 6)) {
-                                row_mask_trans |= (1u << col_iter);
-                            }
+                        bool neighbor_is_self = (neighbor_id == current_id);
+                        if (!neighbor_is_self && !is_occluding(neighbor_id)) {
+                             row_mask_trans |= (1u << col_iter);
                         }
                     }
                 }
