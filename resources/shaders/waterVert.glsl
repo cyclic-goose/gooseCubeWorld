@@ -12,9 +12,16 @@ layout (std430, binding = 2) readonly buffer ChunkOffsets {
 // --- GLOBAL UNIFORMS ---
 uniform mat4 u_ViewProjection;
 uniform float u_Time;
+uniform vec3 u_CameraPosition; // Needed for distance calculation
 
 // --- NEW UNIFORM: Height Offset ---
 uniform float u_WaterHeightOffset; 
+
+// --- NEW UNIFORMS: Distance Fading ---
+// The distance at which waves start to flatten
+uniform float u_WaveFadeStart; 
+// The distance at which waves are completely flat
+uniform float u_WaveFadeEnd;
 
 // --- EXPOSED WAVE CONTROLS ---
 // Format: vec4(DirectionX, DirectionY, Steepness, Wavelength)
@@ -46,10 +53,13 @@ vec3 decodeCubeNormal(int faceIndex) {
 }
 
 float calculateStormIntensity(vec2 position) {
+    // Generate large, slow moving areas of higher turbulence
     return 0.5 + 0.5 * sin(position.x * u_StormFrequency + sin(position.y * u_StormFrequency) + u_Time * u_StormSpeed); 
 }
 
-void applyGerstnerWaves(inout vec3 position, inout vec3 normal, float stormIntensity) {
+// Gerstner Wave Calculation
+// Added 'fadeFactor' to flatten waves at distance
+void applyGerstnerWaves(inout vec3 position, inout vec3 normal, float stormIntensity, float fadeFactor) {
     vec3 tangent = vec3(1, 0, 0);
     vec3 binormal = vec3(0, 0, 1);
     vec3 originalPos = position;
@@ -66,6 +76,13 @@ void applyGerstnerWaves(inout vec3 position, inout vec3 normal, float stormInten
         if (i == 0) {
             currentAmplitude *= (0.8 + stormIntensity * 0.5); 
         }
+
+        // --- APPLY FADE ---
+        // As we get further away, reduce amplitude to 0
+        currentAmplitude *= fadeFactor;
+        
+        // Optimization: If amplitude is tiny, skip complex trig
+        if (currentAmplitude < 0.001) continue;
         
         float wavenumber = 2.0 * PI / wavelength;
         float phaseSpeed = sqrt(9.8 / wavenumber); 
@@ -107,18 +124,23 @@ void main() {
     
     vec3 worldPos = (localPosition * chunkScale) + chunkOffset;
     
-    // --- APPLY OFFSET HERE ---
-    // Move the base water level down before calculating waves
+    // --- APPLY OFFSET ---
     worldPos.y += u_WaterHeightOffset;
 
     vec3 worldNormal = decodeCubeNormal(faceIndex);
 
+    // --- CALCULATE FADE FACTOR ---
+    float distToCamera = distance(worldPos, u_CameraPosition);
+    // Returns 1.0 when close (waves), 0.0 when far (flat)
+    float fadeFactor = 1.0 - smoothstep(u_WaveFadeStart, u_WaveFadeEnd, distToCamera);
+
     // 3. Apply Wave Physics
     if (faceIndex == 2) {
         float stormIntensity = calculateStormIntensity(worldPos.xz);
-        applyGerstnerWaves(worldPos, worldNormal, stormIntensity);
+        applyGerstnerWaves(worldPos, worldNormal, stormIntensity, fadeFactor);
     } else {
-        worldPos.y += sin(worldPos.x * 0.5 + u_Time) * 0.05;
+        // Fade the breathing effect on sides too
+        worldPos.y += sin(worldPos.x * 0.5 + u_Time) * 0.05 * fadeFactor;
     }
 
     // 4. Artifact Prevention
@@ -126,7 +148,6 @@ void main() {
         worldPos.y -= (chunkScale * 0.1);
     }
 
-    // 5. Final Outputs
     gl_Position = u_ViewProjection * vec4(worldPos, 1.0);
     
     v_WorldNormal = worldNormal;

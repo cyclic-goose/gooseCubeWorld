@@ -44,7 +44,7 @@
 
 
 
-
+// ********* WATER SHADER GLOBALS ********** // for now this is in world instead of terrain gen stuff because water would be shaded the same whether or not a world has it 
 // --- Colors (Cartoon Style) ---
 static glm::vec3 WATER_COLOR_DEEP    = glm::vec3(0.0f, 0.4f, 0.85f); // Bright blue
 static glm::vec3 WATER_COLOR_SHALLOW = glm::vec3(0.2f, 0.9f, 1.0f);  // Cyan
@@ -56,6 +56,11 @@ static float WATER_CLARITY        = 15.0f;  // Visibility depth
 static float WATER_FOAM_HEIGHT    = 0.6f;   // Wave height for white caps
 static float WATER_HEIGHT_OFFSET  = -0.15f; // New: Moves water down slightly
 
+// Start fading waves at 40 meters, completely flat by 80 meters
+// This matches typical LOD transitions (e.g. LOD 0 ends at 64m)
+static float WAVE_FADE_START = 40.0f;
+static float WAVE_FADE_END   = 80.0f;
+
 // --- Wave Layers (DirX, DirY, Steepness, Wavelength) ---
 static glm::vec4 WAVE_LAYER_1 = glm::vec4(1.0f, 0.5f, 0.25f, 6.0f); // Swell
 static glm::vec4 WAVE_LAYER_2 = glm::vec4(0.7f, 1.0f, 0.25f, 3.1f); // Chop
@@ -64,7 +69,7 @@ static glm::vec4 WAVE_LAYER_3 = glm::vec4(0.2f, 0.3f, 0.35f, 10.3f); // Detail
 // --- Storm Settings ---
 static float STORM_FREQ  = 0.01f;
 static float STORM_SPEED = 0.1f;
-
+// ********* WATER SHADER GLOBALS ********** // for now this is in world instead of terrain gen stuff because water would be shaded the same whether or not a world has it 
 
 
 
@@ -972,6 +977,10 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
                 waterShader->setFloat("u_WaterClarity",   WATER_CLARITY);
                 waterShader->setFloat("u_WaveFoamHeight", WATER_FOAM_HEIGHT);
 
+                // start fading far away from the player to try and match LOD levels
+                waterShader->setFloat("u_WaveFadeStart", WAVE_FADE_START);
+                waterShader->setFloat("u_WaveFadeEnd",   WAVE_FADE_END);
+
                 // Waves & Storms
                 waterShader->setVec4("u_WaveLayer1", WAVE_LAYER_1);
                 waterShader->setVec4("u_WaveLayer2", WAVE_LAYER_2);
@@ -1099,15 +1108,20 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
             ImGui::DragFloat("Foam Height",    &WATER_FOAM_HEIGHT, 0.05f, 0.0f, 2.0f);
             ImGui::DragFloat("Height Offset",  &WATER_HEIGHT_OFFSET, 0.005f, -1.0f, 1.0f);
         }
+        
+        if (ImGui::CollapsingHeader("LOD & Fading")) {
+            ImGui::Text("Distance where waves become flat.");
+            ImGui::DragFloat("Fade Start (m)", &WAVE_FADE_START, 1.0f, 0.0f, 500.0f);
+            ImGui::DragFloat("Fade End (m)",   &WAVE_FADE_END,   1.0f, 0.0f, 500.0f);
+        }
 
         if (ImGui::CollapsingHeader("Wave Physics")) {
-            // Helper to display vector inputs cleanly
             auto WaveControl = [](const char* label, glm::vec4& wave) {
                 ImGui::PushID(label);
                 ImGui::Text("%s", label);
-                ImGui::DragFloat2("Direction", &wave.x, 0.05f, -1.0f, 1.0f);
-                ImGui::DragFloat("Steepness", &wave.z, 0.01f, 0.0f, 1.0f);
-                ImGui::DragFloat("Wavelength", &wave.w, 0.1f, 0.1f, 50.0f);
+                ImGui::DragFloat2("Direction (X,Y)", &wave.x, 0.05f, -1.0f, 1.0f);
+                ImGui::DragFloat("Steepness",        &wave.z, 0.01f, 0.0f, 1.0f);
+                ImGui::DragFloat("Wavelength",       &wave.w, 0.1f, 0.1f, 50.0f);
                 ImGui::Separator();
                 ImGui::PopID();
             };
@@ -1116,7 +1130,7 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
             WaveControl("Layer 2 (Chop)",   WAVE_LAYER_2);
             WaveControl("Layer 3 (Detail)", WAVE_LAYER_3);
             
-            ImGui::Text("Storm");
+            ImGui::Text("Storm System");
             ImGui::DragFloat("Storm Freq",  &STORM_FREQ, 0.001f);
             ImGui::DragFloat("Storm Speed", &STORM_SPEED, 0.01f);
         }
