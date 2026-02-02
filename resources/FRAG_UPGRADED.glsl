@@ -125,7 +125,7 @@ void main()
     // Standard dot product lighting
     float diff = max(dot(v_Normal, SUN_DIR), 0.0);
     // mix(0.3, 1.0) prevents shadows from being pitch black
-    float lightIntensity = mix(0.3, 1.0, diff); 
+    float lightIntensity = mix(0.1, 1.0, diff); 
 
     // B. Ambient Occlusion (AO)
     // pow(v_AO, 1.5) makes the corners slightly darker than the faces
@@ -138,7 +138,7 @@ void main()
 
     // D. Combine
     // (Ambient + Sun) * Material * AO
-    vec3 lighting = (ambient * ao) + (SUN_COLOR * lightIntensity * 1.2 * ao);
+    vec3 lighting = (ambient * ao) + (SUN_COLOR * lightIntensity * 1.1 * ao);
     
     // Special Case: Lava (ID 20) is emissive, ignore shadows
     if (v_TexID == 20) lighting = vec3(1.5); 

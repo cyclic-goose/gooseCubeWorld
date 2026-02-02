@@ -267,8 +267,8 @@ private:
                                 RadioWithTooltip("High", 2, "Good view range, reasonable VRAM");
                                 RadioWithTooltip("Ultra", 3, "High Rasterization Cost");
                                 // Remove SameLine for the last one to wrap if needed, or keep it
-                                if (ImGui::RadioButton("Extreme", &config.currentLODPreset, 4)) presetChanged = true;
-                                if (ImGui::IsItemHovered()) ImGui::SetTooltip("FOR SUPERCOMPUTERS (If you think you qualify, you probably still don't)");
+                                //if (ImGui::RadioButton("Extreme", &config.currentLODPreset, 4)) presetChanged = true;
+                                //if (ImGui::IsItemHovered()) ImGui::SetTooltip("FOR SUPERCOMPUTERS (If you think you qualify, you probably still don't)");
                             }
                             
                             if (presetChanged) {
