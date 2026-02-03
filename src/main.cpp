@@ -31,6 +31,7 @@
 #include "playerController.h"
 
 // utility and debug
+#include "renderUtils.h" // holds the context struct for frame by frame render variables
 #include "gui_utils.h"
 #include "debug_chunks.h"
 
@@ -202,57 +203,10 @@ void processInput(GLFWwindow *window, World& world) {
     
     if (Input::IsJustPressed(window, GLFW_KEY_T)) { // 'T' for Terraforming
         appState.showTerrainGui = !appState.showTerrainGui;
-        // if (world.IsBusy())
-        // {
-        //     std::cout << "World is still generating. Please Wait..." << std::endl;
-        // }else if (switchCooldown > 0.0f) 
-        // {
-        //     std::cout << "Generation on cooldown..." << std::endl;
-        
-        // } else {
-        //     std::cout << "[Main] Switching Generator..." << std::endl;
 
-        //     // Create the NEW Generator (e.g. Mars Generator)
-        //     // auto newGen = std::make_unique<MarsGenerator>(12345); 
-        //     // For now, let's just re-create Standard with a different seed to simulate a switch
-        //     // auto newGen = std::make_unique<AdvancedGenerator>(rand());
-
-        //     // // Load Textures for the NEW Generator
-        //     // // Important: We must unload the old array if we are strictly managing VRAM, 
-        //     // // but typically we just overwrite the ID reference in World.
-        //     // // Ideally, TextureManager should have a 'DeleteTexture(id)' method.
-        //     // std::vector<std::string> newPaths = newGen->GetTexturePaths();
-        //     // GLuint newTexArray = TextureManager::LoadTextureArray(newPaths);
-
-        //     // // Inject into World
-            
-        //     // // Call the helper (assuming you added it to World class)
-        //     // world.SwitchGenerator(std::move(newGen), newTexArray);
-        //     // switchCooldown = 2.0f;
-        // }
         
     }
 
-    // // R: Reload World
-    // if (Input::IsJustPressed(window, GLFW_KEY_R)) {
-    //     world.Reload(appState.editConfig);
-    // }
-    
-    // --- Movement (Game Mode Only) ---
-    // if (appState.isGameMode) {
-    //     // Speed Modifier
-    //     camera.MovementSpeed = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) ? 500.0f : 50.0f;
-
-    //     // Directional
-    //     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) camera.ProcessKeyboard(FORWARD, deltaTime);
-    //     if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) camera.ProcessKeyboard(BACKWARD, deltaTime);
-    //     if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) camera.ProcessKeyboard(LEFT, deltaTime);
-    //     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) camera.ProcessKeyboard(RIGHT, deltaTime);
-        
-    //     // Vertical
-    //     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) camera.ProcessKeyboard(UP, deltaTime);
-    //     if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS) camera.ProcessKeyboard(DOWN, deltaTime);
-    // }
 }
 
 // ======================================================================================
@@ -392,17 +346,22 @@ int main() {
         /////////////////// ****** GAME LOOP ******* //////////////////
 
         while (!glfwWindowShouldClose(window)) { ///// ************ GAME START SCOPE ************* 
+
+            ////// Create this frames render context
+            RenderContext ctx;
+            ctx.deltaTime = deltaTime;
+            ctx.globalTime = (float)glfwGetTime();
+            
             //////// *************** Timing
             float currentFrame = (float)glfwGetTime();
             deltaTime = currentFrame - lastFrame;
             lastFrame = currentFrame;
-
             // Prevents massive physics/movement jumps if the app hangs or is dragged
             deltaTime = std::min(deltaTime, 0.05f); 
-
+            
             Engine::Profiler::Get().Update();
             //////// *************** Timing
-
+            
             
             
             
@@ -413,23 +372,23 @@ int main() {
                 // player needs world generator because it exposes getBlock (needed for raycasting/collisions etc)
                 player.Update(deltaTime, window, world, appState.isGameMode); // pass in world to get collision if any
             }
-
+            
             // GUI and PROFILER START (profiler returns in constant time if its disabled)
             gui.BeginFrame(); // start ImGui Frame (its normal to do this every loop)
             Engine::Profiler::Get().DrawUI(appState.isGameMode); // returns in extremely small constant time if not in debug mode (usually)
             if (world.getFrameCount()  < 10000)
             {
                 GUI::DrawScreenMessage("Welcome", GUI::LEVEL_WARN);
-
+                
             }
             processInput(window, world); // process keyboard and mouse input
             world.Update(player.camera.Position); // calc world updates like chunk loading/unloading
             
-
+            
             ///////// *****************  logic/world gen, chunk loading/unloading
-
-
-
+            
+            
+            
             
             
             
@@ -445,6 +404,8 @@ int main() {
                 lastFrame = (float)glfwGetTime();
             }
             if (glfwWindowShouldClose(window)) break;
+            ctx.screenWidth = curScrWidth;
+            ctx.screenHeight = curScrHeight;
             // Handle Resize
             glfwGetFramebufferSize(window, &curScrWidth, &curScrHeight);
             // Only resize if dimensions changed AND they are valid (>0)
@@ -464,8 +425,11 @@ int main() {
             
             // **************  model view projection (mvp)
             glm::mat4 projection = player.camera.GetProjectionMatrix((float)curScrWidth / (float)curScrHeight, 0.1f);
+            ctx.projectionMatrix = projection;
             glm::mat4 view = player.camera.GetViewMatrix();
+            ctx.viewMatrix = view;
             glm::mat4 viewProj = projection * view;
+            ctx.viewProjection = viewProj;
             
             if (!appState.lockFrustum) {
                 lockedCullMatrix = viewProj;

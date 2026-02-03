@@ -1017,55 +1017,21 @@ inline uint8_t GetBlockAt(int x, int y, int z) const {
                 float time = (float)glfwGetTime();
                 glUniform1f(glGetUniformLocation(shader.ID, "u_Time"), time);
 
-                // ------------------------------------------------------------
-                // 2. NEW "ULTRA" VISUALS UNIFORMS
-                // ------------------------------------------------------------
-                // I'm using your Shader class helpers here for cleaner code.
-                // Ideally, these values come from your ShaderParams struct/GUI.
-                
-                // -- Atmosphere --
-                // Direction: (X, Y, Z). Normalized. Y is UP.
                 glm::vec3 sunDir = glm::normalize(glm::vec3(0.4f, 0.6f, 0.3f)); 
-                // shader.setVec3("u_SunDir", sunDir);
-                // shader.setVec3("u_SunColor", glm::vec3(1.0f, 0.95f, 0.85f));
-                // shader.setFloat("u_SunIntensity", 0.8f);
-                
-                // shader.setVec3("u_SkyColorTop", glm::vec3(0.2f, 0.4f, 0.8f));
-                // shader.setVec3("u_SkyColorHorizon", glm::vec3(0.6f, 0.7f, 0.8f));
 
-                // // -- Fog & Clouds --
-                // // UPDATED: Lowered density significantly to prevent ground fogging artifacts
-                // shader.setFloat("u_FogDensity", 0.000008f);      // 0.0005 = Large view distance, 0.01 = Thick fog
-                // shader.setFloat("u_CloudCoverage", 0.45f);     // 0.0 (clear) to 1.0 (overcast)
-                // shader.setFloat("u_CloudSpeed", 0.05f);
-                // shader.setFloat("u_CloudSoftness", 0.2f);      // 0.1 (sharp) to 1.0 (fuzzy)
-
-                // // -- Post-Process Simulation --
-                // shader.setFloat("u_Exposure", 1.0f);
-                // shader.setFloat("u_Saturation", 1.2f);         // >1.0 for vibrant colors
-                // shader.setFloat("u_Gamma", 1.8f);
-                
-                // // -- Physics/Animation --
-                // shader.setFloat("u_WindStrength", 0.5f);       // Controls vertex displacement intensity
-
-                // ------------------------------------------------------------
-                // 3. BIND RESOURCES
-                // ------------------------------------------------------------
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_vramManager->GetID()); 
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_gpuOcclusionCuller->GetVisibleChunkBuffer()); 
 
                 if (m_textureArrayID != 0) {
                         glActiveTexture(GL_TEXTURE1);
                         glBindTexture(GL_TEXTURE_2D_ARRAY, m_textureArrayID);
-                        // Ensure this matches the binding in the shader (usually binding 0 or 1)
-                        // If you bound to GL_TEXTURE1, set uniform to 1.
                         shader.setInt("u_Textures", 1); 
                 }
 
                 glBindVertexArray(m_dummyVAO); 
 
                 // ------------------------------------------------------------
-                // 4. DRAW STATE & EXECUTION
+                // DRAW STATE & EXECUTION
                 // ------------------------------------------------------------
                 glEnable(GL_POLYGON_OFFSET_FILL);
                 glPolygonOffset(1.0f, 1.0f); 
