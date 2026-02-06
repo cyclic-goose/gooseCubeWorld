@@ -86,18 +86,18 @@ public:
     std::vector<std::string> GetTexturePaths() const override {
         std::vector<std::string> texturePaths = {
             "resources/textures/minecraftDefaults/OldGrassTop.png",          // ID 1
-            "resources/textures/minecraftDefaults/dirt.png",              // ID 2
-            "resources/textures/minecraftDefaults/grass_block_side.png",  // ID 3
-            "resources/textures/minecraftDefaults/stone.png",             // ID 4
-            "resources/textures/minecraftDefaults/oak_log_top.png",       // ID 5
-            "resources/textures/minecraftDefaults/dirt.png",              // ID 6 (Water Placeholder)
-            "resources/textures/minecraftDefaults/snow.png",              // ID 7
-            "resources/textures/minecraftDefaults/ice.png",               // ID 8
+            "resources/textures/minecraftDefaults/default_dirt.png",              // ID 2
+            "resources/textures/minecraftDefaults/default_grass_side.png",  // ID 3
+            "resources/textures/minecraftDefaults/default_stone.png",             // ID 4
+            "resources/textures/minecraftDefaults/default_tree.png",       // ID 5
+            "resources/textures/minecraftDefaults/default_dirt.png",              // ID 6 (Water Placeholder)
+            "resources/textures/minecraftDefaults/snow1.png",              // ID 7
+            "resources/textures/minecraftDefaults/default_ice.png",               // ID 8
             "resources/textures/minecraftDefaults/default_leaves.png",        // ID 9
-            "resources/textures/minecraftDefaults/obsidian.png",          // ID 10
-            "resources/textures/minecraftDefaults/dark_oak_log.png",      // ID 11
-            "resources/textures/minecraftDefaults/dark_oak_log_top.png",  // ID 12
-            "resources/textures/minecraftDefaults/deepslate.png"          // ID 13
+            "resources/textures/minecraftDefaults/default_obsidian.png",          // ID 10
+            "resources/textures/minecraftDefaults/default_pine_tree.png",      // ID 11
+            "resources/textures/minecraftDefaults/default_pine_tree_top.png",  // ID 12
+            "resources/textures/minecraftDefaults/default_mineral_gold.png"          // ID 13
         };
         return texturePaths;
     }

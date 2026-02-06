@@ -24,4 +24,6 @@ Thumbs.db
 
 
 # -- textures
-resources/textures/*
+resources/textures/Free256Pack
+resources/textures/dirt1.jpg
+resources/textures/Texturelabs_Soil_147S.jpg

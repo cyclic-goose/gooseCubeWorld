@@ -40,7 +40,7 @@ const vec3 FOG_COLOR_SKY = vec3(0.5, 0.7, 0.9);
 // Fog Sun: The fog color when looking TOWARD the sun (glare).
 const vec3 FOG_COLOR_SUN = vec3(1.0, 0.8, 0.6);
 // Density: Higher = Thicker fog. 0.005 is clear, 0.02 is misty.
-const float FOG_DENSITY = 0.0001; 
+const float FOG_DENSITY = 0.00005; 
 
 // =========================================================
 
