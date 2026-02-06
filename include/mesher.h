@@ -12,13 +12,19 @@
 // --- configuration ---
 constexpr int PADDING = 1; 
 
-// --- Material Definitions ---
-// Define specific block IDs here for clarity
+// --- Block ID Constants (must match advancedGenerator.h BlockID enum) ---
 constexpr uint8_t BLOCK_WATER = 6;
 constexpr uint8_t BLOCK_ICE = 8;
-constexpr uint8_t BLOCK_LEAVES = 9; // NOTE: Ensure this matches your leaf ID (e.g. 14 or 16 in your palette)
-constexpr uint8_t BLOCK_GLASS_RED = 20; 
-constexpr uint8_t BLOCK_GLASS_BLUE = 21; 
+constexpr uint8_t BLOCK_OAK_LEAVES = 9;
+constexpr uint8_t BLOCK_BIRCH_LEAVES = 21;
+constexpr uint8_t BLOCK_JUNGLE_LEAVES = 23;
+constexpr uint8_t BLOCK_DARK_OAK_LEAVES = 25;
+constexpr uint8_t BLOCK_SPRUCE_LEAVES = 26;
+constexpr uint8_t BLOCK_CACTUS = 30;
+constexpr uint8_t BLOCK_FLOWER = 36;
+constexpr uint8_t BLOCK_GLASS_RED = 37;
+constexpr uint8_t BLOCK_GLASS_BLUE = 38;
+constexpr uint8_t BLOCK_RIVER_WATER = 49;
 
 // High-bit flag for shader to detect water movement (Bit 8, value 256)
 constexpr uint32_t FLAG_ANIMATED_WAVE = 0x100; 
@@ -33,7 +39,20 @@ inline uint32_t count_trailing_zeros(uint32_t x) {
 
 // Determines if a block belongs in the "Transparent" pass (Alpha Blended).
 inline bool is_transparent(uint8_t id) {
-    return id == BLOCK_WATER || id == BLOCK_GLASS_RED || id == BLOCK_GLASS_BLUE; 
+    return id == BLOCK_WATER || id == BLOCK_GLASS_RED || id == BLOCK_GLASS_BLUE
+        || id == BLOCK_RIVER_WATER;
+}
+
+// Is this a leaf block? (all leaf variants)
+inline bool is_leaves(uint8_t id) {
+    return id == BLOCK_OAK_LEAVES || id == BLOCK_BIRCH_LEAVES
+        || id == BLOCK_JUNGLE_LEAVES || id == BLOCK_DARK_OAK_LEAVES
+        || id == BLOCK_SPRUCE_LEAVES;
+}
+
+// Non-full decorative blocks
+inline bool is_decoration(uint8_t id) {
+    return id == BLOCK_FLOWER || id == BLOCK_CACTUS;
 }
 
 // Determines if a block belongs in the "Opaque" pass (includes Cutouts like Leaves).
@@ -44,16 +63,15 @@ inline bool is_opaque(uint8_t id) {
 // Determines if a block fully blocks vision (for culling).
 inline bool is_occluding(uint8_t id) {
     if (id == 0) return false;                 // Air
-    if (id == BLOCK_LEAVES) return false;      // Leaves (Has holes)
+    if (is_leaves(id)) return false;           // All leaf types have holes
     if (is_transparent(id)) return false;      // Glass/Water (See-through)
+    if (is_decoration(id)) return false;       // Flowers, cactus
     return true;                               // Stone, Dirt, Wood, etc.
 }
 
 // Determines if the block should have vertex displacement (waves/wind) in the shader.
 inline bool should_wave(uint8_t id) {
-    // We animate Water AND Leaves. 
-    // This returns TRUE for leaves, which disables greedy meshing for them (critical for bending).
-    return id == BLOCK_WATER || id == BLOCK_LEAVES; 
+    return id == BLOCK_WATER || id == BLOCK_RIVER_WATER || is_leaves(id) || id == BLOCK_FLOWER;
 }
 
 inline void MeshChunk(const Chunk& chunk, 
@@ -69,23 +87,79 @@ inline void MeshChunk(const Chunk& chunk,
     };
 
     auto get_texture_id = [&](uint8_t block_id, int face_dir) -> uint32_t {
-        uint32_t tex_id = block_id; // Default mapping
+        uint32_t tex_id = block_id; // Default: 1:1 mapping
 
-        if (block_id == 1) { // Grass
-            if (face_dir == 2) tex_id = 1;      
-            else if (face_dir == 3) tex_id = 2;      
-            else tex_id = 3;                     
-        }
-        else if (block_id == 5) { // Oak Log
-            if (face_dir == 2 || face_dir == 3) tex_id = 5; 
-            else tex_id = 11;                             
-        }
-        else if (block_id == 11) { // Dark Oak Log
-            if (face_dir == 2 || face_dir == 3) tex_id = 12;
-            else tex_id = 11;
+        switch (block_id) {
+            // Grass: top=1, bottom=2(dirt), sides=3(grass_side)
+            case 1: // GRASS_TOP
+                if (face_dir == 2)      tex_id = 1;
+                else if (face_dir == 3) tex_id = 2;
+                else                    tex_id = 3;
+                break;
+            // Dry Grass (savanna): top=45, bottom=2, sides=2
+            case 45: // DRY_GRASS
+                if (face_dir == 2)      tex_id = 45;
+                else if (face_dir == 3) tex_id = 2;
+                else                    tex_id = 2;
+                break;
+            // Podzol: top=27, bottom=2, sides=2
+            case 27: // PODZOL
+                if (face_dir == 2)      tex_id = 27;
+                else if (face_dir == 3) tex_id = 2;
+                else                    tex_id = 2;
+                break;
+            // Swamp Grass: top=28, bottom=2, sides=2
+            case 28: // SWAMP_GRASS
+                if (face_dir == 2)      tex_id = 28;
+                else if (face_dir == 3) tex_id = 2;
+                else                    tex_id = 2;
+                break;
+            // Snow Block: top=7, bottom=2, sides=47(snow_side)
+            case 7: // SNOW_BLOCK
+                if (face_dir == 2)      tex_id = 7;
+                else if (face_dir == 3) tex_id = 2;
+                else                    tex_id = 47;
+                break;
+            // Oak Log: top/bottom=39(oak_log_top), sides=5
+            case 5: // OAK_LOG
+                if (face_dir == 2 || face_dir == 3) tex_id = 39;
+                else                                tex_id = 5;
+                break;
+            // Spruce Log: top/bottom=12(spruce_top), sides=11
+            case 11: // SPRUCE_LOG
+                if (face_dir == 2 || face_dir == 3) tex_id = 12;
+                else                                tex_id = 11;
+                break;
+            // Birch Log: top/bottom=40(birch_log_top), sides=20
+            case 20: // BIRCH_LOG
+                if (face_dir == 2 || face_dir == 3) tex_id = 40;
+                else                                tex_id = 20;
+                break;
+            // Jungle Log: top/bottom=41, sides=22
+            case 22: // JUNGLE_LOG
+                if (face_dir == 2 || face_dir == 3) tex_id = 41;
+                else                                tex_id = 22;
+                break;
+            // Dark Oak Log: top/bottom=42, sides=24
+            case 24: // DARK_OAK_LOG
+                if (face_dir == 2 || face_dir == 3) tex_id = 42;
+                else                                tex_id = 24;
+                break;
+            // Cactus: top/bottom=43(cactus_top), sides=30(cactus_side)
+            case 30: // CACTUS
+                if (face_dir == 2 || face_dir == 3) tex_id = 43;
+                else                                tex_id = 30;
+                break;
+            // Sandstone: top=44(sandstone_block), sides/bottom=15
+            case 15: // SANDSTONE
+                if (face_dir == 2) tex_id = 44;
+                else               tex_id = 15;
+                break;
+            default:
+                tex_id = block_id;
+                break;
         }
 
-        // --- PACKING MATERIAL FLAGS ---
         if (should_wave(block_id)) {
             tex_id |= FLAG_ANIMATED_WAVE;
         }
