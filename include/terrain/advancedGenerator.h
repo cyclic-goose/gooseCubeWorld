@@ -244,7 +244,7 @@ public:
         int   treeChanceSnowyTaiga  = 55;
         int   treeChanceFlower      = 65;
         int   flowerChance          = 12;
-        int   maxTreeLOD            = 4;
+        int   maxTreeLOD            = 2;
 
         // --- Badlands Layering ---
         float badlandsLayerScale    = 0.15f;

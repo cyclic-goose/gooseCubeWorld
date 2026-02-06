@@ -92,7 +92,7 @@ public:
         // Initialize active config with factory defaults
         config = defaultConfig;
         camera.Position = position + glm::vec3(0, config.EyeLevelNormal, 0);
-        ApplyPreset("Quake (Fast)"); // for now i wanna be fast 
+        ApplyPreset("FAST"); // for now i wanna be fast 
         //BlockSelection::Get().; // init buffer for highlight lines
     }
 
